@@ -78,6 +78,7 @@ function generateConsecutiveLimiterPage(bot, PANEL_BASE) {
         <a href="${PANEL_BASE}/bot/${bot.key}/ai-engagement" style="color:var(--text-muted);text-decoration:none;font-size:14px">🤖 AI</a>
         <a href="${PANEL_BASE}/bot/${bot.key}/commands" style="color:var(--text-muted);text-decoration:none;font-size:14px">📚 Commands</a>
         <a href="${PANEL_BASE}/bot/${bot.key}/accuracy" style="color:var(--text-muted);text-decoration:none;font-size:14px">🎯 Accuracy</a>
+        <a href="${PANEL_BASE}/verification-dashboard?bot=${bot.key}" style="color:var(--text-muted);text-decoration:none;font-size:14px">🔍 Verification</a>
         <form method="post" action="${PANEL_BASE}/logout" style="display:inline"><button class="btn" type="submit">Logout</button></form>
       </div>
     </div>

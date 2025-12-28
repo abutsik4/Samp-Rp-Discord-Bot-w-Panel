@@ -2863,7 +2863,16 @@ app.get(`${PANEL_BASE}/verification-dashboard`, requireAuth, async (req, res) =>
         <div class="muted">Check message counts and verify data accuracy</div>
       </div>
       <div class="nav">
-        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}">← Back to Bot Panel</a>
+        <button onclick="history.back()" class="btn" type="button" style="padding:8px 16px">← Back</button>
+        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}">🏠 Panel</a>
+        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/stats">📊 Stats</a>
+        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/rate-limits">🚦 Rate Limits</a>
+        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/consecutive-limits">🚫 Consecutive</a>
+        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/messages">📨 Messages</a>
+        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/ai-engagement">🤖 AI</a>
+        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/commands">📚 Commands</a>
+        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/accuracy">🎯 Accuracy</a>
+        <form method="post" action="${PANEL_BASE}/logout" style="margin:0"><button class="btn" type="submit">Logout</button></form>
       </div>
     </div>
 
@@ -3278,6 +3287,7 @@ app.get(`${PANEL_BASE}/bot/:botKey/holidays`, requireAuth, async (req, res) => {
         <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/ai-engagement" style="color:#93c5fd">🤖 AI</a>
         <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/commands" style="color:#93c5fd">📚 Commands</a>
         <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/accuracy" style="color:#93c5fd">🎯 Accuracy</a>
+        <a href="${PANEL_BASE}/verification-dashboard?bot=${encodeURIComponent(bot.key)}" style="color:#93c5fd">🔍 Verification</a>
         <form method="post" action="${PANEL_BASE}/logout" style="display:inline;margin:0"><button class="btn" type="submit">Logout</button></form>
       </div>
     </div>

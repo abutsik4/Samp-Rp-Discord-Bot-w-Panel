@@ -105,6 +105,7 @@ function generateAIEngagementPage(bot, PANEL_BASE) {
         <a href="${PANEL_BASE}/bot/${bot.key}/messages">📨 Messages</a>
         <a href="${PANEL_BASE}/bot/${bot.key}/commands">📚 Commands</a>
         <a href="${PANEL_BASE}/bot/${bot.key}/accuracy">🎯 Accuracy</a>
+        <a href="${PANEL_BASE}/verification-dashboard?bot=${bot.key}">🔍 Verification</a>
         <form method="post" action="${PANEL_BASE}/logout" style="margin:0"><button class="btn" type="submit">Logout</button></form>
       </div>
     </div>

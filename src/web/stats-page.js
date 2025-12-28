@@ -37,6 +37,7 @@ function generateStatsPage(bot, PANEL_BASE) {
         <a href="${PANEL_BASE}/bot/${bot.key}/ai-engagement" class="link">🤖 AI</a>
         <a href="${PANEL_BASE}/bot/${bot.key}/commands" class="link">📚 Commands</a>
         <a href="${PANEL_BASE}/bot/${bot.key}/accuracy" class="link">🎯 Accuracy</a>
+        <a href="${PANEL_BASE}/verification-dashboard?bot=${bot.key}" class="link">🔍 Verification</a>
         <form method="post" action="${PANEL_BASE}/logout" style="display:inline;margin:0"><button class="btn" type="submit">Logout</button></form>
       </div>
     </div>
