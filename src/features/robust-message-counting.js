@@ -76,7 +76,7 @@ async function incrementMessageCountRobust(db, guildId, userId, messageId, chann
     const idxResult = await dbRun(
       db,
       `INSERT OR IGNORE INTO message_index (guild_id, message_id, user_id, channel_id)
-       VALUES (?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?)`,
       [guildId, messageId, userId, channelId]
     );
 
