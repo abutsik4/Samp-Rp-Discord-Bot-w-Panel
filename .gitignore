@@ -1,0 +1,12 @@
+node_modules/
+data/*.db
+data/*.db-wal
+data/*.db-shm
+logs/*.log
+backups/
+.env
+.vscode/
+.vscode-root/
+*.log
+.DS_Store
+package-lock.json

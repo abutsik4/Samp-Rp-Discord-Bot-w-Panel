@@ -1,0 +1,140 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>JepsenCloud Panel</title>
+  <link rel="stylesheet" href="/shared.css" />
+  <style>
+    .hero-section {
+      text-align: center;
+      padding: 60px 20px 40px;
+      margin-bottom: 40px;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .hero-title {
+      font-size: 48px;
+      font-weight: 700;
+      background: var(--gradient-primary);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 12px;
+    }
+    
+    .hero-subtitle {
+      font-size: 18px;
+      color: var(--text-muted);
+      margin-bottom: 30px;
+    }
+    
+    .user-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      background: var(--gradient-glass);
+      border: 1px solid rgba(167, 139, 250, 0.3);
+      border-radius: var(--radius-full);
+      font-size: 14px;
+      color: var(--accent-cyan);
+    }
+    
+    .bot-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 20px;
+    }
+    
+    .bot-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      transition: all var(--transition-base);
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .bot-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: var(--gradient-primary);
+    }
+    
+    .bot-card:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-lg), var(--shadow-glow);
+      border-color: var(--border-hover);
+    }
+    
+    .bot-name {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--text-bright);
+      margin-bottom: 8px;
+    }
+    
+    .bot-type {
+      display: inline-block;
+      padding: 4px 12px;
+      background: rgba(34, 211, 238, 0.1);
+      border: 1px solid rgba(34, 211, 238, 0.3);
+      border-radius: var(--radius-full);
+      font-size: 12px;
+      color: var(--accent-cyan);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="page-container-wide">
+    <div class="topbar">
+      <div class="topbar-content">
+        <div class="page-title">
+          <span class="emoji">🎮</span>
+          <span class="gradient-text">JepsenCloud Panel</span>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button onclick="toggleSnow()" class="btn btn-secondary btn-icon" type="button" id="snowToggle"
+          title="Toggle Snow Effect">
+          ❄️
+        </button>
+        <form method="post" action="/logout" style="margin: 0;">
+          <button class="btn btn-secondary" type="submit">Logout</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="hero-section">
+      <h1 class="hero-title">Dashboard</h1>
+      <p class="hero-subtitle">Manage and monitor your bots</p>
+      <div class="user-badge">
+        <span>👤</span>
+        <span><%= username %></span>
+      </div>
+    </div>
+
+    <div class="bot-grid">
+      <% bots.forEach(b => { %>
+        <a class="bot-card" href="/bot/<%= b.key %>" style="text-decoration: none; color: inherit;">
+          <div class="bot-name"><%= b.name %></div>
+          <div class="bot-type"><%= b.kind %></div>
+        </a>
+      <% }) %>
+    </div>
+  </div>
+  <script src="/public/snow.js"></script>
+</body>
+
+</html>

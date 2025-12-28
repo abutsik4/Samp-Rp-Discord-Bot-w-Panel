@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>
+        <%= title %> | Admin Panel
+    </title>
+    <link rel="stylesheet" href="/shared.css">
+    <style>
+        .event-log {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .event-item {
+            padding: 12px;
+            border-left: 4px solid var(--accent-purple);
+            background: rgba(167, 139, 250, 0.05);
+            margin-bottom: 10px;
+            border-radius: var(--radius-sm);
+            font-size: 14px;
+        }
+
+        .event-item.increment {
+            border-left-color: var(--accent-emerald);
+            background: rgba(52, 211, 153, 0.05);
+        }
+
+        .event-item.decrement {
+            border-left-color: var(--accent-amber);
+            background: rgba(251, 191, 36, 0.05);
+        }
+
+        .event-item.retry {
+            border-left-color: var(--accent-amber);
+            background: rgba(251, 191, 36, 0.05);
+        }
+
+        .event-item.failed {
+            border-left-color: var(--accent-rose);
+            background: rgba(251, 113, 133, 0.05);
+        }
+
+        .event-item.bulk_decrement {
+            border-left-color: var(--accent-purple);
+            background: rgba(167, 139, 250, 0.05);
+        }
+
+        .event-time {
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        .event-type {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: var(--radius-sm);
+            font-weight: 600;
+            font-size: 11px;
+            margin-right: 8px;
+            text-transform: uppercase;
+        }
+
+        .event-type.increment {
+            background: rgba(52, 211, 153, 0.2);
+            color: var(--accent-emerald);
+        }
+
+        .event-type.decrement {
+            background: rgba(251, 191, 36, 0.2);
+            color: var(--accent-amber);
+        }
+
+        .event-type.retry {
+            background: rgba(251, 191, 36, 0.2);
+            color: var(--accent-amber);
+        }
+
+        .event-type.failed {
+            background: rgba(251, 113, 133, 0.2);
+            color: var(--accent-rose);
+        }
+
+        .event-type.bulk_decrement {
+            background: rgba(167, 139, 250, 0.2);
+            color: var(--accent-purple);
+        }
+
+        .error-queue {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .error-stat {
+            text-align: center;
+            padding: 15px;
+            background: rgba(167, 139, 250, 0.05);
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border);
+        }
+
+        .error-stat-label {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .error-stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--accent-purple);
+        }
+
+        .back-link {
+            display: inline-block;
+            color: var(--accent-cyan);
+            text-decoration: none;
+            padding: 10px 20px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            margin-bottom: 20px;
+            transition: all var(--transition-base);
+        }
+
+        .back-link:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--border-hover);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="page-container-wide">
+        <a href="/panel" class="back-link">← Back to Panel</a>
+
+        <h1 class="page-title"><span class="emoji">📊</span> <span class="gradient-text">Message Counting Accuracy Monitor</span></h1>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value success" id="accuracy">
+                    <%= stats.accuracyPercent.toFixed(2) %>%
+                </div>
+                <div class="stat-label">Accuracy</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-value">
+                    <%= stats.totalUsers.toLocaleString() %>
+                </div>
+                <div class="stat-label">Total Users</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-value">
+                    <%= stats.totalMessages.toLocaleString() %>
+                </div>
+                <div class="stat-label">Total Messages</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-value">
+                    <%= stats.indexedMessages.toLocaleString() %>
+                </div>
+                <div class="stat-label">Indexed Messages</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-value <%= stats.discrepancies > 0 ? 'warning' : 'success' %>">
+                    <%= stats.discrepancies %>
+                </div>
+                <div class="stat-label">Discrepancies</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2 class="card-title">Error Queue Status</h2>
+            <div class="error-queue">
+                <div class="error-stat">
+                    <div class="error-stat-label">Total Errors</div>
+                    <div class="error-stat-value <%= errorQueueStatus.total > 0 ? 'warning' : 'success' %>">
+                        <%= errorQueueStatus.total %>
+                    </div>
+                </div>
+                <div class="error-stat">
+                    <div class="error-stat-label">Pending Retry</div>
+                    <div class="error-stat-value">
+                        <%= errorQueueStatus.pending %>
+                    </div>
+                </div>
+                <div class="error-stat">
+                    <div class="error-stat-label">Failed</div>
+                    <div class="error-stat-value error">
+                        <%= errorQueueStatus.failed %>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2 class="card-title">Recent Events (Last 50)</h2>
+            <div class="event-log" id="eventLog">
+                <% if (recentEvents.length===0) { %>
+                    <div class="empty">
+                        <div class="empty-icon">📭</div>
+                        <p>No events yet</p>
+                    </div>
+                    <% } else { %>
+                        <% recentEvents.forEach(event=> { %>
+                            <div class="event-item <%= event.event_type %>">
+                                <span class="event-type <%= event.event_type %>">
+                                    <%= event.event_type.toUpperCase() %>
+                                </span>
+                                <span class="event-time">
+                                    <%= event.time %>
+                                </span>
+                                <% if (event.user_id) { %>
+                                    <br><strong>User:</strong>
+                                    <%= event.user_id %>
+                                        <% } %>
+                                            <% if (event.details.newCount !==undefined) { %>
+                                                | <strong>New Count:</strong>
+                                                <%= event.details.newCount %>
+                                                    <% } %>
+                                                        <% if (event.details.attempt> 1) { %>
+                                                            | <strong>Attempt:</strong>
+                                                            <%= event.details.attempt %>
+                                                                <% } %>
+                                                                    <% if (event.details.userCount) { %>
+                                                                        | <strong>Users:</strong>
+                                                                        <%= event.details.userCount %>
+                                                                            <% } %>
+                                                                                <% if (event.details.messageCount) { %>
+                                                                                    | <strong>Messages:</strong>
+                                                                                    <%= event.details.messageCount %>
+                                                                                        <% } %>
+                            </div>
+                            <% }); %>
+                                <% } %>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2 class="card-title">Actions</h2>
+            <div class="flex gap-3">
+                <button class="btn btn-primary" onclick="refreshStats()">🔄 Refresh Stats</button>
+                <button class="btn btn-success" onclick="runReconciliation()" id="reconcileBtn">
+                    🔧 Run Manual Reconciliation
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function refreshStats() {
+            location.reload();
+        }
+
+        async function runReconciliation() {
+            const btn = document.getElementById('reconcileBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Running...';
+
+            try {
+                alert('Reconciliation will run at the next scheduled time (3 AM). The system is automatically reconciling every 15 minutes for recent activity.');
+
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.textContent = '🔧 Run Manual Reconciliation';
+                }, 1000);
+            } catch (err) {
+                alert('Error: ' + err.message);
+                btn.disabled = false;
+                btn.textContent = '🔧 Run Manual Reconciliation';
+            }
+        }
+
+        // Auto-refresh every 30 seconds
+        setTimeout(() => {
+            location.reload();
+        }, 30000);
+    </script>
+</body>
+
+</html>
+
+        .event-log {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .event-item {
+            padding: 12px;
+            border-left: 4px solid #667eea;
+            background: #f9fafb;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+
+        .event-item.increment {
+            border-left-color: #10b981;
+        }
+
+        .event-item.decrement {
+            border-left-color: #f59e0b;
+        }
+
+        .event-item.retry {
+            border-left-color: #f59e0b;
+        }
+
+        .event-item.failed {
+            border-left-color: #ef4444;
+        }
+
+        .event-time {
+            color: #666;
+            font-size: 0.85em;
+        }
+
+        .event-type {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 0.8em;
+            margin-right: 8px;
+        }
+
+        .event-type.increment {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .event-type.decrement {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .event-type.retry {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .event-type.failed {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .event-type.bulk_decrement {
+            background: #ddd6fe;
+            color: #5b21b6;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 600;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #059669;
+        }
+
+        .error-queue {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .error-stat {
+            text-align: center;
+            padding: 15px;
+            background: #f9fafb;
+            border-radius: 8px;
+        }
+
+        .error-stat-label {
+            font-size: 0.9em;
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        .error-stat-value {
+            font-size: 2em;
+            font-weight: bold;
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .back-link {
+            display: inline-block;
+            color: white;
+            text-decoration: none;
+            padding: 10px 20px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            margin-bottom: 20px;
+            transition: all 0.2s;
+        }
+
+        .back-link:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .loading {
+            animation: pulse 1.5s infinite;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <a href="/panel" class="back-link">← Back to Panel</a>
+
+        <h1>📊 Message Counting Accuracy Monitor</h1>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Accuracy</div>
+                <div class="stat-value success" id="accuracy">
+                    <%= stats.accuracyPercent.toFixed(2) %>%
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-label">Total Users</div>
+                <div class="stat-value">
+                    <%= stats.totalUsers.toLocaleString() %>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-label">Total Messages</div>
+                <div class="stat-value">
+                    <%= stats.totalMessages.toLocaleString() %>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-label">Indexed Messages</div>
+                <div class="stat-value">
+                    <%= stats.indexedMessages.toLocaleString() %>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-label">Discrepancies</div>
+                <div class="stat-value <%= stats.discrepancies > 0 ? 'warning' : 'success' %>">
+                    <%= stats.discrepancies %>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Error Queue Status</h2>
+            <div class="error-queue">
+                <div class="error-stat">
+                    <div class="error-stat-label">Total Errors</div>
+                    <div class="error-stat-value <%= errorQueueStatus.total > 0 ? 'warning' : 'success' %>">
+                        <%= errorQueueStatus.total %>
+                    </div>
+                </div>
+                <div class="error-stat">
+                    <div class="error-stat-label">Pending Retry</div>
+                    <div class="error-stat-value">
+                        <%= errorQueueStatus.pending %>
+                    </div>
+                </div>
+                <div class="error-stat">
+                    <div class="error-stat-label">Failed</div>
+                    <div class="error-stat-value error">
+                        <%= errorQueueStatus.failed %>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Recent Events (Last 50)</h2>
+            <div class="event-log" id="eventLog">
+                <% if (recentEvents.length===0) { %>
+                    <p style="color: #666; text-align: center; padding: 20px;">No events yet</p>
+                    <% } else { %>
+                        <% recentEvents.forEach(event=> { %>
+                            <div class="event-item <%= event.event_type %>">
+                                <span class="event-type <%= event.event_type %>">
+                                    <%= event.event_type.toUpperCase() %>
+                                </span>
+                                <span class="event-time">
+                                    <%= event.time %>
+                                </span>
+                                <% if (event.user_id) { %>
+                                    <br><strong>User:</strong>
+                                    <%= event.user_id %>
+                                        <% } %>
+                                            <% if (event.details.newCount !==undefined) { %>
+                                                | <strong>New Count:</strong>
+                                                <%= event.details.newCount %>
+                                                    <% } %>
+                                                        <% if (event.details.attempt> 1) { %>
+                                                            | <strong>Attempt:</strong>
+                                                            <%= event.details.attempt %>
+                                                                <% } %>
+                                                                    <% if (event.details.userCount) { %>
+                                                                        | <strong>Users:</strong>
+                                                                        <%= event.details.userCount %>
+                                                                            <% } %>
+                                                                                <% if (event.details.messageCount) { %>
+                                                                                    | <strong>Messages:</strong>
+                                                                                    <%= event.details.messageCount %>
+                                                                                        <% } %>
+                            </div>
+                            <% }); %>
+                                <% } %>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Actions</h2>
+            <div class="actions">
+                <button class="btn btn-primary" onclick="refreshStats()">🔄 Refresh Stats</button>
+                <button class="btn btn-success" onclick="runReconciliation()" id="reconcileBtn">
+                    🔧 Run Manual Reconciliation
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function refreshStats() {
+            location.reload();
+        }
+
+        async function runReconciliation() {
+            const btn = document.getElementById('reconcileBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Running...';
+            btn.classList.add('loading');
+
+            try {
+                // For now, just show success message
+                // In future, implement actual API call
+                alert('Reconciliation will run at the next scheduled time (3 AM). The system is automatically reconciling every 15 minutes for recent activity.');
+
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.textContent = '🔧 Run Manual Reconciliation';
+                    btn.classList.remove('loading');
+                }, 1000);
+            } catch (err) {
+                alert('Error: ' + err.message);
+                btn.disabled = false;
+                btn.textContent = '🔧 Run Manual Reconciliation';
+                btn.classList.remove('loading');
+            }
+        }
+
+        // Auto-refresh every 30 seconds
+        setTimeout(() => {
+            location.reload();
+        }, 30000);
+    </script>
+</body>
+
+</html>

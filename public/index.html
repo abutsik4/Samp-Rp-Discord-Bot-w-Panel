@@ -1,0 +1,125 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>JepsenCloud - Discord Bot Platform</title>
+  <link rel="stylesheet" href="/shared.css" />
+  <style>
+    body {
+      background: linear-gradient(135deg, #0a0e17 0%, #1a1f3a 100%);
+      position: relative;
+      overflow: hidden;
+    }
+    
+    body::before {
+      content: '';
+      position: absolute;
+      top: -50%;
+      right: -50%;
+      width: 200%;
+      height: 200%;
+      background: radial-gradient(circle, rgba(34, 211, 238, 0.1) 0%, transparent 70%);
+      animation: rotate 30s linear infinite reverse;
+    }
+    
+    @keyframes rotate {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    
+    .landing-card {
+      position: relative;
+      z-index: 1;
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      background: rgba(12, 17, 29, 0.8);
+      border: 1px solid rgba(34, 211, 238, 0.3);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 40px rgba(34, 211, 238, 0.1);
+      text-align: center;
+      padding: 48px 32px;
+    }
+    
+    .landing-icon {
+      font-size: 64px;
+      margin-bottom: 24px;
+      display: block;
+      filter: drop-shadow(0 0 20px rgba(34, 211, 238, 0.3));
+      animation: float 3s ease-in-out infinite;
+    }
+    
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-10px); }
+    }
+    
+    .landing-title {
+      font-size: 42px;
+      font-weight: 700;
+      background: var(--gradient-primary);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 16px;
+    }
+    
+    .landing-subtitle {
+      color: var(--text-muted);
+      font-size: 16px;
+      margin-bottom: 32px;
+      line-height: 1.6;
+    }
+    
+    .feature-list {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 32px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    
+    .feature-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      background: rgba(34, 211, 238, 0.1);
+      border: 1px solid rgba(34, 211, 238, 0.3);
+      border-radius: var(--radius-full);
+      font-size: 13px;
+      color: var(--accent-cyan);
+    }
+  </style>
+</head>
+<body>
+  <div class="page-container-centered">
+    <div class="card card-center landing-card">
+      <div class="landing-icon">🚀</div>
+      <h1 class="landing-title">JepsenCloud</h1>
+      <p class="landing-subtitle">
+        Advanced Discord bot platform running on VPS<br>
+        Powerful management panel with real-time analytics
+      </p>
+      
+      <div class="feature-list">
+        <div class="feature-badge">
+          <span>📊</span>
+          <span>Statistics</span>
+        </div>
+        <div class="feature-badge">
+          <span>🤖</span>
+          <span>AI Engagement</span>
+        </div>
+        <div class="feature-badge">
+          <span>⚡</span>
+          <span>Real-time</span>
+        </div>
+      </div>
+      
+      <a href="/panel/login" class="btn btn-primary w-full text-center" style="font-size: 16px; padding: 14px 24px;">
+        <span>🔐</span>
+        <span>Access Control Panel</span>
+      </a>
+    </div>
+  </div>
+</body>
+</html>

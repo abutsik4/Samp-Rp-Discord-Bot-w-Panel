@@ -1,0 +1,99 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>JepsenCloud Panel — Login</title>
+  <link rel="stylesheet" href="/shared.css" />
+  <style>
+    body {
+      background: linear-gradient(135deg, #0a0e17 0%, #1a1f3a 100%);
+      position: relative;
+      overflow: hidden;
+    }
+    
+    body::before {
+      content: '';
+      position: absolute;
+      top: -50%;
+      left: -50%;
+      width: 200%;
+      height: 200%;
+      background: radial-gradient(circle, rgba(167, 139, 250, 0.1) 0%, transparent 70%);
+      animation: rotate 30s linear infinite;
+    }
+    
+    @keyframes rotate {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    
+    .login-card {
+      position: relative;
+      z-index: 1;
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      background: rgba(12, 17, 29, 0.8);
+      border: 1px solid rgba(167, 139, 250, 0.3);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 40px rgba(167, 139, 250, 0.1);
+    }
+    
+    .login-title {
+      font-size: 36px;
+      font-weight: 700;
+      background: var(--gradient-primary);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 8px;
+      text-align: center;
+    }
+    
+    .login-subtitle {
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 15px;
+      margin-bottom: 32px;
+    }
+    
+    .login-icon {
+      font-size: 48px;
+      text-align: center;
+      margin-bottom: 20px;
+      display: block;
+      filter: drop-shadow(0 0 20px rgba(167, 139, 250, 0.3));
+    }
+  </style>
+</head>
+<body>
+  <div class="page-container-centered">
+    <div class="card card-center login-card">
+      <div class="login-icon">🎮</div>
+      <h1 class="login-title">JepsenCloud Panel</h1>
+      <p class="login-subtitle">Sign in to manage your Discord bots</p>
+
+      <% if (error) { %>
+        <div class="alert-error mb-4">
+          <strong>⚠️ Error:</strong> <%= error %>
+        </div>
+      <% } %>
+
+      <form method="post" action="/login">
+        <div class="form-group">
+          <label>Username</label>
+          <input name="username" autocomplete="username" required placeholder="Enter username..." />
+        </div>
+
+        <div class="form-group">
+          <label>Password</label>
+          <input name="password" type="password" autocomplete="current-password" required placeholder="Enter password..." />
+        </div>
+
+        <button class="btn btn-primary w-full" type="submit">
+          <span>🔐</span>
+          <span>Sign In</span>
+        </button>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

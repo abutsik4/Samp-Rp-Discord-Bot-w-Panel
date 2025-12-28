@@ -1,0 +1,217 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= bot.name %> - Bot Panel</title>
+  <link rel="stylesheet" href="/shared.css">
+  <style>
+    .action-card {
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .action-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: var(--gradient-primary);
+      opacity: 0.7;
+    }
+    
+    .card-icon {
+      font-size: 24px;
+      opacity: 0.7;
+      margin-bottom: 8px;
+      display: inline-block;
+    }
+    
+    .result-message {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: var(--radius-md);
+      font-size: 14px;
+      display: none;
+    }
+    
+    .result-success {
+      background: rgba(52, 211, 153, 0.1);
+      border: 1px solid rgba(52, 211, 153, 0.3);
+      color: var(--accent-emerald);
+    }
+    
+    .result-error {
+      background: rgba(251, 113, 133, 0.1);
+      border: 1px solid rgba(251, 113, 133, 0.3);
+      color: var(--accent-rose);
+    }
+  </style>
+</head>
+
+<body>
+  <div class="page-container-wide">
+    <div class="topbar">
+      <div class="topbar-content">
+        <div class="page-title">
+          <span class="emoji">🤖</span>
+          <span class="gradient-text"><%= bot.name %></span>
+        </div>
+        <div class="muted">Bot management and message controls</div>
+      </div>
+      <div class="topbar-actions">
+        <button onclick="toggleSnow()" class="btn btn-secondary btn-icon" type="button" id="snowToggle"
+          title="Toggle Snow Effect">
+          ❄️
+        </button>
+        <a class="btn btn-secondary" href="/">← Dashboard</a>
+      </div>
+    </div>
+
+    <div class="grid-2col">
+      <div class="card card-glass action-card">
+        <div class="card-icon">📤</div>
+        <h2 class="card-title">Send Message</h2>
+        <div class="form-group">
+          <label>Channel ID</label>
+          <input id="msgChannel" placeholder="Enter channel ID..." />
+        </div>
+        <div class="form-group">
+          <label>Content</label>
+          <textarea id="msgContent" placeholder="Type your message here..."></textarea>
+        </div>
+        <button class="btn btn-primary w-full" id="msgSend">
+          <span>📨</span>
+          <span>Send Message</span>
+        </button>
+        <div id="msgSendResult" class="result-message"></div>
+      </div>
+
+      <div class="card card-glass action-card">
+        <div class="card-icon">✏️</div>
+        <h2 class="card-title">Edit Message</h2>
+        <div class="form-group">
+          <label>Channel ID</label>
+          <input id="msgEditChannel" placeholder="Enter channel ID..." />
+        </div>
+        <div class="form-group">
+          <label>Message ID</label>
+          <input id="msgEditId" placeholder="Enter message ID..." />
+        </div>
+        <div class="form-group">
+          <label>New Content</label>
+          <textarea id="msgEditContent" placeholder="Enter updated message..."></textarea>
+        </div>
+        <button class="btn btn-primary w-full" id="msgEdit">
+          <span>💾</span>
+          <span>Update Message</span>
+        </button>
+        <div id="msgEditResult" class="result-message"></div>
+      </div>
+
+      <div class="card card-glass action-card">
+        <div class="card-icon">🎨</div>
+        <h2 class="card-title">Send Embed</h2>
+        <div class="form-group">
+          <label>Channel ID</label>
+          <input id="embChannel" placeholder="Enter channel ID..." />
+        </div>
+        <div class="form-group">
+          <label>Title</label>
+          <input id="embTitle" placeholder="Embed title..." />
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <textarea id="embDesc" placeholder="Embed description..."></textarea>
+        </div>
+        <div class="flex gap-3">
+          <div class="form-group" style="flex:1">
+            <label>Color</label>
+            <input id="embColor" placeholder="#a78bfa" />
+          </div>
+          <div class="form-group" style="flex:1">
+            <label>Footer (Optional)</label>
+            <input id="embFooter" placeholder="Footer text..." />
+          </div>
+        </div>
+        <button class="btn btn-primary w-full" id="embSend">
+          <span>🎨</span>
+          <span>Send Embed</span>
+        </button>
+        <div id="embSendResult" class="result-message"></div>
+      </div>
+
+      <div class="card card-glass action-card">
+        <div class="card-icon">🖌️</div>
+        <h2 class="card-title">Edit Embed</h2>
+        <div class="form-group">
+          <label>Channel ID</label>
+          <input id="embEditChannel" placeholder="Enter channel ID..." />
+        </div>
+        <div class="form-group">
+          <label>Message ID</label>
+          <input id="embEditId" placeholder="Enter message ID..." />
+        </div>
+        <div class="form-group">
+          <label>Title</label>
+          <input id="embEditTitle" placeholder="New title..." />
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <textarea id="embEditDesc" placeholder="New description..."></textarea>
+        </div>
+        <div class="flex gap-3">
+          <div class="form-group" style="flex:1">
+            <label>Color</label>
+            <input id="embEditColor" placeholder="#22d3ee" />
+          </div>
+          <div class="form-group" style="flex:1">
+            <label>Footer (Optional)</label>
+            <input id="embEditFooter" placeholder="Footer text..." />
+          </div>
+        </div>
+        <button class="btn btn-primary w-full" id="embEdit">
+          <span>💾</span>
+          <span>Update Embed</span>
+        </button>
+        <div id="embEditResult" class="result-message"></div>
+      </div>
+
+      <div class="card card-glass action-card">
+        <div class="card-icon">📊</div>
+        <h2 class="card-title">Accuracy Monitor</h2>
+        <p class="muted">Real-time message counting accuracy and system health metrics.</p>
+        <div style="margin-top: 16px;">
+          <div class="kpi-grid" style="margin-bottom: 16px;">
+            <div style="padding: 12px; background: rgba(34, 211, 238, 0.05); border-radius: var(--radius-md); border: 1px solid rgba(34, 211, 238, 0.2);">
+              <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Target Accuracy</div>
+              <div style="font-size: 24px; font-weight: 700; color: var(--accent-emerald);">99.5%</div>
+            </div>
+          </div>
+          <strong style="font-size: 14px; color: var(--accent-cyan);">Features:</strong>
+          <ul style="font-size: 13px; margin: 10px 0; padding-left: 20px; color: var(--text-muted);">
+            <li>Live accuracy metrics</li>
+            <li>Recent counting events</li>
+            <li>Error queue monitoring</li>
+            <li>Auto-refresh dashboard</li>
+          </ul>
+        </div>
+        <a href="<%= `/panel/bot/${bot.key}/accuracy` %>" class="btn btn-primary w-full" style="margin-top: 16px;">
+          <span>📊</span>
+          <span>Open Dashboard</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    window.BOT_KEY = "<%= bot.key %>";
+  </script>
+  <script src="/public/bot.js"></script>
+  <script src="/public/snow.js"></script>
+</body>
+
+</html>
