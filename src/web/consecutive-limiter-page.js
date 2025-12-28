@@ -72,10 +72,12 @@ function generateConsecutiveLimiterPage(bot, PANEL_BASE) {
       <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
         <button onclick="history.back()" class="btn" style="padding:8px 16px">← Back</button>
         <a href="${PANEL_BASE}/bot/${bot.key}" style="color:var(--accent-cyan);text-decoration:none;font-size:14px">🏠 Panel</a>
+        <a href="${PANEL_BASE}/bot/${bot.key}/stats" style="color:var(--text-muted);text-decoration:none;font-size:14px">📊 Stats</a>
         <a href="${PANEL_BASE}/bot/${bot.key}/rate-limits" style="color:var(--text-muted);text-decoration:none;font-size:14px">🚦 Rate Limits</a>
         <a href="${PANEL_BASE}/bot/${bot.key}/messages" style="color:var(--text-muted);text-decoration:none;font-size:14px">📨 Messages</a>
         <a href="${PANEL_BASE}/bot/${bot.key}/ai-engagement" style="color:var(--text-muted);text-decoration:none;font-size:14px">🤖 AI</a>
         <a href="${PANEL_BASE}/bot/${bot.key}/commands" style="color:var(--text-muted);text-decoration:none;font-size:14px">📚 Commands</a>
+        <a href="${PANEL_BASE}/bot/${bot.key}/accuracy" style="color:var(--text-muted);text-decoration:none;font-size:14px">🎯 Accuracy</a>
         <form method="post" action="${PANEL_BASE}/logout" style="display:inline"><button class="btn" type="submit">Logout</button></form>
       </div>
     </div>

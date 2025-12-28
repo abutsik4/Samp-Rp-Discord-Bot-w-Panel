@@ -3159,13 +3159,6 @@ app.get(`${PANEL_BASE}/bot/:botKey`, requireAuth, async (req, res) => {
         </div>
       </a>
 
-      <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/channels" style="text-decoration:none;color:inherit">
-        <div class="feature-card">
-          <div class="feature-title">📡 Channels</div>
-          <div class="feature-description">View all available Discord channels for posting messages and embeds.</div>
-        </div>
-      </a>
-
       <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/ai-engagement" style="text-decoration:none;color:inherit">
         <div class="feature-card">
           <div class="feature-title">🤖 AI Engagement</div>
@@ -3272,13 +3265,20 @@ app.get(`${PANEL_BASE}/bot/:botKey/holidays`, requireAuth, async (req, res) => {
   <div class="wrap">
     <div class="top">
       <div>
-        <div class="title">Holidays</div>
+        <div class="title">🎉 Holidays</div>
         <div class="muted">Bot: ${escapeHtml(bot.name)} (${escapeHtml(bot.key)})</div>
       </div>
-      <div style="display:flex;gap:10px;align-items:center">
-        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}">← Back</a>
-        <a href="${PANEL_BASE}">Panel</a>
-        <form method="post" action="${PANEL_BASE}/logout"><button class="btn" type="submit">Logout</button></form>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button onclick="history.back()" class="btn" type="button" style="padding:8px 14px">← Back</button>
+        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}" style="color:#93c5fd">🏠 Panel</a>
+        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/stats" style="color:#93c5fd">📊 Stats</a>
+        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/rate-limits" style="color:#93c5fd">🚦 Rate Limits</a>
+        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/consecutive-limits" style="color:#93c5fd">🚫 Consecutive</a>
+        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/messages" style="color:#93c5fd">📨 Messages</a>
+        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/ai-engagement" style="color:#93c5fd">🤖 AI</a>
+        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/commands" style="color:#93c5fd">📚 Commands</a>
+        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/accuracy" style="color:#93c5fd">🎯 Accuracy</a>
+        <form method="post" action="${PANEL_BASE}/logout" style="display:inline;margin:0"><button class="btn" type="submit">Logout</button></form>
       </div>
     </div>
 
@@ -3452,39 +3452,6 @@ app.get(`${PANEL_BASE}/bot/:botKey/stats`, requireAuth, async (req, res) => {
   const bot = bots.find((b) => b.key === req.params.botKey);
   if (!bot) return res.status(404).send("Bot not found");
   res.send(generateStatsPage(bot, PANEL_BASE));
-});
-
-// Channels list route
-app.get(`${PANEL_BASE}/bot/:botKey/channels`, requireAuth, async (req, res) => {
-  const bot = bots.find((b) => b.key === req.params.botKey);
-  if (!bot) return res.status(404).send("Bot not found");
-  
-  // Return simple channels list page
-  res.send(`<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Channels - ${escapeHtml(bot.name)}</title>
-  <style>
-    :root{color-scheme:dark}
-    body{margin:0;font-family:system-ui;background:#070c14;color:#e5e7eb;padding:20px}
-    .container{max-width:800px;margin:0 auto}
-    h1{margin-bottom:10px}
-    .muted{color:#9ca3af;font-size:14px;margin-bottom:20px}
-    a{color:#93c5fd;text-decoration:none}
-    a:hover{text-decoration:underline}
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>📡 Channels for ${escapeHtml(bot.name)}</h1>
-    <div class="muted">Channel management interface</div>
-    <p>This page is reserved for channel management features.</p>
-    <p><a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}">← Back to Panel</a></p>
-  </div>
-</body>
-</html>`);
 });
 
 // AI Engagement page

@@ -29,7 +29,15 @@ function generateStatsPage(bot, PANEL_BASE) {
         <div class="muted">Message count leaderboard with Discord usernames</div>
       </div>
       <div class="topbar-actions">
-        <a href="${PANEL_BASE}" class="link">← Back to Panel</a>
+        <button onclick="history.back()" class="btn" type="button" style="padding:8px 16px">← Back</button>
+        <a href="${PANEL_BASE}/bot/${bot.key}" class="link">🏠 Panel</a>
+        <a href="${PANEL_BASE}/bot/${bot.key}/rate-limits" class="link">🚦 Rate Limits</a>
+        <a href="${PANEL_BASE}/bot/${bot.key}/consecutive-limits" class="link">🚫 Consecutive</a>
+        <a href="${PANEL_BASE}/bot/${bot.key}/messages" class="link">📨 Messages</a>
+        <a href="${PANEL_BASE}/bot/${bot.key}/ai-engagement" class="link">🤖 AI</a>
+        <a href="${PANEL_BASE}/bot/${bot.key}/commands" class="link">📚 Commands</a>
+        <a href="${PANEL_BASE}/bot/${bot.key}/accuracy" class="link">🎯 Accuracy</a>
+        <form method="post" action="${PANEL_BASE}/logout" style="display:inline;margin:0"><button class="btn" type="submit">Logout</button></form>
       </div>
     </div>
 

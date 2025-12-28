@@ -100,7 +100,15 @@ function generateAccuracyMonitorPage(bot, PANEL_BASE) {
         <div class="muted">Real-time message counting accuracy and error tracking</div>
       </div>
       <div class="nav">
-        <a href="${PANEL_BASE}">← Back to Panel</a>
+        <button onclick="history.back()" class="btn" type="button" style="padding:8px 16px">← Back</button>
+        <a href="${PANEL_BASE}/bot/${bot.key}">🏠 Panel</a>
+        <a href="${PANEL_BASE}/bot/${bot.key}/stats">📊 Stats</a>
+        <a href="${PANEL_BASE}/bot/${bot.key}/rate-limits">🚦 Rate Limits</a>
+        <a href="${PANEL_BASE}/bot/${bot.key}/consecutive-limits">🚫 Consecutive</a>
+        <a href="${PANEL_BASE}/bot/${bot.key}/messages">📨 Messages</a>
+        <a href="${PANEL_BASE}/bot/${bot.key}/ai-engagement">🤖 AI</a>
+        <a href="${PANEL_BASE}/bot/${bot.key}/commands">📚 Commands</a>
+        <form method="post" action="${PANEL_BASE}/logout" style="margin:0"><button class="btn" type="submit">Logout</button></form>
       </div>
     </div>
 
