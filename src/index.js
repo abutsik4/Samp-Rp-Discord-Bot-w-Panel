@@ -35,6 +35,9 @@ const { generateRateLimiterPage } = require("./web/rate-limiter-page");
 const { generateConsecutiveLimiterPage } = require("./web/consecutive-limiter-page");
 const { generateCommandsPage } = require("./web/commands-page");
 const { generateAccuracyMonitorPage } = require("./web/accuracy-monitor-page");
+const { generateWhitelistPage } = require("./web/whitelist-page");
+const { generateAutoModPage } = require("./web/automod-page");
+const { generateHistoryPage } = require("./web/history-page");
 require("dotenv").config();
 
 // Panel security deps
@@ -342,6 +345,51 @@ async function initDb() {
   await dbRun(`
     CREATE INDEX IF NOT EXISTS idx_message_index_created 
     ON message_index(created_at)
+  `);
+
+  // ===== TIMEKEEPER V3 INSPIRED FEATURES =====
+  
+  // Channel whitelist for message counting (optional filter)
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS channel_whitelist (
+      guild_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      added_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (guild_id, channel_id)
+    )
+  `);
+
+  // Banned words for AutoMod
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS banned_words (
+      guild_id TEXT NOT NULL,
+      word TEXT NOT NULL,
+      case_sensitive INTEGER DEFAULT 0,
+      added_by TEXT,
+      added_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (guild_id, word)
+    )
+  `);
+
+  // Operation history for undo functionality
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS operation_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL,
+      actor_id TEXT NOT NULL,
+      operation TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      target_id TEXT,
+      payload_before TEXT NOT NULL,
+      payload_after TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      undone INTEGER DEFAULT 0
+    )
+  `);
+  
+  await dbRun(`
+    CREATE INDEX IF NOT EXISTS idx_operation_history_guild 
+    ON operation_history(guild_id, timestamp DESC)
   `);
 
   console.log("DB ready:", dbPath);
@@ -686,12 +734,10 @@ const commands = [
   new SlashCommandBuilder()
     .setName("backfill")
     .setDescription("Backfill message history for this server (owner only, may take a long time)."),
-  new SlashCommandBuilder().setName("demoembed").setDescription("Send an example embed and edit it after 10 seconds."),
   new SlashCommandBuilder()
     .setName("synccommands")
     .setDescription("Re-register slash commands for this server (owner only)."),
 
-  // New commands
   new SlashCommandBuilder().setName("weekly").setDescription("Show weekly leaderboard (resets every Monday)."),
   new SlashCommandBuilder()
     .setName("streak")
@@ -717,6 +763,55 @@ const commands = [
     .setName("mystrikes")
     .setDescription("Просмотреть ваши текущие нарушения и страйки"),
 
+  // Channel whitelist
+  new SlashCommandBuilder()
+    .setName("whitelist")
+    .setDescription("Manage counting channel whitelist (owner only)")
+    .addSubcommand((sub) =>
+      sub
+        .setName("add")
+        .setDescription("Add channel to counting whitelist")
+        .addChannelOption((opt) => opt.setName("channel").setDescription("Channel to add").setRequired(true))
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("remove")
+        .setDescription("Remove channel from counting whitelist")
+        .addChannelOption((opt) => opt.setName("channel").setDescription("Channel to remove").setRequired(true))
+    )
+    .addSubcommand((sub) => sub.setName("list").setDescription("List whitelisted channels"))
+    .addSubcommand((sub) => sub.setName("clear").setDescription("Clear whitelist (count all channels)")),
+
+  // AutoMod
+  new SlashCommandBuilder()
+    .setName("automod")
+    .setDescription("Manage banned words (owner only)")
+    .addSubcommand((sub) =>
+      sub
+        .setName("add")
+        .setDescription("Ban a word")
+        .addStringOption((opt) => opt.setName("word").setDescription("Word to ban").setRequired(true))
+        .addBooleanOption((opt) => opt.setName("case_sensitive").setDescription("Case sensitive? (default: no)"))
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("remove")
+        .setDescription("Unban a word")
+        .addStringOption((opt) => opt.setName("word").setDescription("Word to unban").setRequired(true))
+    )
+    .addSubcommand((sub) => sub.setName("list").setDescription("List banned words"))
+    .addSubcommand((sub) => sub.setName("clear").setDescription("Clear all banned words")),
+
+  // Undo
+  new SlashCommandBuilder()
+    .setName("undo")
+    .setDescription("Undo last bulk operation (owner only)")
+    .addIntegerOption((opt) => opt.setName("operation_id").setDescription("Specific operation ID to undo")),
+    
+  new SlashCommandBuilder()
+    .setName("history")
+    .setDescription("View recent bulk operations (owner only)")
+    .addIntegerOption((opt) => opt.setName("limit").setDescription("Number of operations to show (default: 10)")),
 
   // Holidays
   ...getHolidayCommandBuilders(),
@@ -1043,6 +1138,45 @@ holidaysScheduler = startDailyHolidayPosts({
   }
 });
 
+// -------------------------
+// OPERATION HISTORY HELPERS
+// -------------------------
+async function recordOperation(guildId, actorId, operation, scope, targetId, before, after) {
+  const timestamp = Math.floor(Date.now() / 1000);
+  
+  const result = await dbRun(
+    `INSERT INTO operation_history (guild_id, actor_id, operation, scope, target_id, payload_before, payload_after, timestamp) 
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [guildId, actorId, operation, scope, targetId, JSON.stringify(before), JSON.stringify(after), timestamp]
+  );
+  
+  return result.lastID;
+}
+
+async function performUndo(historyRow) {
+  const before = JSON.parse(historyRow.payload_before);
+  const guildId = historyRow.guild_id;
+  
+  if (historyRow.scope === "user" && historyRow.target_id) {
+    // Restore user stats
+    const userId = historyRow.target_id;
+    await dbRun(
+      `INSERT OR REPLACE INTO user_stats (guild_id, user_id, message_count) VALUES (?, ?, ?)`,
+      [guildId, userId, before.message_count || 0]
+    );
+  } else if (historyRow.scope === "server") {
+    // Restore all user stats
+    await dbRun(`DELETE FROM user_stats WHERE guild_id = ?`, [guildId]);
+    
+    for (const [userId, data] of Object.entries(before)) {
+      await dbRun(
+        `INSERT INTO user_stats (guild_id, user_id, message_count) VALUES (?, ?, ?)`,
+        [guildId, userId, data.message_count || 0]
+      );
+    }
+  }
+}
+
 client.on("guildCreate", async (guild) => {
   console.log(`Joined new guild: ${guild.name} (${guild.id})`);
   await registerGuildCommands(guild.id);
@@ -1173,6 +1307,55 @@ client.on("messageCreate", async (message) => {
     // Track message for rate limiting
     if (rateLimitCheck.config) {
       await trackMessage(db, guildId, channelId, userId, message.id);
+    }
+
+    // ========================================
+    // AUTOMOD - BANNED WORDS CHECK
+    // ========================================
+    const bannedWords = await dbAll(
+      `SELECT word, case_sensitive FROM banned_words WHERE guild_id = ?`,
+      [guildId]
+    );
+    
+    if (bannedWords && bannedWords.length > 0 && message.content) {
+      const messageContent = message.content;
+      
+      for (const { word, case_sensitive } of bannedWords) {
+        const pattern = case_sensitive 
+          ? new RegExp(`\\b${word}\\b`, 'g')
+          : new RegExp(`\\b${word}\\b`, 'gi');
+        
+        if (pattern.test(messageContent)) {
+          console.log(`[AutoMod] Banned word detected: "${word}" in message from ${userId}`);
+          
+          try {
+            await message.delete();
+            await message.author.send(`⚠️ Your message was deleted because it contained a banned word: "${word}"`);
+          } catch (err) {
+            console.warn(`[AutoMod] Could not delete message or DM user:`, err.message);
+          }
+          
+          return; // Stop processing this message
+        }
+      }
+    }
+
+    // ========================================
+    // CHANNEL WHITELIST CHECK
+    // ========================================
+    const whitelistedChannels = await dbAll(
+      `SELECT channel_id FROM channel_whitelist WHERE guild_id = ?`,
+      [guildId]
+    );
+    
+    // If whitelist exists and this channel is not in it, skip counting
+    if (whitelistedChannels && whitelistedChannels.length > 0) {
+      const isWhitelisted = whitelistedChannels.some(row => row.channel_id === channelId);
+      
+      if (!isWhitelisted) {
+        console.log(`[Whitelist] Skipping count for channel ${channelId} - not whitelisted`);
+        return; // Don't count messages in non-whitelisted channels
+      }
     }
 
     // Cache user's Discord username for panel display (async, non-blocking)
@@ -1448,7 +1631,7 @@ client.on("interactionCreate", async (interaction) => {
     const desc =
       lines.join("\n") +
       "\n\n*Учтены все сообщения. Показаны только пользователи, которые всё ещё находятся на сервере.*" +
-      "\n*Подсчёт может быть неточным: для проверки используй поиск по пользователю.*";
+      "\n*Подсчёт может быть неточным: для проверки используй поиск по пользователю в топе.*";
 
     const embed = new EmbedBuilder()
       .setTitle(desiredLimit === 5 ? "Топ 5 по количеству сообщений" : "Топ 10 по количеству сообщений")
@@ -1470,6 +1653,198 @@ client.on("interactionCreate", async (interaction) => {
     await backfillGuild(interaction.guild);
 
     await interaction.followUp({ content: "История сообщений собрана.", flags: 64 });
+  } else if (commandName === "whitelist") {
+    if (interaction.user.id !== interaction.guild.ownerId) {
+      return interaction.reply({ content: "❌ Только владелец сервера может управлять whitelist.", flags: 64 });
+    }
+
+    const subcommand = interaction.options.getSubcommand();
+
+    if (subcommand === "add") {
+      const channel = interaction.options.getChannel("channel");
+      
+      await dbRun(
+        `INSERT OR IGNORE INTO channel_whitelist (guild_id, channel_id) VALUES (?, ?)`,
+        [interaction.guild.id, channel.id]
+      );
+      
+      return interaction.reply({
+        content: `✅ ${channel} добавлен в whitelist. Теперь сообщения будут считаться только в whitelisted каналах.`,
+        flags: 64,
+      });
+    } else if (subcommand === "remove") {
+      const channel = interaction.options.getChannel("channel");
+      
+      await dbRun(
+        `DELETE FROM channel_whitelist WHERE guild_id = ? AND channel_id = ?`,
+        [interaction.guild.id, channel.id]
+      );
+      
+      return interaction.reply({
+        content: `✅ ${channel} удалён из whitelist.`,
+        flags: 64,
+      });
+    } else if (subcommand === "list") {
+      const rows = await dbAll(
+        `SELECT channel_id FROM channel_whitelist WHERE guild_id = ?`,
+        [interaction.guild.id]
+      );
+      
+      if (!rows || rows.length === 0) {
+        return interaction.reply({
+          content: "📋 Whitelist пуст. Сообщения считаются во всех каналах.",
+          flags: 64,
+        });
+      }
+      
+      const channels = rows.map(r => `<#${r.channel_id}>`).join(", ");
+      return interaction.reply({
+        content: `📋 Whitelist каналов:\n${channels}\n\nСообщения считаются только в этих каналах.`,
+        flags: 64,
+      });
+    } else if (subcommand === "clear") {
+      await dbRun(`DELETE FROM channel_whitelist WHERE guild_id = ?`, [interaction.guild.id]);
+      
+      return interaction.reply({
+        content: "✅ Whitelist очищен. Сообщения теперь считаются во всех каналах.",
+        flags: 64,
+      });
+    }
+  } else if (commandName === "automod") {
+    if (interaction.user.id !== interaction.guild.ownerId) {
+      return interaction.reply({ content: "❌ Только владелец сервера может управлять AutoMod.", flags: 64 });
+    }
+
+    const subcommand = interaction.options.getSubcommand();
+
+    if (subcommand === "add") {
+      const word = interaction.options.getString("word");
+      const caseSensitive = interaction.options.getBoolean("case_sensitive") || false;
+      
+      await dbRun(
+        `INSERT OR REPLACE INTO banned_words (guild_id, word, case_sensitive, added_by) VALUES (?, ?, ?, ?)`,
+        [interaction.guild.id, word.toLowerCase(), caseSensitive ? 1 : 0, interaction.user.id]
+      );
+      
+      return interaction.reply({
+        content: `✅ Слово "${word}" добавлено в список запрещённых ${caseSensitive ? "(с учётом регистра)" : ""}.`,
+        flags: 64,
+      });
+    } else if (subcommand === "remove") {
+      const word = interaction.options.getString("word");
+      
+      await dbRun(
+        `DELETE FROM banned_words WHERE guild_id = ? AND word = ?`,
+        [interaction.guild.id, word.toLowerCase()]
+      );
+      
+      return interaction.reply({
+        content: `✅ Слово "${word}" удалено из списка запрещённых.`,
+        flags: 64,
+      });
+    } else if (subcommand === "list") {
+      const rows = await dbAll(
+        `SELECT word, case_sensitive FROM banned_words WHERE guild_id = ?`,
+        [interaction.guild.id]
+      );
+      
+      if (!rows || rows.length === 0) {
+        return interaction.reply({
+          content: "📋 Список запрещённых слов пуст.",
+          flags: 64,
+        });
+      }
+      
+      const words = rows.map(r => `• ${r.word}${r.case_sensitive ? " (регистр важен)" : ""}`).join("\n");
+      return interaction.reply({
+        content: `📋 Запрещённые слова (${rows.length}):\n${words}`,
+        flags: 64,
+      });
+    } else if (subcommand === "clear") {
+      await dbRun(`DELETE FROM banned_words WHERE guild_id = ?`, [interaction.guild.id]);
+      
+      return interaction.reply({
+        content: "✅ Все запрещённые слова удалены.",
+        flags: 64,
+      });
+    }
+  } else if (commandName === "undo") {
+    if (interaction.user.id !== interaction.guild.ownerId) {
+      return interaction.reply({ content: "❌ Только владелец сервера может отменять операции.", flags: 64 });
+    }
+
+    const operationId = interaction.options.getInteger("operation_id");
+    
+    await interaction.deferReply({ flags: 64 });
+
+    if (operationId) {
+      // Undo specific operation
+      const row = await dbGet(
+        `SELECT * FROM operation_history WHERE id = ? AND guild_id = ? AND undone = 0`,
+        [operationId, interaction.guild.id]
+      );
+      
+      if (!row) {
+        return interaction.editReply("❌ Операция не найдена или уже отменена.");
+      }
+      
+      await performUndo(row);
+      
+      await dbRun(`UPDATE operation_history SET undone = 1 WHERE id = ?`, [operationId]);
+      
+      return interaction.editReply(`✅ Операция #${operationId} отменена: ${row.operation}`);
+    } else {
+      // Undo last operation
+      const row = await dbGet(
+        `SELECT * FROM operation_history WHERE guild_id = ? AND undone = 0 ORDER BY timestamp DESC LIMIT 1`,
+        [interaction.guild.id]
+      );
+      
+      if (!row) {
+        return interaction.editReply("❌ Нет операций для отмены.");
+      }
+      
+      await performUndo(row);
+      
+      await dbRun(`UPDATE operation_history SET undone = 1 WHERE id = ?`, [row.id]);
+      
+      return interaction.editReply(`✅ Последняя операция отменена: ${row.operation} (#${row.id})`);
+    }
+  } else if (commandName === "history") {
+    if (interaction.user.id !== interaction.guild.ownerId) {
+      return interaction.reply({ content: "❌ Только владелец сервера может просматривать историю.", flags: 64 });
+    }
+
+    const limit = interaction.options.getInteger("limit") || 10;
+    
+    const rows = await dbAll(
+      `SELECT * FROM operation_history WHERE guild_id = ? ORDER BY timestamp DESC LIMIT ?`,
+      [interaction.guild.id, Math.min(limit, 50)]
+    );
+    
+    if (!rows || rows.length === 0) {
+      return interaction.reply({
+        content: "📋 История операций пуста.",
+        flags: 64,
+      });
+    }
+    
+    const embed = new EmbedBuilder()
+      .setTitle("📜 История операций")
+      .setColor(0x8b5cf6)
+      .setTimestamp();
+    
+    for (const row of rows) {
+      const status = row.undone ? "❌ Отменена" : "✅ Активна";
+      const time = `<t:${row.timestamp}:R>`;
+      embed.addFields({
+        name: `#${row.id} - ${row.operation}`,
+        value: `${status} | Кем: <@${row.actor_id}> | Когда: ${time}`,
+        inline: false,
+      });
+    }
+    
+    return interaction.reply({ embeds: [embed], flags: 64 });
   } else if (commandName === "demoembed") {
     const initialEmbed = new EmbedBuilder()
       .setTitle("Пример Embed от Samp-Rp")
@@ -3192,7 +3567,7 @@ app.get(`${PANEL_BASE}/bot/:botKey`, requireAuth, async (req, res) => {
       <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/commands" style="text-decoration:none;color:inherit">
         <div class="feature-card">
           <div class="feature-title">📚 Bot Commands</div>
-          <div class="feature-description">Complete list of all available bot commands and features.</div>
+          <div class="feature-description">Complete list of all available bot commands and featuresw.</div>
         </div>
       </a>
 
@@ -3221,6 +3596,27 @@ app.get(`${PANEL_BASE}/bot/:botKey`, requireAuth, async (req, res) => {
         <div class="feature-card">
           <div class="feature-title">🔍 Accuracy Monitor</div>
           <div class="feature-description">Real-time message counting accuracy, event logs, and system health monitoring.</div>
+        </div>
+      </a>
+
+      <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/whitelist" style="text-decoration:none;color:inherit">
+        <div class="feature-card">
+          <div class="feature-title">📋 Channel Whitelist</div>
+          <div class="feature-description">Manage which channels count messages. Empty whitelist = all channels count.</div>
+        </div>
+      </a>
+
+      <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/automod" style="text-decoration:none;color:inherit">
+        <div class="feature-card">
+          <div class="feature-title">🛡️ AutoMod</div>
+          <div class="feature-description">Manage banned words with automatic message deletion and notifications.</div>
+        </div>
+      </a>
+
+      <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/history" style="text-decoration:none;color:inherit">
+        <div class="feature-card">
+          <div class="feature-title">📜 Operation History</div>
+          <div class="feature-description">View and undo bulk operations. Prevents accidental data loss.</div>
         </div>
       </a>
 
@@ -3772,6 +4168,27 @@ app.get(`${PANEL_BASE}/bot/:botKey/consecutive-limits`, requireAuth, async (req,
   res.send(generateConsecutiveLimiterPage(bot, PANEL_BASE));
 });
 
+// Channel Whitelist page
+app.get(`${PANEL_BASE}/bot/:botKey/whitelist`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).send("Bot not found");
+  res.send(generateWhitelistPage(bot, PANEL_BASE));
+});
+
+// AutoMod page
+app.get(`${PANEL_BASE}/bot/:botKey/automod`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).send("Bot not found");
+  res.send(generateAutoModPage(bot, PANEL_BASE));
+});
+
+// Operation History page
+app.get(`${PANEL_BASE}/bot/:botKey/history`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).send("Bot not found");
+  res.send(generateHistoryPage(bot, PANEL_BASE));
+});
+
 // Rate Limiter API - Get configuration
 app.get(`${PANEL_BASE}/api/:botKey/rate-limits/config`, requireAuth, apiLimiter, async (req, res) => {
   const bot = bots.find((b) => b.key === req.params.botKey);
@@ -3980,6 +4397,243 @@ app.post(`${PANEL_BASE}/api/:botKey/countdown/test`, requireAuth, apiLimiter, as
   } catch (e) {
     console.error("Test countdown error:", e);
     return res.status(500).json({ error: e?.message || "Failed to send countdown" });
+  }
+});
+
+// ========================================
+// CHANNEL WHITELIST API
+// ========================================
+
+// Get whitelist
+app.get(`${PANEL_BASE}/api/bot/:botKey/whitelist`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  try {
+    const rows = await dbAll(
+      `SELECT channel_id, added_at FROM channel_whitelist WHERE guild_id = ?`,
+      [bot.guild_id]
+    );
+    
+    const guild = client.guilds.cache.get(bot.guild_id);
+    const channels = rows.map(r => {
+      const ch = guild?.channels?.cache?.get(r.channel_id);
+      return {
+        id: r.channel_id,
+        name: ch?.name || `Unknown Channel`,
+        added_at: r.added_at
+      };
+    });
+    
+    return res.json({ channels });
+  } catch (e) {
+    console.error("Get whitelist error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to get whitelist" });
+  }
+});
+
+// Add channel to whitelist
+app.post(`${PANEL_BASE}/api/bot/:botKey/whitelist`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  const channelId = req.body?.channel_id;
+  if (!channelId) return res.status(400).json({ error: "channel_id required" });
+
+  try {
+    await dbRun(
+      `INSERT OR IGNORE INTO channel_whitelist (guild_id, channel_id) VALUES (?, ?)`,
+      [bot.guild_id, channelId]
+    );
+    
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("Add whitelist error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to add channel" });
+  }
+});
+
+// Remove channel from whitelist
+app.delete(`${PANEL_BASE}/api/bot/:botKey/whitelist/:channelId`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  try {
+    await dbRun(
+      `DELETE FROM channel_whitelist WHERE guild_id = ? AND channel_id = ?`,
+      [bot.guild_id, req.params.channelId]
+    );
+    
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("Remove whitelist error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to remove channel" });
+  }
+});
+
+// Clear whitelist
+app.delete(`${PANEL_BASE}/api/bot/:botKey/whitelist`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  try {
+    await dbRun(`DELETE FROM channel_whitelist WHERE guild_id = ?`, [bot.guild_id]);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("Clear whitelist error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to clear whitelist" });
+  }
+});
+
+// ========================================
+// AUTOMOD API
+// ========================================
+
+// Get banned words
+app.get(`${PANEL_BASE}/api/bot/:botKey/automod`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  try {
+    const rows = await dbAll(
+      `SELECT word, case_sensitive, added_by, added_at FROM banned_words WHERE guild_id = ?`,
+      [bot.guild_id]
+    );
+    
+    return res.json({ words: rows });
+  } catch (e) {
+    console.error("Get banned words error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to get banned words" });
+  }
+});
+
+// Add banned word
+app.post(`${PANEL_BASE}/api/bot/:botKey/automod`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  const word = req.body?.word?.toLowerCase();
+  const caseSensitive = req.body?.case_sensitive || false;
+  
+  if (!word) return res.status(400).json({ error: "word required" });
+
+  try {
+    await dbRun(
+      `INSERT OR REPLACE INTO banned_words (guild_id, word, case_sensitive) VALUES (?, ?, ?)`,
+      [bot.guild_id, word, caseSensitive ? 1 : 0]
+    );
+    
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("Add banned word error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to add word" });
+  }
+});
+
+// Remove banned word
+app.delete(`${PANEL_BASE}/api/bot/:botKey/automod/:word`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  const word = decodeURIComponent(req.params.word).toLowerCase();
+
+  try {
+    await dbRun(
+      `DELETE FROM banned_words WHERE guild_id = ? AND word = ?`,
+      [bot.guild_id, word]
+    );
+    
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("Remove banned word error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to remove word" });
+  }
+});
+
+// Clear all banned words
+app.delete(`${PANEL_BASE}/api/bot/:botKey/automod`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  try {
+    await dbRun(`DELETE FROM banned_words WHERE guild_id = ?`, [bot.guild_id]);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("Clear banned words error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to clear banned words" });
+  }
+});
+
+// ========================================
+// OPERATION HISTORY API
+// ========================================
+
+// Get operation history
+app.get(`${PANEL_BASE}/api/bot/:botKey/history`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  const limit = Math.min(parseInt(req.query?.limit) || 50, 100);
+
+  try {
+    const rows = await dbAll(
+      `SELECT * FROM operation_history WHERE guild_id = ? ORDER BY timestamp DESC LIMIT ?`,
+      [bot.guild_id, limit]
+    );
+    
+    return res.json({ operations: rows });
+  } catch (e) {
+    console.error("Get history error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to get history" });
+  }
+});
+
+// Undo operation
+app.post(`${PANEL_BASE}/api/bot/:botKey/history/:id/undo`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  const operationId = parseInt(req.params.id);
+
+  try {
+    const row = await dbGet(
+      `SELECT * FROM operation_history WHERE id = ? AND guild_id = ? AND undone = 0`,
+      [operationId, bot.guild_id]
+    );
+    
+    if (!row) {
+      return res.status(404).json({ error: "Operation not found or already undone" });
+    }
+    
+    await performUndo(row);
+    
+    await dbRun(`UPDATE operation_history SET undone = 1 WHERE id = ?`, [operationId]);
+    
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("Undo operation error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to undo operation" });
+  }
+});
+
+// Get channels list (for dropdown)
+app.get(`${PANEL_BASE}/api/bot/:botKey/channels`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  try {
+    const guild = client.guilds.cache.get(bot.guild_id);
+    if (!guild) return res.status(404).json({ error: "Guild not found" });
+    
+    const channels = guild.channels.cache
+      .filter(ch => ch.isTextBased())
+      .map(ch => ({ id: ch.id, name: ch.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    
+    return res.json(channels);
+  } catch (e) {
+    console.error("Get channels error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to get channels" });
   }
 });
 
