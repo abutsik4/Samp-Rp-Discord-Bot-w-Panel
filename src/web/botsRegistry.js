@@ -3,7 +3,7 @@ function getBotsRegistry({ discordClient }) {
   return {
     samprp: {
       key: "samprp",
-      name: "Discord Radio Samp-Rp",
+      name: "JepsenCloud Bot",
       kind: "discord",
       client: discordClient
     }

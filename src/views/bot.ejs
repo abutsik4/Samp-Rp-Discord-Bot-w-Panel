@@ -204,6 +204,26 @@
           <span>Open Dashboard</span>
         </a>
       </div>
+
+      <div class="card card-glass action-card">
+        <div class="card-icon">🎮</div>
+        <h2 class="card-title">SAMP Server Status</h2>
+        <p class="muted">Monitor SA-MP servers with live player counts in voice channel names.</p>
+        <div style="margin-top: 16px;">
+          <strong style="font-size: 14px; color: var(--accent-cyan);">Features:</strong>
+          <ul style="font-size: 13px; margin: 10px 0; padding-left: 20px; color: var(--text-muted);">
+            <li>Track multiple SAMP servers</li>
+            <li>Live player count updates</li>
+            <li>Voice channel name display</li>
+            <li>Auto-refresh every 2 minutes</li>
+            <li>Server status indicators</li>
+          </ul>
+        </div>
+        <a href="<%= `/panel/bot/${bot.key}/samp-servers` %>" class="btn btn-primary w-full" style="margin-top: 16px;">
+          <span>🎮</span>
+          <span>Manage SAMP Servers</span>
+        </a>
+      </div>
     </div>
   </div>
 

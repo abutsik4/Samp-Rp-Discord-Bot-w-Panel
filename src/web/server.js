@@ -30,7 +30,7 @@ function createWebServer({ discordClient }) {
   const bots = getBotsRegistry({ discordClient });
 
   app.set("view engine", "ejs");
-  app.set("views", path.join(__dirname, "views"));
+  app.set("views", path.join(__dirname, "../views"));
 
   app.use(helmet());
   app.use(express.json({ limit: "200kb" }));

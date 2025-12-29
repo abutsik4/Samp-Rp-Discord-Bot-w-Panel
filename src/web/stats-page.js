@@ -81,8 +81,8 @@ function generateStatsPage(bot, PANEL_BASE) {
           </select>
         </div>
         <div class="form-group mb-0">
-          <label for="guildId">Guild ID (optional)</label>
-          <input id="guildId" type="text" placeholder="Leave empty for all" />
+          <label for="guildId">Guild ID <span style="color:var(--text-muted);font-size:12px">(required for adjustments)</span></label>
+          <input id="guildId" type="text" placeholder="Enter Guild ID for filtering/adjustments" />
         </div>
       </div>
 
@@ -380,7 +380,7 @@ function generateStatsPage(bot, PANEL_BASE) {
     // Adjust user count helper
     async function adjustUserCount(userId) {
       try {
-        let guildId = document.getElementById('guildId')?.value || '';
+        let guildId = document.getElementById('guildId')?.value?.trim() || '';
         console.log('Guild ID from input:', guildId);
         
         // Fallback: get guild ID from URL, or use default
@@ -391,7 +391,12 @@ function generateStatsPage(bot, PANEL_BASE) {
         }
         
         if (!guildId) {
-          alert('Please specify Guild ID in filters to adjust a user within that guild.');
+          const guildIdInput = document.getElementById('guildId');
+          alert('Please enter a Guild ID in the "Guild ID (optional)" filter field above before adjusting message counts.\\n\\nThis is required to specify which guild/server the user belongs to.');
+          if (guildIdInput) {
+            guildIdInput.focus();
+            guildIdInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
           return;
         }
         
