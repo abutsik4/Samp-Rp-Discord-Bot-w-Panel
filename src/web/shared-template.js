@@ -8,6 +8,7 @@ function generatePageHeader(title, botName = '', botKey = '', PANEL_BASE = '/pan
     <button onclick="history.back()" class="btn btn-secondary" type="button">← Back</button>
     <a href="${PANEL_BASE}/bot/${botKey}" class="link">🏠 Panel</a>
     <a href="${PANEL_BASE}/bot/${botKey}/stats" class="link">📊 Stats</a>
+    <a href="${PANEL_BASE}/bot/${botKey}/analytics" class="link">📈 Analytics</a>
     <a href="${PANEL_BASE}/bot/${botKey}/rate-limits" class="link">🚦 Rate Limits</a>
     <a href="${PANEL_BASE}/bot/${botKey}/consecutive-limits" class="link">🚫 Consecutive</a>
     <a href="${PANEL_BASE}/bot/${botKey}/messages" class="link">📨 Messages</a>
@@ -33,7 +34,28 @@ function generatePageHeader(title, botName = '', botKey = '', PANEL_BASE = '/pan
   `;
 }
 
+function generate({ head = '', body = '', botKey = '', botName = '', title = 'JepsenCloud', currentPage = '' }) {
+  const PANEL_BASE = '/panel';
+  
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>${title}</title>
+  <link rel="stylesheet" href="/shared.css">
+  ${head}
+</head>
+<body>
+  ${generatePageHeader(title, botName, botKey, PANEL_BASE)}
+  ${body}
+  <script src="/public/snow.js"></script>
+</body>
+</html>`;
+}
+
 module.exports = {
   SHARED_STYLES_LINK,
-  generatePageHeader
+  generatePageHeader,
+  generate
 };

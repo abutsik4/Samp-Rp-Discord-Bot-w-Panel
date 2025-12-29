@@ -31,6 +31,7 @@ const express = require("express");
 const { generateMessagesPage } = require("./web/messages-page");
 const { generateStatsPage } = require("./web/stats-page");
 const { generateAIEngagementPage } = require("./web/ai-engagement-page");
+const { generateAnalyticsPage } = require("./web/analytics-page");
 const { generateRateLimiterPage } = require("./web/rate-limiter-page");
 const { generateConsecutiveLimiterPage } = require("./web/consecutive-limiter-page");
 const { generateCommandsPage } = require("./web/commands-page");
@@ -38,6 +39,8 @@ const { generateAccuracyMonitorPage } = require("./web/accuracy-monitor-page");
 const { generateWhitelistPage } = require("./web/whitelist-page");
 const { generateAutoModPage } = require("./web/automod-page");
 const { generateHistoryPage } = require("./web/history-page");
+const { generateSampServersPage } = require("./web/samp-servers-page");
+const { SAMPStatusTracker } = require("./features/samp-status");
 require("dotenv").config();
 
 // Panel security deps
@@ -224,9 +227,15 @@ async function initDb() {
     )
   `);
 
-  // Best-effort add channel_id to existing message_index
+  // Best-effort add channel_id and created_at to existing message_index
   try {
     await dbRun(`ALTER TABLE message_index ADD COLUMN channel_id TEXT`);
+  } catch (_) {
+    // ignore if column already exists
+  }
+
+  try {
+    await dbRun(`ALTER TABLE message_index ADD COLUMN created_at TEXT NOT NULL DEFAULT (datetime('now'))`);
   } catch (_) {
     // ignore if column already exists
   }
@@ -278,6 +287,43 @@ async function initDb() {
   await ensureAIEngagementTables(db);
   await ensureUserPreferencesTables(db);
   await ensureRateLimitTables(db);
+
+  // Daily/channel analytics for rich reporting
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS daily_channel_stats (
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      message_date TEXT NOT NULL,
+      count INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (guild_id, user_id, channel_id, message_date)
+    )
+  `);
+
+  await dbRun(`
+    CREATE INDEX IF NOT EXISTS idx_daily_stats_date
+    ON daily_channel_stats(guild_id, message_date)
+  `);
+
+  await dbRun(`
+    CREATE INDEX IF NOT EXISTS idx_daily_stats_channel
+    ON daily_channel_stats(guild_id, channel_id, message_date)
+  `);
+
+  await dbRun(`
+    CREATE INDEX IF NOT EXISTS idx_daily_stats_user
+    ON daily_channel_stats(guild_id, user_id, message_date DESC)
+  `);
+
+  // Incremental sync tracking
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS backfill_watermarks (
+      guild_id TEXT PRIMARY KEY,
+      last_message_id TEXT NOT NULL,
+      last_synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+      messages_synced INTEGER DEFAULT 0
+    )
+  `);
 
   // Panel messages table for new message/embed management
   await dbRun(`
@@ -390,6 +436,22 @@ async function initDb() {
   await dbRun(`
     CREATE INDEX IF NOT EXISTS idx_operation_history_guild 
     ON operation_history(guild_id, timestamp DESC)
+  `);
+
+  // SAMP server status tracker configuration
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS samp_trackers (
+      guild_id TEXT NOT NULL,
+      server_id TEXT NOT NULL,
+      server_name TEXT NOT NULL,
+      server_ip TEXT NOT NULL,
+      server_port INTEGER DEFAULT 7777,
+      channel_id TEXT NOT NULL,
+      emoji TEXT DEFAULT '🎮',
+      enabled INTEGER DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (guild_id, server_id)
+    )
   `);
 
   console.log("DB ready:", dbPath);
@@ -729,11 +791,66 @@ const commands = [
     .setName("userstats")
     .setDescription("Show message stats for another user.")
     .addUserOption((option) => option.setName("user").setDescription("User to view").setRequired(true)),
-  new SlashCommandBuilder().setName("top5").setDescription("Show top 5 users by message count in this server."),
-  new SlashCommandBuilder().setName("top10").setDescription("Show top 10 users by message count in this server."),
+  new SlashCommandBuilder()
+    .setName("top5")
+    .setDescription("Show top 5 users by message count in this server.")
+    .addChannelOption((option) =>
+      option
+        .setName("channel")
+        .setDescription("Filter by specific channel (optional)")
+        .setRequired(false)
+    )
+    .addStringOption((option) =>
+      option
+        .setName("date")
+        .setDescription("Filter by date (YYYY-MM-DD, optional)")
+        .setRequired(false)
+    )
+    .addStringOption((option) =>
+      option
+        .setName("period")
+        .setDescription("Time period (optional)")
+        .setRequired(false)
+        .addChoices(
+          { name: "Today", value: "today" },
+          { name: "This Week", value: "week" },
+          { name: "This Month", value: "month" },
+          { name: "All Time", value: "all" }
+        )
+    ),
+  new SlashCommandBuilder()
+    .setName("top10")
+    .setDescription("Show top 10 users by message count in this server.")
+    .addChannelOption((option) =>
+      option
+        .setName("channel")
+        .setDescription("Filter by specific channel (optional)")
+        .setRequired(false)
+    )
+    .addStringOption((option) =>
+      option
+        .setName("date")
+        .setDescription("Filter by date (YYYY-MM-DD, optional)")
+        .setRequired(false)
+    )
+    .addStringOption((option) =>
+      option
+        .setName("period")
+        .setDescription("Time period (optional)")
+        .setRequired(false)
+        .addChoices(
+          { name: "Today", value: "today" },
+          { name: "This Week", value: "week" },
+          { name: "This Month", value: "month" },
+          { name: "All Time", value: "all" }
+        )
+    ),
   new SlashCommandBuilder()
     .setName("backfill")
     .setDescription("Backfill message history for this server (owner only, may take a long time)."),
+  new SlashCommandBuilder()
+    .setName("sync-missing")
+    .setDescription("Sync messages missed during downtime (owner only, fast incremental sync)."),
   new SlashCommandBuilder()
     .setName("synccommands")
     .setDescription("Re-register slash commands for this server (owner only)."),
@@ -812,6 +929,31 @@ const commands = [
     .setName("history")
     .setDescription("View recent bulk operations (owner only)")
     .addIntegerOption((opt) => opt.setName("limit").setDescription("Number of operations to show (default: 10)")),
+
+  // SAMP Server Status
+  new SlashCommandBuilder()
+    .setName("sampstatus")
+    .setDescription("Manage SA-MP server status channels (owner only)")
+    .addSubcommand((sub) =>
+      sub
+        .setName("add")
+        .setDescription("Add a SA-MP server to track")
+        .addStringOption((opt) => opt.setName("server_id").setDescription("Server identifier (e.g., server1)").setRequired(true))
+        .addStringOption((opt) => opt.setName("server_name").setDescription("Display name (e.g., Samp-Rp #1)").setRequired(true))
+        .addStringOption((opt) => opt.setName("ip").setDescription("Server IP address").setRequired(true))
+        .addChannelOption((opt) => opt.setName("channel").setDescription("Voice channel for status").setRequired(true))
+        .addIntegerOption((opt) => opt.setName("port").setDescription("Server port (default: 7777)"))
+        .addStringOption((opt) => opt.setName("emoji").setDescription("Emoji (default: 🎮)"))
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("remove")
+        .setDescription("Remove a tracked server")
+        .addStringOption((opt) => opt.setName("server_id").setDescription("Server identifier").setRequired(true))
+    )
+    .addSubcommand((sub) => sub.setName("list").setDescription("List all tracked servers"))
+    .addSubcommand((sub) => sub.setName("stop").setDescription("Stop all trackers"))
+    .addSubcommand((sub) => sub.setName("start").setDescription("Start all trackers")),
 
   // Holidays
   ...getHolidayCommandBuilders(),
@@ -1136,6 +1278,35 @@ holidaysScheduler = startDailyHolidayPosts({
     const intervalMs = Math.max(5, STATUS_ROTATION_INTERVAL_MINUTES) * 60 * 1000;
     setInterval(() => void setRandomPresence(client), intervalMs);
   }
+
+  // Initialize SAMP status trackers
+  console.log("[SAMP] Initializing server status trackers...");
+  const sampTrackers = await dbAll("SELECT * FROM samp_trackers WHERE enabled = 1");
+  
+  // Initialize trackers map
+  if (!client.sampTrackers) client.sampTrackers = new Map();
+  
+  for (const config of sampTrackers) {
+    try {
+      const tracker = new SAMPStatusTracker(client, {
+        serverIp: config.server_ip,
+        serverPort: config.server_port,
+        channelId: config.channel_id,
+        serverName: config.server_name,
+        emoji: config.emoji,
+      });
+      
+      await tracker.start();
+      
+      // Store tracker instance using guild_id + server_id as key
+      const trackerKey = `${config.guild_id}:${config.server_id}`;
+      client.sampTrackers.set(trackerKey, tracker);
+      
+      console.log(`[SAMP] Started tracker: ${config.server_name} (${config.server_ip}:${config.server_port})`);
+    } catch (error) {
+      console.error(`[SAMP] Failed to start tracker ${config.server_id}:`, error);
+    }
+  }
 });
 
 // -------------------------
@@ -1363,7 +1534,7 @@ client.on("messageCreate", async (message) => {
       // Non-fatal error - continue with message counting
     });
     // Core stats tracking - ROBUST VERSION with transaction + retry
-    await incrementMessageCountRobust(db, guildId, userId, message.id, message.channelId);
+    await incrementMessageCountRobust(db, guildId, userId, message.id, message.channelId, message.createdAt.toISOString());
 
 
     // New features: streak, weekly, milestones
@@ -1597,12 +1768,68 @@ client.on("interactionCreate", async (interaction) => {
     await interaction.reply({ embeds: [embed] });
   } else if (commandName === "top5" || commandName === "top10") {
     const desiredLimit = commandName === "top5" ? 5 : 10;
+    const channel = interaction.options.getChannel("channel");
+    const date = interaction.options.getString("date");
+    const period = interaction.options.getString("period") || "all";
 
     await interaction.deferReply();
 
-    const rows = await getTopUsers(interaction.guild.id, desiredLimit);
-    const visible = [];
+    let rows;
+    let filterDesc = "";
 
+    // Determine query based on filters
+    if (channel || date || period !== "all") {
+      // Use daily_channel_stats for filtered queries
+      const whereClauses = ["guild_id = ?"];
+      const params = [interaction.guild.id];
+
+      if (channel) {
+        whereClauses.push("channel_id = ?");
+        params.push(channel.id);
+        filterDesc += ` in #${channel.name}`;
+      }
+
+      if (date) {
+        whereClauses.push("message_date = ?");
+        params.push(date);
+        filterDesc += ` on ${date}`;
+      } else if (period !== "all") {
+        const dateFilter = {
+          today: "0 days",
+          week: "-7 days",
+          month: "-1 month"
+        }[period];
+        whereClauses.push(`message_date >= date('now', '${dateFilter}')`);
+        filterDesc += ` (${period})`;
+      }
+
+      const whereString = whereClauses.join(" AND ");
+      const fetchLimit = desiredLimit + 20; // Overfetch to account for left users
+
+      rows = await dbAll(
+        `SELECT user_id, SUM(count) as message_count
+         FROM daily_channel_stats
+         WHERE ${whereString}
+         GROUP BY user_id
+         ORDER BY message_count DESC
+         LIMIT ?`,
+        [...params, fetchLimit]
+      );
+    } else {
+      // Use user_stats for global all-time leaderboard (faster)
+      const fetchLimit = desiredLimit + 20;
+      rows = await dbAll(
+        `SELECT user_id, message_count
+         FROM user_stats
+         WHERE guild_id = ?
+         ORDER BY message_count DESC
+         LIMIT ?`,
+        [interaction.guild.id, fetchLimit]
+      );
+    }
+
+    // Filter to only show users still in guild
+    const visible = [];
     for (const row of rows) {
       if (visible.length >= desiredLimit) break;
 
@@ -1633,13 +1860,69 @@ client.on("interactionCreate", async (interaction) => {
       "\n\n*Учтены все сообщения. Показаны только пользователи, которые всё ещё находятся на сервере.*" +
       "\n*Подсчёт может быть неточным: для проверки используй поиск по пользователю в топе.*";
 
+    const title = `${desiredLimit === 5 ? "Топ 5" : "Топ 10"} по количеству сообщений${filterDesc}`;
     const embed = new EmbedBuilder()
-      .setTitle(desiredLimit === 5 ? "Топ 5 по количеству сообщений" : "Топ 10 по количеству сообщений")
+      .setTitle(title)
       .setDescription(desc)
       .setColor(0x8b5cf6)
       .setTimestamp();
 
     await interaction.editReply({ embeds: [embed] });
+  } else if (commandName === "sync-missing") {
+    if (interaction.user.id !== OWNER_ID) {
+      return interaction.reply({ content: "Эта команда доступна только владельцу бота.", flags: 64 });
+    }
+
+    await interaction.deferReply({ flags: 64 });
+
+    const { syncMissingMessages, initializeWatermark } = require('./features/incremental-sync');
+    const { getWatermark } = require('./features/incremental-sync');
+
+    // Check if watermark exists
+    const watermark = await getWatermark(db, interaction.guild.id);
+    
+    if (!watermark) {
+      // Initialize watermark
+      await interaction.editReply({
+        content: "⏳ No watermark found. Initializing from current state...",
+      });
+
+      const initResult = await initializeWatermark(client, db, interaction.guild.id);
+      
+      if (!initResult.success) {
+        return interaction.editReply({
+          content: `❌ Failed to initialize watermark: ${initResult.error}\nPlease run a full backfill first.`,
+        });
+      }
+
+      return interaction.editReply({
+        content: `✅ Watermark initialized at message \`${initResult.messageId}\`\n\nYou can now use this command to sync missing messages after downtime.`,
+      });
+    }
+
+    // Sync missing messages
+    const result = await syncMissingMessages(client, db, interaction.guild.id);
+
+    if (!result.success) {
+      return interaction.editReply({
+        content: `❌ Sync failed: ${result.error}`,
+      });
+    }
+
+    if (result.synced === 0) {
+      return interaction.editReply({
+        content: `✅ No new messages to sync. Already up to date!\n\nWatermark: \`${result.watermark.before}\``,
+      });
+    }
+
+    const channelSummary = Object.entries(result.channelStats || {})
+      .map(([name, count]) => `• ${name}: +${count}`)
+      .slice(0, 10)
+      .join("\n");
+
+    await interaction.editReply({
+      content: `✅ Synced **${result.synced}** missing messages!\n\n**Watermark Updated:**\nBefore: \`${result.watermark.before}\`\nAfter: \`${result.watermark.after}\`\n\n**Top Channels:**\n${channelSummary || 'None'}`,
+    });
   } else if (commandName === "backfill") {
     if (interaction.user.id !== OWNER_ID) {
       return interaction.reply({ content: "Эта команда доступна только владельцу бота.", flags: 64 });
@@ -1845,6 +2128,186 @@ client.on("interactionCreate", async (interaction) => {
     }
     
     return interaction.reply({ embeds: [embed], flags: 64 });
+  } else if (commandName === "sampstatus") {
+    if (interaction.user.id !== interaction.guild.ownerId) {
+      return interaction.reply({ content: "❌ Только владелец сервера может управлять SAMP трекером.", flags: 64 });
+    }
+
+    const subcommand = interaction.options.getSubcommand();
+
+    if (subcommand === "add") {
+      await interaction.deferReply({ flags: 64 });
+
+      const serverId = interaction.options.getString("server_id");
+      const serverName = interaction.options.getString("server_name");
+      const serverIp = interaction.options.getString("ip");
+      const serverPort = interaction.options.getInteger("port") || 7777;
+      const channel = interaction.options.getChannel("channel");
+      const emoji = interaction.options.getString("emoji") || "🎮";
+
+      // Check if channel is voice channel
+      if (channel.type !== 2) { // 2 = GUILD_VOICE
+        return interaction.editReply("❌ Канал должен быть голосовым каналом!");
+      }
+
+      // Check if server_id already exists
+      const existing = await dbGet(
+        "SELECT * FROM samp_trackers WHERE guild_id = ? AND server_id = ?",
+        [interaction.guild.id, serverId]
+      );
+
+      if (existing) {
+        return interaction.editReply(`❌ Сервер с ID \`${serverId}\` уже существует. Используйте другой ID.`);
+      }
+
+      // Save to database
+      await dbRun(
+        `INSERT INTO samp_trackers (guild_id, server_id, server_name, server_ip, server_port, channel_id, emoji, enabled) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
+        [interaction.guild.id, serverId, serverName, serverIp, serverPort, channel.id, emoji]
+      );
+
+      // Create and start tracker
+      const tracker = new SAMPStatusTracker(client, {
+        serverIp,
+        serverPort,
+        channelId: channel.id,
+        serverName,
+        emoji,
+      });
+
+      await tracker.start();
+
+      // Store tracker instance
+      if (!client.sampTrackers) client.sampTrackers = new Map();
+      const trackerKey = `${interaction.guild.id}:${serverId}`;
+      client.sampTrackers.set(trackerKey, tracker);
+
+      return interaction.editReply(
+        `✅ SAMP трекер добавлен!\n🎮 **${serverName}**\n📍 IP: \`${serverIp}:${serverPort}\`\n📺 Канал: ${channel}`
+      );
+    } else if (subcommand === "remove") {
+      await interaction.deferReply({ flags: 64 });
+
+      const serverId = interaction.options.getString("server_id");
+
+      // Stop tracker if running
+      const trackerKey = `${interaction.guild.id}:${serverId}`;
+      if (client.sampTrackers && client.sampTrackers.has(trackerKey)) {
+        const tracker = client.sampTrackers.get(trackerKey);
+        tracker.stop();
+        client.sampTrackers.delete(trackerKey);
+      }
+
+      // Remove from database
+      const result = await dbRun(
+        "DELETE FROM samp_trackers WHERE guild_id = ? AND server_id = ?",
+        [interaction.guild.id, serverId]
+      );
+
+      if (result.changes === 0) {
+        return interaction.editReply(`❌ Сервер \`${serverId}\` не найден.`);
+      }
+
+      return interaction.editReply(`✅ Трекер для сервера \`${serverId}\` удалён.`);
+    } else if (subcommand === "list") {
+      const servers = await dbAll(
+        "SELECT * FROM samp_trackers WHERE guild_id = ? ORDER BY server_id",
+        [interaction.guild.id]
+      );
+
+      if (!servers || servers.length === 0) {
+        return interaction.reply({
+          content: "📋 Нет добавленных серверов. Используйте `/sampstatus add` для добавления.",
+          flags: 64,
+        });
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle("🎮 SAMP Серверы")
+        .setColor(0x00ff00)
+        .setTimestamp();
+
+      for (const server of servers) {
+        const status = server.enabled ? "🟢 Активен" : "🔴 Остановлен";
+        const trackerKey = `${server.guild_id}:${server.server_id}`;
+        const isRunning = client.sampTrackers && client.sampTrackers.has(trackerKey);
+
+        embed.addFields({
+          name: `${server.emoji} ${server.server_name}`,
+          value: `**ID:** \`${server.server_id}\`\n**IP:** \`${server.server_ip}:${server.server_port}\`\n**Канал:** <#${server.channel_id}>\n**Статус:** ${status} ${isRunning ? "✓" : "✗"}`,
+          inline: false,
+        });
+      }
+
+      return interaction.reply({ embeds: [embed], flags: 64 });
+    } else if (subcommand === "stop") {
+      await interaction.deferReply({ flags: 64 });
+
+      // Stop all trackers for this guild
+      let stopped = 0;
+      if (client.sampTrackers) {
+        for (const [key, tracker] of client.sampTrackers.entries()) {
+          if (key.startsWith(`${interaction.guild.id}:`)) {
+            tracker.stop();
+            client.sampTrackers.delete(key);
+            stopped++;
+          }
+        }
+      }
+
+      // Disable in database
+      await dbRun("UPDATE samp_trackers SET enabled = 0 WHERE guild_id = ?", [interaction.guild.id]);
+
+      return interaction.editReply(`✅ Остановлено трекеров: ${stopped}`);
+    } else if (subcommand === "start") {
+      await interaction.deferReply({ flags: 64 });
+
+      // Start all trackers for this guild
+      const servers = await dbAll("SELECT * FROM samp_trackers WHERE guild_id = ?", [interaction.guild.id]);
+
+      if (!servers || servers.length === 0) {
+        return interaction.editReply("❌ Нет серверов для запуска. Используйте `/sampstatus add`.");
+      }
+
+      let started = 0;
+      if (!client.sampTrackers) client.sampTrackers = new Map();
+
+      for (const server of servers) {
+        try {
+          const trackerKey = `${server.guild_id}:${server.server_id}`;
+
+          // Stop existing tracker if running
+          if (client.sampTrackers.has(trackerKey)) {
+            client.sampTrackers.get(trackerKey).stop();
+          }
+
+          // Create and start new tracker
+          const tracker = new SAMPStatusTracker(client, {
+            serverIp: server.server_ip,
+            serverPort: server.server_port,
+            channelId: server.channel_id,
+            serverName: server.server_name,
+            emoji: server.emoji,
+          });
+
+          await tracker.start();
+          client.sampTrackers.set(trackerKey, tracker);
+
+          // Enable in database
+          await dbRun(
+            "UPDATE samp_trackers SET enabled = 1 WHERE guild_id = ? AND server_id = ?",
+            [server.guild_id, server.server_id]
+          );
+
+          started++;
+        } catch (error) {
+          console.error(`[SAMP] Failed to start tracker ${server.server_id}:`, error);
+        }
+      }
+
+      return interaction.editReply(`✅ Запущено трекеров: ${started}/${servers.length}`);
+    }
   } else if (commandName === "demoembed") {
     const initialEmbed = new EmbedBuilder()
       .setTitle("Пример Embed от Samp-Rp")
@@ -2330,7 +2793,7 @@ const apiLimiter = rateLimit({ windowMs: 10_000, max: 40 });
 app.get("/health", (req, res) => res.json({ ok: true }));
 
 // Multi-bot registry (future-proof). Today: one bot.
-const bots = [{ key: "samprp", name: "Discord Radio Samp-Rp", kind: "discord", client, guildId: "537187880842559499" }];
+const bots = [{ key: "samprp", name: "JepsenCloud Bot", kind: "discord", client, guild_id: "537187880842559499" }];
 
 // -------------------------
 // PANEL ROUTES
@@ -2968,6 +3431,164 @@ app.get(`${PANEL_BASE}/api/:botKey/stats/live`, requireAuth, apiLimiter, async (
   }
 });
 
+// ANALYTICS API ENDPOINTS (for daily/channel stats)
+
+// Get channels list for filter
+app.get(`${PANEL_BASE}/api/:botKey/analytics/channels`, requireAuth, apiLimiter, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  try {
+    const guildId = req.query.guildId || null;
+    
+    let query = 'SELECT DISTINCT channel_id, COUNT(*) as message_count FROM daily_channel_stats';
+    let params = [];
+    
+    if (guildId) {
+      query += ' WHERE guild_id = ?';
+      params.push(guildId);
+    }
+    
+    query += ' GROUP BY channel_id ORDER BY message_count DESC';
+    
+    const channels = await dbAll(query, params);
+    
+    return res.json({
+      ok: true,
+      channels: channels.map(ch => ({
+        channel_id: ch.channel_id,
+        message_count: ch.message_count,
+        channel_name: null // Will be filled by frontend with Discord data
+      }))
+    });
+  } catch (e) {
+    console.error('GET /analytics/channels error:', e);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// Get analytics summary with filters
+app.get(`${PANEL_BASE}/api/:botKey/analytics/summary`, requireAuth, apiLimiter, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  try {
+    const guildId = req.query.guildId || null;
+    const startDate = req.query.start_date || null;
+    const endDate = req.query.end_date || null;
+    const channelId = req.query.channel_id || null;
+
+    // Build WHERE clause
+    const whereClauses = [];
+    const params = [];
+
+    if (guildId) {
+      whereClauses.push('guild_id = ?');
+      params.push(guildId);
+    }
+    if (startDate) {
+      whereClauses.push('message_date >= ?');
+      params.push(startDate);
+    }
+    if (endDate) {
+      whereClauses.push('message_date <= ?');
+      params.push(endDate);
+    }
+    if (channelId) {
+      whereClauses.push('channel_id = ?');
+      params.push(channelId);
+    }
+
+    const whereClause = whereClauses.length > 0 ? 'WHERE ' + whereClauses.join(' AND ') : '';
+
+    // Get summary stats
+    const summaryQuery = `
+      SELECT 
+        SUM(count) as total_messages,
+        COUNT(DISTINCT user_id) as active_users,
+        COUNT(DISTINCT channel_id) as active_channels,
+        COUNT(DISTINCT message_date) as days_count
+      FROM daily_channel_stats
+      ${whereClause}
+    `;
+    const summary = await dbGet(summaryQuery, params);
+
+    // Get top users
+    const topUsersQuery = `
+      SELECT 
+        user_id,
+        SUM(count) as message_count
+      FROM daily_channel_stats
+      ${whereClause}
+      GROUP BY user_id
+      ORDER BY message_count DESC
+      LIMIT 20
+    `;
+    const topUsers = await dbAll(topUsersQuery, params);
+
+    // Get top channels
+    const topChannelsQuery = `
+      SELECT 
+        channel_id,
+        SUM(count) as message_count
+      FROM daily_channel_stats
+      ${whereClause}
+      GROUP BY channel_id
+      ORDER BY message_count DESC
+      LIMIT 20
+    `;
+    const topChannels = await dbAll(topChannelsQuery, params);
+
+    // Get daily activity
+    const dailyQuery = `
+      SELECT 
+        message_date,
+        SUM(count) as message_count
+      FROM daily_channel_stats
+      ${whereClause}
+      GROUP BY message_date
+      ORDER BY message_date ASC
+    `;
+    const dailyActivity = await dbAll(dailyQuery, params);
+
+    const totalMessages = summary?.total_messages || 0;
+    const avgPerDay = summary?.days_count > 0 ? totalMessages / summary.days_count : 0;
+
+    // Enrich top users with usernames
+    const enrichedUsers = await Promise.all(
+      topUsers.map(async (user) => {
+        const cached = await dbGet(
+          'SELECT username FROM user_cache WHERE user_id = ? LIMIT 1',
+          [user.user_id]
+        );
+        return {
+          ...user,
+          username: cached?.username || user.user_id,
+          percentage: totalMessages > 0 ? (user.message_count / totalMessages) * 100 : 0
+        };
+      })
+    );
+
+    return res.json({
+      ok: true,
+      totalMessages,
+      activeUsers: summary?.active_users || 0,
+      activeChannels: summary?.active_channels || 0,
+      avgPerDay,
+      topUsers: enrichedUsers,
+      topChannels: topChannels.map(ch => ({
+        ...ch,
+        channel_name: null,
+        percentage: totalMessages > 0 ? (ch.message_count / totalMessages) * 100 : 0
+      })),
+      dailyActivity: dailyActivity || []
+    });
+  } catch (e) {
+    console.error('GET /analytics/summary error:', e);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 // ============================================================================
 // VERIFICATION API ENDPOINTS
 // ============================================================================
@@ -3536,94 +4157,92 @@ app.get(`${PANEL_BASE}/bot/:botKey`, requireAuth, async (req, res) => {
     </div>
 
     <div class="feature-grid">
-      <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/holidays" style="text-decoration:none;color:inherit">
-        <div class="feature-card">
-          <div class="feature-title">🎉 Holidays</div>
-          <div class="feature-description">Manage manual holidays by date; merged with Calend.ru in /holiday and daily posts.</div>
+      <div style="text-decoration:none;color:inherit">
+        <div class="feature-card" style="cursor: default;">
+          <div class="feature-title">📝 Content & Engagement</div>
+          <div class="feature-description" style="margin-bottom: 16px;">Manage messages, embeds, holidays, and AI chat interactions.</div>
+          <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/messages" class="btn btn-primary" style="flex: 1; min-width: 140px; text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(167, 139, 250, 0.1); border: 1px solid rgba(167, 139, 250, 0.3); color: #a78bfa; font-weight: 600; transition: all 0.2s;">
+              📨 Messages
+            </a>
+            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/holidays" class="btn btn-primary" style="flex: 1; min-width: 140px; text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(167, 139, 250, 0.1); border: 1px solid rgba(167, 139, 250, 0.3); color: #a78bfa; font-weight: 600; transition: all 0.2s;">
+              🎉 Holidays
+            </a>
+            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/ai-engagement" class="btn btn-primary" style="flex: 1; min-width: 140px; text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(167, 139, 250, 0.1); border: 1px solid rgba(167, 139, 250, 0.3); color: #a78bfa; font-weight: 600; transition: all 0.2s;">
+              🤖 AI Chat
+            </a>
+          </div>
         </div>
-      </a>
+      </div>
 
-      <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/ai-engagement" style="text-decoration:none;color:inherit">
-        <div class="feature-card">
-          <div class="feature-title">🤖 AI Engagement</div>
-          <div class="feature-description">Configure AI chat engagement settings and view statistics.</div>
+      <div style="text-decoration:none;color:inherit">
+        <div class="feature-card" style="cursor: default;">
+          <div class="feature-title">🛡️ Moderation & Controls</div>
+          <div class="feature-description" style="margin-bottom: 16px;">Manage chat rules, limits, filters, and channel configurations.</div>
+          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;">
+            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/rate-limits" class="btn btn-primary" style="text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(251, 113, 133, 0.1); border: 1px solid rgba(251, 113, 133, 0.3); color: #fb7185; font-weight: 600; transition: all 0.2s;">
+              🚦 Rate Limits
+            </a>
+            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/consecutive-limits" class="btn btn-primary" style="text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(251, 113, 133, 0.1); border: 1px solid rgba(251, 113, 133, 0.3); color: #fb7185; font-weight: 600; transition: all 0.2s;">
+              🚫 Consecutive
+            </a>
+            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/automod" class="btn btn-primary" style="text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(251, 113, 133, 0.1); border: 1px solid rgba(251, 113, 133, 0.3); color: #fb7185; font-weight: 600; transition: all 0.2s;">
+              🛡️ AutoMod
+            </a>
+            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/whitelist" class="btn btn-primary" style="text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(251, 113, 133, 0.1); border: 1px solid rgba(251, 113, 133, 0.3); color: #fb7185; font-weight: 600; transition: all 0.2s;">
+              📋 Whitelist
+            </a>
+          </div>
         </div>
-      </a>
-
-      <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/rate-limits" style="text-decoration:none;color:inherit">
-        <div class="feature-card">
-          <div class="feature-title">🚦 Rate Limiting</div>
-          <div class="feature-description">Configure message rate limits per channel with role-based controls.</div>
-        </div>
-      </a>
-
-      <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/consecutive-limits" style="text-decoration:none;color:inherit">
-        <div class="feature-card">
-          <div class="feature-title">🚫 Consecutive Limits</div>
-          <div class="feature-description">Configure consecutive message limits with role-based controls and strikes.</div>
-        </div>
-      </a>
+      </div>
 
       <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/commands" style="text-decoration:none;color:inherit">
         <div class="feature-card">
           <div class="feature-title">📚 Bot Commands</div>
-          <div class="feature-description">Complete list of all available bot commands and featuresw.</div>
+          <div class="feature-description">Complete list of all available bot commands and features.</div>
         </div>
       </a>
 
-      <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/messages" style="text-decoration:none;color:inherit">
-        <div class="feature-card">
-          <div class="feature-title">📨 Messages & Embeds</div>
-          <div class="feature-description">Create, schedule, and manage Discord messages and embeds.</div>
+      <div style="text-decoration:none;color:inherit">
+        <div class="feature-card" style="cursor: default;">
+          <div class="feature-title">📊 Statistics & Analytics</div>
+          <div class="feature-description" style="margin-bottom: 16px;">Comprehensive message tracking, leaderboards, trends, and admin tools.</div>
+          <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/stats" class="btn btn-primary" style="flex: 1; min-width: 140px; text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(88, 101, 242, 0.1); border: 1px solid rgba(88, 101, 242, 0.3); color: #5865f2; font-weight: 600; transition: all 0.2s;">
+              📊 Leaderboard
+            </a>
+            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/analytics" class="btn btn-primary" style="flex: 1; min-width: 140px; text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(52, 211, 153, 0.1); border: 1px solid rgba(52, 211, 153, 0.3); color: #34d399; font-weight: 600; transition: all 0.2s;">
+              📈 Trends
+            </a>
+            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/stats?adjustMode=true${bot.guildId ? '&guildId=' + bot.guildId : ''}" class="btn btn-primary" style="flex: 1; min-width: 140px; text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(251, 146, 60, 0.1); border: 1px solid rgba(251, 146, 60, 0.3); color: #fb923c; font-weight: 600; transition: all 0.2s;">
+              ⚙️ Adjust
+            </a>
+          </div>
         </div>
-      </a>
+      </div>
 
-      <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/stats" style="text-decoration:none;color:inherit">
-        <div class="feature-card">
-          <div class="feature-title">📊 Statistics</div>
-          <div class="feature-description">Message leaderboard and user statistics with usernames.</div>
+      <div style="text-decoration:none;color:inherit">
+        <div class="feature-card" style="cursor: default;">
+          <div class="feature-title">🔍 Monitoring & Verification</div>
+          <div class="feature-description" style="margin-bottom: 16px;">Track accuracy, verify data, and review operation history.</div>
+          <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/accuracy" class="btn btn-primary" style="flex: 1; min-width: 140px; text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(34, 211, 238, 0.1); border: 1px solid rgba(34, 211, 238, 0.3); color: #22d3ee; font-weight: 600; transition: all 0.2s;">
+              🔍 Accuracy
+            </a>
+            <a href="${PANEL_BASE}/verification-dashboard?bot=${encodeURIComponent(bot.key)}" class="btn btn-primary" style="flex: 1; min-width: 140px; text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(34, 211, 238, 0.1); border: 1px solid rgba(34, 211, 238, 0.3); color: #22d3ee; font-weight: 600; transition: all 0.2s;">
+              ✅ Verify
+            </a>
+            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/history" class="btn btn-primary" style="flex: 1; min-width: 140px; text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(34, 211, 238, 0.1); border: 1px solid rgba(34, 211, 238, 0.3); color: #22d3ee; font-weight: 600; transition: all 0.2s;">
+              📜 History
+            </a>
+          </div>
         </div>
-      </a>
+      </div>
 
-      <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/stats?adjustMode=true${bot.guildId ? '&guildId=' + bot.guildId : ''}" style="text-decoration:none;color:inherit">
+      <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/samp-servers" style="text-decoration:none;color:inherit">
         <div class="feature-card">
-          <div class="feature-title">⚙️ Adjust Counts</div>
-          <div class="feature-description">Admin tool: manually adjust user message counts (+N, -N, or =N).</div>
-        </div>
-      </a>
-
-      <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/accuracy" style="text-decoration:none;color:inherit">
-        <div class="feature-card">
-          <div class="feature-title">🔍 Accuracy Monitor</div>
-          <div class="feature-description">Real-time message counting accuracy, event logs, and system health monitoring.</div>
-        </div>
-      </a>
-
-      <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/whitelist" style="text-decoration:none;color:inherit">
-        <div class="feature-card">
-          <div class="feature-title">📋 Channel Whitelist</div>
-          <div class="feature-description">Manage which channels count messages. Empty whitelist = all channels count.</div>
-        </div>
-      </a>
-
-      <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/automod" style="text-decoration:none;color:inherit">
-        <div class="feature-card">
-          <div class="feature-title">🛡️ AutoMod</div>
-          <div class="feature-description">Manage banned words with automatic message deletion and notifications.</div>
-        </div>
-      </a>
-
-      <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/history" style="text-decoration:none;color:inherit">
-        <div class="feature-card">
-          <div class="feature-title">📜 Operation History</div>
-          <div class="feature-description">View and undo bulk operations. Prevents accidental data loss.</div>
-        </div>
-      </a>
-
-      <a href="${PANEL_BASE}/verification-dashboard?bot=${encodeURIComponent(bot.key)}" style="text-decoration:none;color:inherit">
-        <div class="feature-card">
-          <div class="feature-title">✅ Verification Dashboard</div>
-          <div class="feature-description">Check user message counts, verify specific messages, and review verification results.</div>
+          <div class="feature-title">🎮 SAMP Server Status</div>
+          <div class="feature-description">Monitor SA-MP servers with live player counts in voice channel names.</div>
         </div>
       </a>
     </div>
@@ -3858,6 +4477,14 @@ app.get(`${PANEL_BASE}/bot/:botKey/stats`, requireAuth, async (req, res) => {
   const bot = bots.find((b) => b.key === req.params.botKey);
   if (!bot) return res.status(404).send("Bot not found");
   res.send(generateStatsPage(bot, PANEL_BASE));
+});
+
+// Analytics page route (daily/channel stats)
+app.get(`${PANEL_BASE}/bot/:botKey/analytics`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).send("Bot not found");
+  const botWithPanel = { ...bot, panelBase: PANEL_BASE };
+  res.send(generateAnalyticsPage(botWithPanel));
 });
 
 // AI Engagement page
@@ -4187,6 +4814,13 @@ app.get(`${PANEL_BASE}/bot/:botKey/history`, requireAuth, async (req, res) => {
   const bot = bots.find((b) => b.key === req.params.botKey);
   if (!bot) return res.status(404).send("Bot not found");
   res.send(generateHistoryPage(bot, PANEL_BASE));
+});
+
+// SAMP Servers page
+app.get(`${PANEL_BASE}/bot/:botKey/samp-servers`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).send("Bot not found");
+  res.send(generateSampServersPage(bot, PANEL_BASE));
 });
 
 // Rate Limiter API - Get configuration
@@ -4626,14 +5260,252 @@ app.get(`${PANEL_BASE}/api/bot/:botKey/channels`, requireAuth, async (req, res) 
     if (!guild) return res.status(404).json({ error: "Guild not found" });
     
     const channels = guild.channels.cache
-      .filter(ch => ch.isTextBased())
-      .map(ch => ({ id: ch.id, name: ch.name }))
+      .map(ch => ({ 
+        id: ch.id, 
+        name: ch.name, 
+        type: ch.type // 0 = text, 2 = voice, 4 = category, etc.
+      }))
       .sort((a, b) => a.name.localeCompare(b.name));
     
-    return res.json(channels);
+    return res.json({ channels });
   } catch (e) {
     console.error("Get channels error:", e);
     return res.status(500).json({ error: e?.message || "Failed to get channels" });
+  }
+});
+
+// =========================================
+// SAMP SERVERS API
+// =========================================
+
+// Get SAMP servers list
+app.get(`${PANEL_BASE}/api/bot/:botKey/samp-servers`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  try {
+    const servers = await dbAll(
+      "SELECT * FROM samp_trackers WHERE guild_id = ? ORDER BY server_id",
+      [bot.guild_id]
+    );
+
+    return res.json({ servers });
+  } catch (e) {
+    console.error("Get SAMP servers error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to get servers" });
+  }
+});
+
+// Add SAMP server
+app.post(`${PANEL_BASE}/api/bot/:botKey/samp-servers`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  const { server_id, server_name, server_ip, server_port, channel_id, emoji } = req.body;
+
+  if (!server_id || !server_name || !server_ip || !channel_id) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  try {
+    // Check if server_id already exists
+    const existing = await dbGet(
+      "SELECT * FROM samp_trackers WHERE guild_id = ? AND server_id = ?",
+      [bot.guild_id, server_id]
+    );
+
+    if (existing) {
+      return res.status(400).json({ error: "Server ID already exists" });
+    }
+
+    // Insert new server
+    await dbRun(
+      `INSERT INTO samp_trackers (guild_id, server_id, server_name, server_ip, server_port, channel_id, emoji, enabled) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
+      [bot.guild_id, server_id, server_name, server_ip, server_port || 7777, channel_id, emoji || "🎮"]
+    );
+
+    // Start tracker
+    const tracker = new SAMPStatusTracker(client, {
+      serverIp: server_ip,
+      serverPort: server_port || 7777,
+      channelId: channel_id,
+      serverName: server_name,
+      emoji: emoji || "🎮",
+    });
+
+    await tracker.start();
+
+    if (!client.sampTrackers) client.sampTrackers = new Map();
+    const trackerKey = `${bot.guild_id}:${server_id}`;
+    client.sampTrackers.set(trackerKey, tracker);
+
+    return res.json({ ok: true, message: "Server added successfully" });
+  } catch (e) {
+    console.error("Add SAMP server error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to add server" });
+  }
+});
+
+// Update SAMP server
+app.put(`${PANEL_BASE}/api/bot/:botKey/samp-servers/:serverId`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  const { serverId } = req.params;
+  const { server_name, server_ip, server_port, channel_id, emoji } = req.body;
+
+  if (!server_name || !server_ip || !channel_id) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  try {
+    // Update in database
+    await dbRun(
+      "UPDATE samp_trackers SET server_name = ?, server_ip = ?, server_port = ?, channel_id = ?, emoji = ? WHERE guild_id = ? AND server_id = ?",
+      [server_name, server_ip, server_port || 7777, channel_id, emoji || '🎮', bot.guild_id, serverId]
+    );
+
+    // Restart tracker if it was running
+    const trackerKey = `${bot.guild_id}:${serverId}`;
+    if (client.sampTrackers && client.sampTrackers.has(trackerKey)) {
+      const oldTracker = client.sampTrackers.get(trackerKey);
+      const wasEnabled = oldTracker.enabled;
+      oldTracker.stop();
+      client.sampTrackers.delete(trackerKey);
+
+      if (wasEnabled) {
+        const tracker = new SAMPStatusTracker(client, {
+          guildId: bot.guild_id,
+          serverId: serverId,
+          serverName: server_name,
+          serverIp: server_ip,
+          serverPort: server_port || 7777,
+          channelId: channel_id,
+          emoji: emoji || '🎮'
+        });
+        tracker.start();
+        client.sampTrackers.set(trackerKey, tracker);
+      }
+    }
+
+    return res.json({ ok: true, message: "Server updated successfully" });
+  } catch (e) {
+    console.error("Update SAMP server error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to update server" });
+  }
+});
+
+// Remove SAMP server
+app.delete(`${PANEL_BASE}/api/bot/:botKey/samp-servers/:serverId`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  const { serverId } = req.params;
+
+  try {
+    // Stop tracker if running
+    const trackerKey = `${bot.guild_id}:${serverId}`;
+    if (client.sampTrackers && client.sampTrackers.has(trackerKey)) {
+      const tracker = client.sampTrackers.get(trackerKey);
+      tracker.stop();
+      client.sampTrackers.delete(trackerKey);
+    }
+
+    // Remove from database
+    const result = await dbRun(
+      "DELETE FROM samp_trackers WHERE guild_id = ? AND server_id = ?",
+      [bot.guild_id, serverId]
+    );
+
+    if (result.changes === 0) {
+      return res.status(404).json({ error: "Server not found" });
+    }
+
+    return res.json({ ok: true, message: "Server removed successfully" });
+  } catch (e) {
+    console.error("Remove SAMP server error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to remove server" });
+  }
+});
+
+// Start SAMP server tracker
+app.post(`${PANEL_BASE}/api/bot/:botKey/samp-servers/:serverId/start`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  const { serverId } = req.params;
+
+  try {
+    // Get server config
+    const server = await dbGet(
+      "SELECT * FROM samp_trackers WHERE guild_id = ? AND server_id = ?",
+      [bot.guild_id, serverId]
+    );
+
+    if (!server) {
+      return res.status(404).json({ error: "Server not found" });
+    }
+
+    // Stop existing tracker if running
+    const trackerKey = `${bot.guild_id}:${serverId}`;
+    if (client.sampTrackers && client.sampTrackers.has(trackerKey)) {
+      client.sampTrackers.get(trackerKey).stop();
+    }
+
+    // Create and start new tracker
+    const tracker = new SAMPStatusTracker(client, {
+      serverIp: server.server_ip,
+      serverPort: server.server_port,
+      channelId: server.channel_id,
+      serverName: server.server_name,
+      emoji: server.emoji,
+    });
+
+    await tracker.start();
+
+    if (!client.sampTrackers) client.sampTrackers = new Map();
+    client.sampTrackers.set(trackerKey, tracker);
+
+    // Update database
+    await dbRun(
+      "UPDATE samp_trackers SET enabled = 1 WHERE guild_id = ? AND server_id = ?",
+      [bot.guild_id, serverId]
+    );
+
+    return res.json({ ok: true, message: "Server started successfully" });
+  } catch (e) {
+    console.error("Start SAMP server error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to start server" });
+  }
+});
+
+// Stop SAMP server tracker
+app.post(`${PANEL_BASE}/api/bot/:botKey/samp-servers/:serverId/stop`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  const { serverId } = req.params;
+
+  try {
+    // Stop tracker
+    const trackerKey = `${bot.guild_id}:${serverId}`;
+    if (client.sampTrackers && client.sampTrackers.has(trackerKey)) {
+      const tracker = client.sampTrackers.get(trackerKey);
+      tracker.stop();
+      client.sampTrackers.delete(trackerKey);
+    }
+
+    // Update database
+    await dbRun(
+      "UPDATE samp_trackers SET enabled = 0 WHERE guild_id = ? AND server_id = ?",
+      [bot.guild_id, serverId]
+    );
+
+    return res.json({ ok: true, message: "Server stopped successfully" });
+  } catch (e) {
+    console.error("Stop SAMP server error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to stop server" });
   }
 });
 

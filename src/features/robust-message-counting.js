@@ -8,9 +8,11 @@
  * - Error queue for failed operations
  * - Event logging for audit trail
  * - WAL mode provides atomicity without manual transactions
+ * - Optional Redis leaderboard cache for fast queries
  */
 
 const { dbRun, dbGet, dbAll } = require("../utils/db-helpers");
+const { updateLeaderboard } = require("./leaderboard-cache");
 
 // Retry configuration
 const RETRY_ATTEMPTS = 3;
@@ -70,14 +72,17 @@ async function saveToErrorQueue(db, operation, guildId, userId, messageId, error
  * Robust increment with retry logic
  * WAL mode provides atomicity - no manual transactions needed
  */
-async function incrementMessageCountRobust(db, guildId, userId, messageId, channelId, attempt = 1) {
+async function incrementMessageCountRobust(db, guildId, userId, messageId, channelId, messageTimestamp, attempt = 1) {
   try {
+    // Extract date for daily stats (YYYY-MM-DD format)
+    const messageDate = messageTimestamp ? new Date(messageTimestamp).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+
     // 1. Add to message index first to gate duplicates
     const idxResult = await dbRun(
       db,
-      `INSERT OR IGNORE INTO message_index (guild_id, message_id, user_id, channel_id)
-       VALUES (?, ?, ?, ?)`,
-      [guildId, messageId, userId, channelId]
+      `INSERT OR IGNORE INTO message_index (guild_id, message_id, user_id, channel_id, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [guildId, messageId, userId, channelId, messageTimestamp || new Date().toISOString()]
     );
 
     // If index insert was ignored, this message was already processed
@@ -101,7 +106,17 @@ async function incrementMessageCountRobust(db, guildId, userId, messageId, chann
       [guildId, userId]
     );
 
-    // 3. Get new count
+    // 3. Increment daily/channel stats
+    await dbRun(
+      db,
+      `INSERT INTO daily_channel_stats (guild_id, user_id, channel_id, message_date, count)
+       VALUES (?, ?, ?, ?, 1)
+       ON CONFLICT(guild_id, user_id, channel_id, message_date)
+       DO UPDATE SET count = count + 1`,
+      [guildId, userId, channelId, messageDate]
+    );
+
+    // 4. Get new count
     const newCount = await dbGet(
       db,
       `SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`,
@@ -112,6 +127,12 @@ async function incrementMessageCountRobust(db, guildId, userId, messageId, chann
     await logEvent(db, "increment", guildId, userId, messageId, {
       newCount: newCount?.message_count || 0,
       attempt,
+      dailyStats: true,
+    });
+
+    // Update leaderboard cache (non-blocking, optional)
+    updateLeaderboard(guildId, userId, 1).catch(err => {
+      // Silently fail - cache is optional
     });
 
     return true;
@@ -129,7 +150,7 @@ async function incrementMessageCountRobust(db, guildId, userId, messageId, chann
         reason: err.message,
       });
 
-      return incrementMessageCountRobust(db, guildId, userId, messageId, attempt + 1);
+      return incrementMessageCountRobust(db, guildId, userId, messageId, channelId, messageTimestamp, attempt + 1);
     }
 
     // All retries failed - save to error queue
@@ -149,7 +170,14 @@ async function incrementMessageCountRobust(db, guildId, userId, messageId, chann
  */
 async function decrementMessageCountRobust(db, guildId, userId, messageId, attempt = 1) {
   try {
-    // 1. Remove from message index first to gate duplicates
+    // 1. First, look up the message details from index (need channel_id and created_at for daily stats)
+    const indexedMessage = await dbGet(
+      db,
+      `SELECT user_id, channel_id, created_at FROM message_index WHERE guild_id = ? AND message_id = ?`,
+      [guildId, messageId]
+    );
+
+    // 2. Remove from message index to gate duplicates
     const delResult = await dbRun(
       db,
       `DELETE FROM message_index WHERE guild_id = ? AND message_id = ?`,
@@ -167,7 +195,7 @@ async function decrementMessageCountRobust(db, guildId, userId, messageId, attem
       return true;
     }
 
-    // 2. Decrement count in user_stats (clamp at 0)
+    // 3. Decrement count in user_stats (clamp at 0)
     await dbRun(
       db,
       `UPDATE user_stats
@@ -179,7 +207,22 @@ async function decrementMessageCountRobust(db, guildId, userId, messageId, attem
       [guildId, userId]
     );
 
-    // 3. Get new count
+    // 4. Decrement daily stats if we have the indexed message details
+    if (indexedMessage && indexedMessage.channel_id && indexedMessage.created_at) {
+      const messageDate = new Date(indexedMessage.created_at).toISOString().slice(0, 10);
+      await dbRun(
+        db,
+        `UPDATE daily_channel_stats
+         SET count = CASE
+           WHEN count - 1 < 0 THEN 0
+           ELSE count - 1
+         END
+         WHERE guild_id = ? AND user_id = ? AND channel_id = ? AND message_date = ?`,
+        [guildId, indexedMessage.user_id, indexedMessage.channel_id, messageDate]
+      );
+    }
+
+    // 5. Get new count
     const newCount = await dbGet(
       db,
       `SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`,
@@ -190,6 +233,12 @@ async function decrementMessageCountRobust(db, guildId, userId, messageId, attem
     await logEvent(db, "decrement", guildId, userId, messageId, {
       newCount: newCount?.message_count || 0,
       attempt,
+      dailyStats: !!indexedMessage,
+    });
+
+    // Update leaderboard cache (non-blocking, optional)
+    updateLeaderboard(guildId, userId, -1).catch(err => {
+      // Silently fail - cache is optional
     });
 
     return true;
