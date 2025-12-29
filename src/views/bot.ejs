@@ -63,6 +63,11 @@
         <div class="muted">Bot management and message controls</div>
       </div>
       <div class="topbar-actions">
+        <span style="margin-right: 10px; color: var(--text-muted);">👤 <%= username %></span>
+        <a class="btn btn-secondary" href="/change-password">🔐 Password</a>
+        <% if (userRole === 'admin') { %>
+          <a class="btn btn-secondary" href="/users">👥 Users</a>
+        <% } %>
         <button onclick="toggleSnow()" class="btn btn-secondary btn-icon" type="button" id="snowToggle"
           title="Toggle Snow Effect">
           ❄️
@@ -204,7 +209,6 @@
           <span>Open Dashboard</span>
         </a>
       </div>
-
       <div class="card card-glass action-card">
         <div class="card-icon">🎮</div>
         <h2 class="card-title">SAMP Server Status</h2>

@@ -20,6 +20,25 @@ function initStatsDb() {
         }
     );
 
+    // Panel users table for authentication
+    db.run(
+        `
+    CREATE TABLE IF NOT EXISTS panel_users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'user',
+      created_at INTEGER NOT NULL,
+      last_login INTEGER,
+      CONSTRAINT check_role CHECK (role IN ('admin', 'user'))
+    )
+    `,
+        (err) => {
+            if (err) console.error("Error creating panel_users table:", err);
+            else console.log("Panel users table ready");
+        }
+    );
+
     function incrementMessageCount(guildId, userId) {
         db.run(
             `
@@ -63,7 +82,96 @@ function initStatsDb() {
         });
     }
 
-    return { db, incrementMessageCount, getUserMessageCount, resetStats, getTopUsers };
+    // Panel user management functions
+    function createPanelUser(username, passwordHash, role = 'user') {
+        return new Promise((resolve, reject) => {
+            const now = Date.now();
+            db.run(
+                `INSERT INTO panel_users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)`,
+                [username, passwordHash, role, now],
+                function(err) {
+                    if (err) reject(err);
+                    else resolve({ id: this.lastID, username, role });
+                }
+            );
+        });
+    }
+
+    function getPanelUser(username) {
+        return new Promise((resolve, reject) => {
+            db.get(
+                `SELECT * FROM panel_users WHERE username = ?`,
+                [username],
+                (err, row) => (err ? reject(err) : resolve(row))
+            );
+        });
+    }
+
+    function getAllPanelUsers() {
+        return new Promise((resolve, reject) => {
+            db.all(
+                `SELECT id, username, role, created_at, last_login FROM panel_users ORDER BY created_at DESC`,
+                [],
+                (err, rows) => (err ? reject(err) : resolve(rows || []))
+            );
+        });
+    }
+
+    function updatePanelUserPassword(username, newPasswordHash) {
+        return new Promise((resolve, reject) => {
+            db.run(
+                `UPDATE panel_users SET password_hash = ? WHERE username = ?`,
+                [newPasswordHash, username],
+                (err) => (err ? reject(err) : resolve())
+            );
+        });
+    }
+
+    function updatePanelUserLastLogin(username) {
+        return new Promise((resolve, reject) => {
+            const now = Date.now();
+            db.run(
+                `UPDATE panel_users SET last_login = ? WHERE username = ?`,
+                [now, username],
+                (err) => (err ? reject(err) : resolve())
+            );
+        });
+    }
+
+    function deletePanelUser(username) {
+        return new Promise((resolve, reject) => {
+            db.run(
+                `DELETE FROM panel_users WHERE username = ?`,
+                [username],
+                (err) => (err ? reject(err) : resolve())
+            );
+        });
+    }
+
+    function updatePanelUserRole(username, newRole) {
+        return new Promise((resolve, reject) => {
+            db.run(
+                `UPDATE panel_users SET role = ? WHERE username = ?`,
+                [newRole, username],
+                (err) => (err ? reject(err) : resolve())
+            );
+        });
+    }
+
+    return { 
+        db, 
+        incrementMessageCount, 
+        getUserMessageCount, 
+        resetStats, 
+        getTopUsers,
+        createPanelUser,
+        getPanelUser,
+        getAllPanelUsers,
+        updatePanelUserPassword,
+        updatePanelUserLastLogin,
+        deletePanelUser,
+        updatePanelUserRole
+    };
 }
 
 module.exports = { initStatsDb };

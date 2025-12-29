@@ -55,7 +55,10 @@ A comprehensive Discord bot with an advanced web-based administration panel, fea
 - **User Preferences** - Language settings and customization
 
 ### Web Administration Panel
-- **Discord OAuth2 Login** - Secure authentication
+- **Multi-User Authentication** - Database-backed user system with roles
+- **User Management** - Create, delete, and manage panel users (Admin)
+- **Password Management** - Change your own password or reset others (Admin)
+- **Discord OAuth2 Login** - Secure authentication (legacy support)
 - **Real-Time Stats Dashboard** - Live server statistics
 - **Message Management** - Create and send embed messages
 - **AI Configuration** - Control engagement settings
@@ -99,10 +102,12 @@ A comprehensive Discord bot with an advanced web-based administration panel, fea
 │   │   ├── accuracy-monitor.ejs
 │   │   ├── bot.ejs
 │   │   ├── home.ejs
-│   │   └── login.ejs
+│   │   ├── login.ejs
+│   │   ├── users.ejs            # User management page
+│   │   └── change-password.ejs  # Password change page
 │   └── web/
 │       ├── server.js            # Express web server
-│       ├── auth.js              # OAuth authentication
+│       ├── auth.js              # Multi-user authentication
 │       ├── botsRegistry.js      # Bot configuration
 │       ├── commands-page.js     # Commands documentation
 │       ├── ai-engagement-page.js
@@ -138,6 +143,7 @@ A comprehensive Discord bot with an advanced web-based administration panel, fea
 - **user_preferences** - User settings
 - **rate_limit_config** - Rate limit rules
 - **consecutive_limit_config** - Consecutive message rules
+- **panel_users** - Web panel user accounts and authentication
 
 ## 📦 Installation
 
@@ -174,12 +180,12 @@ DISCORD_CLIENT_SECRET=your_discord_client_secret
 BOT_OWNER_ID=your_discord_user_id
 
 # Web Panel Configuration
-PANEL_PORT=5012
-PANEL_BASE_URL=http://localhost:5012
+PANEL_PORT=3001
+PANEL_BASE_URL=http://localhost:3001
 SESSION_SECRET=random_secure_string_here
 
 # OAuth Callback
-OAUTH_CALLBACK_URL=http://localhost:5012/panel/callback
+OAUTH_CALLBACK_URL=http://localhost:3001/panel/callback
 
 # Holiday System (optional)
 HOLIDAYS_GUILD_ID=your_guild_id
@@ -233,12 +239,54 @@ https://discord.com/api/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=8&
 
 ## 🌐 Web Panel
 
+### Initial Setup - Panel Users
+
+Before accessing the panel, initialize the default users:
+
+```bash
+node scripts/init-panel-users.js
+```
+
+This creates two default accounts:
+- **Admin**: `admin` / `admin123` (full access)
+- **Test**: `test` / `test1234` (standard access)
+
+> ⚠️ **Important**: Change the admin password immediately after first login!
+
+### Standalone Panel Mode
+
+Run the panel without the full bot (useful for testing):
+
+```bash
+node src/panel-only.js
+```
+
+Panel will be available at: `http://localhost:3001/login`
+
 ### Accessing the Panel
 
 1. Start the bot: `pm2 start ecosystem.config.js`
-2. Navigate to `http://localhost:5012` (or your configured URL)
-3. Click **Login** and authenticate with Discord
+2. Navigate to `http://localhost:3001` (or your configured URL)
+3. Login with your panel credentials
 4. Select your bot from the dashboard
+
+### User Management (Admin Only)
+
+Admins can manage panel users at `/users`:
+
+| Feature | Description |
+|---------|-------------|
+| **Create User** | Add new users with username, password, and role |
+| **Delete User** | Remove panel users (cannot delete yourself) |
+| **Reset Password** | Set new password for any user |
+| **Change Role** | Promote users to admin or demote to user |
+
+### Password Management
+
+All users can change their own password at `/change-password`:
+1. Enter current password
+2. Enter new password (min 8 characters)
+3. Confirm new password
 
 ### Panel Features
 
@@ -346,9 +394,10 @@ https://discord.com/api/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=8&
 - **Natural Language Processing** - Message context
 
 ### Authentication
-- **Discord OAuth2** - User authentication
+- **BCrypt** - Secure password hashing
 - **Express Session** - Session management
-- **Cookie Parser** - Cookie handling
+- **SQLite Session Store** - Persistent sessions
+- **Role-Based Access** - Admin and User roles
 
 ## 👨‍💻 Development
 
@@ -450,7 +499,7 @@ server {
     server_name your-domain.com;
 
     location / {
-        proxy_pass http://localhost:5012;
+        proxy_pass http://localhost:3001;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';

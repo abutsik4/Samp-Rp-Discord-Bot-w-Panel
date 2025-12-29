@@ -121,7 +121,13 @@
       <p class="hero-subtitle">Manage and monitor your bots</p>
       <div class="user-badge">
         <span>👤</span>
-        <span><%= username %></span>
+        <span><%= username %> (<%= userRole %>)</span>
+      </div>
+      <div style="margin-top: 20px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+        <a href="/change-password" class="btn btn-secondary">🔐 Change Password</a>
+        <% if (userRole === 'admin') { %>
+          <a href="/users" class="btn btn-primary">👥 Manage Users</a>
+        <% } %>
       </div>
     </div>
 

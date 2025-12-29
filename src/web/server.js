@@ -4,8 +4,9 @@ const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const session = require("express-session");
 const SQLiteStore = require("connect-sqlite3")(session);
+const bcrypt = require("bcryptjs");
 
-const { requireAuth, validateLogin } = require("./auth");
+const { requireAuth, requireAdmin, validateLogin, setStatsDbInstance } = require("./auth");
 const { getBotsRegistry } = require("./botsRegistry");
 const { EmbedBuilder } = require("discord.js");
 
@@ -25,9 +26,12 @@ function allowedChannel(channelId) {
   return list.includes(channelId);
 }
 
-function createWebServer({ discordClient }) {
+function createWebServer({ discordClient, statsDb }) {
   const app = express();
   const bots = getBotsRegistry({ discordClient });
+
+  // Set statsDb instance for authentication
+  setStatsDbInstance(statsDb);
 
   app.set("view engine", "ejs");
   app.set("views", path.join(__dirname, "../views"));
@@ -64,10 +68,10 @@ function createWebServer({ discordClient }) {
 
   app.post("/login", loginLimiter, async (req, res) => {
     const { username, password } = req.body;
-    const ok = await validateLogin(String(username || ""), String(password || ""));
-    if (!ok) return res.status(401).render("login", { error: "Invalid login." });
+    const result = await validateLogin(String(username || ""), String(password || ""));
+    if (!result) return res.status(401).render("login", { error: "Invalid login." });
 
-    req.session.user = { ok: true, username };
+    req.session.user = { ok: true, username: result.username, role: result.role };
     return res.redirect("/");
   });
 
@@ -77,13 +81,345 @@ function createWebServer({ discordClient }) {
 
   app.get("/", requireAuth, (req, res) => {
     const botList = Object.values(bots).map((b) => ({ key: b.key, name: b.name, kind: b.kind }));
-    res.render("home", { bots: botList, username: req.session.user.username });
+    res.render("home", { 
+      bots: botList, 
+      username: req.session.user.username,
+      userRole: req.session.user.role 
+    });
   });
 
   app.get("/bot/:botKey", requireAuth, (req, res) => {
     const bot = bots[req.params.botKey];
     if (!bot) return res.status(404).send("Bot not found.");
-    res.render("bot", { bot });
+    res.render("bot", { 
+      bot,
+      username: req.session.user.username,
+      userRole: req.session.user.role
+    });
+  });
+
+  // User Management Routes (Admin only)
+  app.get("/users", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const users = await statsDb.getAllPanelUsers();
+      res.render("users", { 
+        users, 
+        username: req.session.user.username,
+        userRole: req.session.user.role,
+        message: null,
+        error: null
+      });
+    } catch (err) {
+      console.error("Error loading users:", err);
+      res.status(500).send("Error loading users");
+    }
+  });
+
+  app.post("/users/create", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const { username, password, role } = req.body;
+      
+      if (!username || !password || !role) {
+        const users = await statsDb.getAllPanelUsers();
+        return res.render("users", { 
+          users, 
+          username: req.session.user.username,
+          userRole: req.session.user.role,
+          message: null,
+          error: "All fields are required"
+        });
+      }
+
+      if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
+        const users = await statsDb.getAllPanelUsers();
+        return res.render("users", { 
+          users, 
+          username: req.session.user.username,
+          userRole: req.session.user.role,
+          message: null,
+          error: "Username must contain only letters, numbers, dashes and underscores"
+        });
+      }
+
+      if (password.length < 8) {
+        const users = await statsDb.getAllPanelUsers();
+        return res.render("users", { 
+          users, 
+          username: req.session.user.username,
+          userRole: req.session.user.role,
+          message: null,
+          error: "Password must be at least 8 characters"
+        });
+      }
+
+      // Check if user already exists
+      const existing = await statsDb.getPanelUser(username);
+      if (existing) {
+        const users = await statsDb.getAllPanelUsers();
+        return res.render("users", { 
+          users, 
+          username: req.session.user.username,
+          userRole: req.session.user.role,
+          message: null,
+          error: "Username already exists"
+        });
+      }
+
+      const passwordHash = await bcrypt.hash(password, 10);
+      await statsDb.createPanelUser(username, passwordHash, role);
+
+      const users = await statsDb.getAllPanelUsers();
+      res.render("users", { 
+        users, 
+        username: req.session.user.username,
+        userRole: req.session.user.role,
+        message: `User "${username}" created successfully`,
+        error: null
+      });
+    } catch (err) {
+      console.error("Error creating user:", err);
+      const users = await statsDb.getAllPanelUsers();
+      res.render("users", { 
+        users, 
+        username: req.session.user.username,
+        userRole: req.session.user.role,
+        message: null,
+        error: "Error creating user"
+      });
+    }
+  });
+
+  app.post("/users/delete", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const { username } = req.body;
+      
+      if (username === req.session.user.username) {
+        const users = await statsDb.getAllPanelUsers();
+        return res.render("users", { 
+          users, 
+          username: req.session.user.username,
+          userRole: req.session.user.role,
+          message: null,
+          error: "Cannot delete your own account"
+        });
+      }
+
+      await statsDb.deletePanelUser(username);
+
+      const users = await statsDb.getAllPanelUsers();
+      res.render("users", { 
+        users, 
+        username: req.session.user.username,
+        userRole: req.session.user.role,
+        message: `User "${username}" deleted successfully`,
+        error: null
+      });
+    } catch (err) {
+      console.error("Error deleting user:", err);
+      const users = await statsDb.getAllPanelUsers();
+      res.render("users", { 
+        users, 
+        username: req.session.user.username,
+        userRole: req.session.user.role,
+        message: null,
+        error: "Error deleting user"
+      });
+    }
+  });
+
+  app.post("/users/update-role", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const { username, role } = req.body;
+      
+      if (username === req.session.user.username) {
+        const users = await statsDb.getAllPanelUsers();
+        return res.render("users", { 
+          users, 
+          username: req.session.user.username,
+          userRole: req.session.user.role,
+          message: null,
+          error: "Cannot change your own role"
+        });
+      }
+
+      await statsDb.updatePanelUserRole(username, role);
+
+      const users = await statsDb.getAllPanelUsers();
+      res.render("users", { 
+        users, 
+        username: req.session.user.username,
+        userRole: req.session.user.role,
+        message: `User "${username}" role updated to ${role}`,
+        error: null
+      });
+    } catch (err) {
+      console.error("Error updating role:", err);
+      const users = await statsDb.getAllPanelUsers();
+      res.render("users", { 
+        users, 
+        username: req.session.user.username,
+        userRole: req.session.user.role,
+        message: null,
+        error: "Error updating role"
+      });
+    }
+  });
+
+  // Admin reset user password
+  app.post("/users/reset-password", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const { username, newPassword, confirmPassword } = req.body;
+      
+      if (!username || !newPassword || !confirmPassword) {
+        const users = await statsDb.getAllPanelUsers();
+        return res.render("users", { 
+          users, 
+          username: req.session.user.username,
+          userRole: req.session.user.role,
+          message: null,
+          error: "All fields are required"
+        });
+      }
+
+      if (newPassword !== confirmPassword) {
+        const users = await statsDb.getAllPanelUsers();
+        return res.render("users", { 
+          users, 
+          username: req.session.user.username,
+          userRole: req.session.user.role,
+          message: null,
+          error: "Passwords do not match"
+        });
+      }
+
+      if (newPassword.length < 8) {
+        const users = await statsDb.getAllPanelUsers();
+        return res.render("users", { 
+          users, 
+          username: req.session.user.username,
+          userRole: req.session.user.role,
+          message: null,
+          error: "Password must be at least 8 characters"
+        });
+      }
+
+      const newPasswordHash = await bcrypt.hash(newPassword, 10);
+      await statsDb.updatePanelUserPassword(username, newPasswordHash);
+
+      const users = await statsDb.getAllPanelUsers();
+      res.render("users", { 
+        users, 
+        username: req.session.user.username,
+        userRole: req.session.user.role,
+        message: `Password for "${username}" has been reset successfully`,
+        error: null
+      });
+    } catch (err) {
+      console.error("Error resetting password:", err);
+      const users = await statsDb.getAllPanelUsers();
+      res.render("users", { 
+        users, 
+        username: req.session.user.username,
+        userRole: req.session.user.role,
+        message: null,
+        error: "Error resetting password"
+      });
+    }
+  });
+
+  // Password Change Routes (All authenticated users)
+  app.get("/change-password", requireAuth, (req, res) => {
+    res.render("change-password", { 
+      username: req.session.user.username,
+      userRole: req.session.user.role,
+      message: null,
+      error: null
+    });
+  });
+
+  app.post("/change-password", requireAuth, async (req, res) => {
+    try {
+      const { currentPassword, newPassword, confirmPassword } = req.body;
+      const username = req.session.user.username;
+
+      if (!currentPassword || !newPassword || !confirmPassword) {
+        return res.render("change-password", { 
+          username,
+          userRole: req.session.user.role,
+          message: null,
+          error: "All fields are required"
+        });
+      }
+
+      if (newPassword !== confirmPassword) {
+        return res.render("change-password", { 
+          username,
+          userRole: req.session.user.role,
+          message: null,
+          error: "New passwords do not match"
+        });
+      }
+
+      if (newPassword.length < 8) {
+        return res.render("change-password", { 
+          username,
+          userRole: req.session.user.role,
+          message: null,
+          error: "Password must be at least 8 characters"
+        });
+      }
+
+      // Verify current password
+      const user = await statsDb.getPanelUser(username);
+      if (!user) {
+        return res.render("change-password", { 
+          username,
+          userRole: req.session.user.role,
+          message: null,
+          error: "User not found"
+        });
+      }
+
+      const isCurrentValid = await bcrypt.compare(currentPassword, user.password_hash);
+      if (!isCurrentValid) {
+        return res.render("change-password", { 
+          username,
+          userRole: req.session.user.role,
+          message: null,
+          error: "Current password is incorrect"
+        });
+      }
+
+      // Check if new password is same as current
+      const isSameAsOld = await bcrypt.compare(newPassword, user.password_hash);
+      if (isSameAsOld) {
+        return res.render("change-password", { 
+          username,
+          userRole: req.session.user.role,
+          message: null,
+          error: "New password must be different from current password"
+        });
+      }
+
+      // Update password
+      const newPasswordHash = await bcrypt.hash(newPassword, 10);
+      await statsDb.updatePanelUserPassword(username, newPasswordHash);
+
+      res.render("change-password", { 
+        username,
+        userRole: req.session.user.role,
+        message: "Password changed successfully",
+        error: null
+      });
+    } catch (err) {
+      console.error("Error changing password:", err);
+      res.render("change-password", { 
+        username: req.session.user.username,
+        userRole: req.session.user.role,
+        message: null,
+        error: "Error changing password"
+      });
+    }
   });
 
   // API: Send message (text + optional embed)
