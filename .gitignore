@@ -10,3 +10,7 @@ backups/
 *.log
 .DS_Store
 package-lock.json
+.npm/
+.cache/
+.local/
+~
