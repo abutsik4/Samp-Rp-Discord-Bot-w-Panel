@@ -39,6 +39,23 @@ function initStatsDb() {
         }
     );
 
+    // Disabled commands table
+    db.run(
+        `
+    CREATE TABLE IF NOT EXISTS disabled_commands (
+      guild_id TEXT NOT NULL,
+      command_name TEXT NOT NULL,
+      disabled_at INTEGER NOT NULL,
+      disabled_by TEXT,
+      PRIMARY KEY (guild_id, command_name)
+    )
+    `,
+        (err) => {
+            if (err) console.error("Error creating disabled_commands table:", err);
+            else console.log("Disabled commands table ready");
+        }
+    );
+
     function incrementMessageCount(guildId, userId) {
         db.run(
             `
@@ -158,6 +175,58 @@ function initStatsDb() {
         });
     }
 
+    // Disabled commands functions
+    function disableCommand(guildId, commandName, disabledBy = null) {
+        return new Promise((resolve, reject) => {
+            const now = Date.now();
+            db.run(
+                `INSERT OR REPLACE INTO disabled_commands (guild_id, command_name, disabled_at, disabled_by) VALUES (?, ?, ?, ?)`,
+                [guildId, commandName, now, disabledBy],
+                (err) => (err ? reject(err) : resolve())
+            );
+        });
+    }
+
+    function enableCommand(guildId, commandName) {
+        return new Promise((resolve, reject) => {
+            db.run(
+                `DELETE FROM disabled_commands WHERE guild_id = ? AND command_name = ?`,
+                [guildId, commandName],
+                (err) => (err ? reject(err) : resolve())
+            );
+        });
+    }
+
+    function isCommandDisabled(guildId, commandName) {
+        return new Promise((resolve, reject) => {
+            db.get(
+                `SELECT 1 FROM disabled_commands WHERE guild_id = ? AND command_name = ?`,
+                [guildId, commandName],
+                (err, row) => (err ? reject(err) : resolve(!!row))
+            );
+        });
+    }
+
+    function getDisabledCommands(guildId) {
+        return new Promise((resolve, reject) => {
+            db.all(
+                `SELECT command_name, disabled_at, disabled_by FROM disabled_commands WHERE guild_id = ? ORDER BY command_name`,
+                [guildId],
+                (err, rows) => (err ? reject(err) : resolve(rows || []))
+            );
+        });
+    }
+
+    function getAllDisabledCommands() {
+        return new Promise((resolve, reject) => {
+            db.all(
+                `SELECT guild_id, command_name, disabled_at, disabled_by FROM disabled_commands ORDER BY guild_id, command_name`,
+                [],
+                (err, rows) => (err ? reject(err) : resolve(rows || []))
+            );
+        });
+    }
+
     return { 
         db, 
         incrementMessageCount, 
@@ -170,7 +239,12 @@ function initStatsDb() {
         updatePanelUserPassword,
         updatePanelUserLastLogin,
         deletePanelUser,
-        updatePanelUserRole
+        updatePanelUserRole,
+        disableCommand,
+        enableCommand,
+        isCommandDisabled,
+        getDisabledCommands,
+        getAllDisabledCommands
     };
 }
 

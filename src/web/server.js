@@ -40,6 +40,8 @@ function createWebServer({ discordClient, statsDb }) {
   app.use(express.json({ limit: "200kb" }));
   app.use(express.urlencoded({ extended: false }));
   app.use("/public", express.static(path.join(__dirname, "public")));
+  // Serve root public folder (shared.css, snow.js, etc.) but NOT index.html
+  app.use(express.static(path.join(__dirname, "../../public"), { index: false }));
 
   app.use(
     session({
@@ -63,6 +65,15 @@ function createWebServer({ discordClient, statsDb }) {
   const apiLimiter = rateLimit({ windowMs: 10_000, max: 30 });
 
   app.get("/health", (req, res) => res.json({ ok: true }));
+
+  // Redirect old /panel/* URLs to new paths
+  app.get("/panel/login", (req, res) => res.redirect("/login"));
+  app.get("/panel", (req, res) => res.redirect("/"));
+  app.use("/panel", (req, res, next) => {
+    // Strip /panel prefix and redirect
+    const newPath = req.originalUrl.replace(/^\/panel/, '') || '/';
+    res.redirect(newPath);
+  });
 
   app.get("/login", (req, res) => res.render("login", { error: null }));
 
@@ -526,6 +537,67 @@ function createWebServer({ discordClient, statsDb }) {
     } catch (e) {
       console.error("Edit embed error:", e);
       return res.status(500).json({ error: "Failed to edit embed" });
+    }
+  });
+
+  // API: Get available commands list
+  app.get("/api/:botKey/commands", requireAuth, async (req, res) => {
+    const bot = bots[req.params.botKey];
+    if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+    // List of available slash commands
+    const availableCommands = [
+      { name: "mystats", description: "Show your message stats in this server", category: "user" },
+      { name: "userstats", description: "Show message stats for another user", category: "user" },
+      { name: "top5", description: "Show top 5 users by message count", category: "user" },
+      { name: "top10", description: "Show top 10 users by message count", category: "user" },
+      { name: "backfill", description: "Backfill message history (owner only)", category: "admin" },
+      { name: "demoembed", description: "Send an example embed", category: "user" },
+      { name: "synccommands", description: "Re-register slash commands (owner only)", category: "admin" }
+    ];
+
+    try {
+      // Get first guild from bot's guilds
+      const guild = bot.client.guilds.cache.first();
+      const guildId = guild?.id || "global";
+
+      const disabledList = await statsDb.getDisabledCommands(guildId);
+      const disabledSet = new Set(disabledList.map(d => d.command_name));
+
+      const commands = availableCommands.map(cmd => ({
+        ...cmd,
+        enabled: !disabledSet.has(cmd.name)
+      }));
+
+      return res.json({ ok: true, commands, guildId });
+    } catch (e) {
+      console.error("Get commands error:", e);
+      return res.status(500).json({ error: "Failed to get commands" });
+    }
+  });
+
+  // API: Toggle command enabled/disabled
+  app.post("/api/:botKey/commands/toggle", requireAuth, apiLimiter, async (req, res) => {
+    const bot = bots[req.params.botKey];
+    if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+    const { commandName, enabled, guildId } = req.body;
+    if (!commandName) return res.status(400).json({ error: "commandName is required" });
+
+    try {
+      const targetGuildId = guildId || bot.client.guilds.cache.first()?.id || "global";
+      const username = req.session.user.username;
+
+      if (enabled) {
+        await statsDb.enableCommand(targetGuildId, commandName);
+      } else {
+        await statsDb.disableCommand(targetGuildId, commandName, username);
+      }
+
+      return res.json({ ok: true, commandName, enabled, guildId: targetGuildId });
+    } catch (e) {
+      console.error("Toggle command error:", e);
+      return res.status(500).json({ error: "Failed to toggle command" });
     }
   });
 

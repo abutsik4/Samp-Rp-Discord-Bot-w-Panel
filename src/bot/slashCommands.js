@@ -76,6 +76,23 @@ function attachSlashAndEvents({ client, stats, ownerId }) {
   client.on("interactionCreate", async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
 
+    // Check if command is disabled
+    const guildId = interaction.guild?.id;
+    if (guildId && stats.isCommandDisabled) {
+      try {
+        const isDisabled = await stats.isCommandDisabled(guildId, interaction.commandName);
+        if (isDisabled) {
+          await interaction.reply({ 
+            content: "❌ This command is currently disabled by administrators.", 
+            ephemeral: true 
+          });
+          return;
+        }
+      } catch (err) {
+        console.error("Error checking command disabled status:", err);
+      }
+    }
+
     // Keep your existing command handlers here.
     // The below is a minimal example for /demoembed only:
 
