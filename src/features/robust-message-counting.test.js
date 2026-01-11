@@ -41,8 +41,20 @@ async function createRobustSchema(db) {
       guild_id TEXT NOT NULL,
       message_id TEXT NOT NULL,
       user_id TEXT NOT NULL,
+      channel_id TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (guild_id, message_id)
+    )`
+  );
+  await dbRun(
+    db,
+    `CREATE TABLE IF NOT EXISTS daily_channel_stats (
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      message_date TEXT NOT NULL,
+      count INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (guild_id, user_id, channel_id, message_date)
     )`
   );
   await dbRun(
@@ -67,6 +79,8 @@ async function createRobustSchema(db) {
       operation TEXT NOT NULL CHECK (operation IN ('increment', 'decrement')),
       error TEXT,
       retry_count INTEGER DEFAULT 0,
+      channel_id TEXT,
+      message_created_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`
   );
@@ -95,6 +109,8 @@ async function createErrorQueueOnlySchema(db) {
       operation TEXT NOT NULL CHECK (operation IN ('increment', 'decrement')),
       error TEXT,
       retry_count INTEGER DEFAULT 0,
+      channel_id TEXT,
+      message_created_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`
   );
@@ -104,7 +120,7 @@ test("increment stores user stats, index, and event", async () => {
   const db = createDb();
   await createRobustSchema(db);
 
-  await incrementMessageCountRobust(db, "g1", "u1", "m1");
+  await incrementMessageCountRobust(db, "g1", "u1", "m1", "c1", new Date().toISOString());
 
   const stat = await dbGet(db, `SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`, ["g1", "u1"]);
   assert.equal(stat?.message_count, 1);
@@ -179,8 +195,9 @@ test("processErrorQueue replays queued increments", async () => {
 
   await dbRun(
     db,
-    `INSERT INTO message_count_errors (guild_id, user_id, message_id, operation, error, retry_count) VALUES (?, ?, ?, 'increment', 'simulated', 0)`,
-    ["g1", "u1", "m9"]
+    `INSERT INTO message_count_errors (guild_id, user_id, message_id, operation, error, retry_count, channel_id, message_created_at)
+     VALUES (?, ?, ?, 'increment', 'simulated', 0, ?, ?)`,
+    ["g1", "u1", "m9", "c1", new Date().toISOString()]
   );
 
   const result = await processErrorQueue(db);
@@ -211,9 +228,8 @@ test("processErrorQueue bumps retry_count when operations keep failing", async (
   assert.equal(result.succeeded, 0);
 
   const queueRows = await dbAll(db, `SELECT retry_count FROM message_count_errors WHERE guild_id = ? AND user_id = ? ORDER BY id ASC`, ["g1", "u1"]);
-  assert.equal(queueRows.length, 2); // original row + newly queued failure
+  assert.equal(queueRows.length, 1);
   assert.equal(queueRows[0]?.retry_count, 1);
-  assert.equal(queueRows[1]?.retry_count, 0);
 
   await closeDb(db);
 });

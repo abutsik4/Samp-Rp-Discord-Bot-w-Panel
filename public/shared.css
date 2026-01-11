@@ -2,43 +2,50 @@
 /* Consistent styling across all web pages */
 
 :root {
-  /* Color Palette */
-  --bg-main: #0a0e17;
-  --bg-card: rgba(12, 17, 29, 0.95);
-  --bg-card-hover: rgba(17, 24, 39, 0.95);
-  --border: rgba(45, 55, 75, 0.85);
-  --border-hover: rgba(167, 139, 250, 0.5);
+  /* Requested Color Palette (exact hex) */
+  --midnight-violet: #160f29ff;
+  --stormy-teal: #246a73ff;
+  --dark-cyan: #368f8bff;
+  --champagne-mist: #f3dfc1ff;
+  --desert-sand: #ddbea8ff;
+
+  /* Color Palette (mapped to existing design tokens) */
+  --bg-main: var(--midnight-violet);
+  --bg-card: var(--midnight-violet);
+  --bg-card-hover: var(--midnight-violet);
+  --border: var(--stormy-teal);
+  --border-hover: var(--dark-cyan);
   
   /* Text Colors */
-  --text: #e5e7eb;
-  --text-muted: #9ca3af;
-  --text-bright: #f9fafb;
+  --text: var(--champagne-mist);
+  --text-muted: var(--desert-sand);
+  --text-bright: var(--champagne-mist);
   
   /* Accent Colors */
-  --accent-purple: #a78bfa;
-  --accent-cyan: #22d3ee;
-  --accent-emerald: #34d399;
-  --accent-rose: #fb7185;
-  --accent-amber: #fbbf24;
+  --accent-purple: var(--stormy-teal);
+  --accent-cyan: var(--dark-cyan);
+  --accent-emerald: var(--champagne-mist);
+  --accent-rose: var(--desert-sand);
+  --accent-amber: var(--champagne-mist);
   
   /* Gradients */
-  --gradient-primary: linear-gradient(135deg, var(--accent-purple), var(--accent-cyan));
-  --gradient-secondary: linear-gradient(135deg, var(--accent-cyan), var(--accent-emerald));
-  --gradient-card: linear-gradient(135deg, rgba(30, 41, 59, 0.6), rgba(17, 24, 39, 0.6));
-  --gradient-glass: linear-gradient(135deg, rgba(167, 139, 250, 0.1), rgba(34, 211, 238, 0.05));
-  --gradient-overlay: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.3));
+  --gradient-primary: linear-gradient(135deg, var(--stormy-teal), var(--dark-cyan));
+  --gradient-secondary: linear-gradient(135deg, var(--dark-cyan), var(--champagne-mist));
+  --gradient-card: linear-gradient(135deg, color-mix(in srgb, var(--stormy-teal) 18%, transparent), color-mix(in srgb, var(--midnight-violet) 30%, transparent));
+  --gradient-glass: linear-gradient(135deg, color-mix(in srgb, var(--stormy-teal) 14%, transparent), color-mix(in srgb, var(--dark-cyan) 10%, transparent));
+  --gradient-overlay: linear-gradient(180deg, transparent, color-mix(in srgb, var(--midnight-violet) 55%, black));
   
   /* Input Backgrounds */
-  --input-bg: rgba(17, 24, 39, 0.9);
-  --input-bg-focus: rgba(30, 41, 59, 0.9);
+  --input-bg: color-mix(in srgb, var(--midnight-violet) 85%, black);
+  --input-bg-focus: color-mix(in srgb, var(--midnight-violet) 75%, black);
   
   /* Shadows */
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.4);
-  --shadow-glow: 0 0 20px rgba(167, 139, 250, 0.15);
-  --shadow-glow-cyan: 0 0 20px rgba(34, 211, 238, 0.15);
-  --shadow-inset: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+  --shadow-sm: 0 2px 8px color-mix(in srgb, black 30%, transparent);
+  --shadow-md: 0 4px 16px color-mix(in srgb, black 40%, transparent);
+  --shadow-lg: 0 10px 40px color-mix(in srgb, black 55%, transparent);
+  --shadow-glow: 0 0 20px color-mix(in srgb, var(--stormy-teal) 22%, transparent);
+  --shadow-glow-cyan: 0 0 20px color-mix(in srgb, var(--dark-cyan) 22%, transparent);
+  --shadow-inset: inset 0 2px 4px color-mix(in srgb, black 18%, transparent);
   
   /* Spacing */
   --space-xs: 4px;
@@ -357,6 +364,20 @@ a {
   font-size: 14px;
   font-family: inherit;
   transition: all var(--transition-base);
+}
+
+/* Ensure dropdown menus remain readable across OS/browser native theming */
+.form-group select,
+select {
+  color-scheme: dark;
+}
+
+.form-group select option,
+.form-group select optgroup,
+select option,
+select optgroup {
+  background-color: #0b1220;
+  color: var(--text);
 }
 
 .form-group input:focus,
@@ -990,4 +1011,223 @@ tr:hover {
   background: var(--gradient-primary);
   opacity: 0.3;
   margin: var(--space-xl) 0;
+}
+/* ============================================
+   Locomotive Scroll & GSAP Animation Helpers
+   ============================================ */
+
+/* Smooth scroll container */
+html.has-scroll-smooth {
+  overflow: hidden;
+}
+
+html.has-scroll-smooth body {
+  overflow: hidden;
+}
+
+.has-scroll-smooth [data-scroll-container] {
+  min-height: 100vh;
+}
+
+/* Scroll-triggered animations */
+[data-scroll] {
+  transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Fade up animation */
+.fade-up {
+  opacity: 0;
+  transform: translateY(40px);
+}
+
+.fade-up.is-inview {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Fade in animation */
+.fade-in {
+  opacity: 0;
+}
+
+.fade-in.is-inview {
+  opacity: 1;
+}
+
+/* Scale up animation */
+.scale-up {
+  opacity: 0;
+  transform: scale(0.9);
+}
+
+.scale-up.is-inview {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* Slide from left */
+.slide-left {
+  opacity: 0;
+  transform: translateX(-60px);
+}
+
+.slide-left.is-inview {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+/* Slide from right */
+.slide-right {
+  opacity: 0;
+  transform: translateX(60px);
+}
+
+.slide-right.is-inview {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+/* Stagger delays for children */
+.stagger-children > *:nth-child(1) { transition-delay: 0s; }
+.stagger-children > *:nth-child(2) { transition-delay: 0.1s; }
+.stagger-children > *:nth-child(3) { transition-delay: 0.2s; }
+.stagger-children > *:nth-child(4) { transition-delay: 0.3s; }
+.stagger-children > *:nth-child(5) { transition-delay: 0.4s; }
+.stagger-children > *:nth-child(6) { transition-delay: 0.5s; }
+.stagger-children > *:nth-child(7) { transition-delay: 0.6s; }
+.stagger-children > *:nth-child(8) { transition-delay: 0.7s; }
+
+/* Parallax effect helpers */
+.parallax-slow {
+  will-change: transform;
+}
+
+.parallax-fast {
+  will-change: transform;
+}
+
+/* Scroll progress indicator */
+.scroll-progress-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(45, 55, 75, 0.3);
+  z-index: 9999;
+}
+
+.scroll-progress-fill {
+  height: 100%;
+  background: var(--gradient-primary);
+  transform-origin: left;
+  transform: scaleX(0);
+  transition: transform 0.1s ease;
+}
+
+/* Magnetic button effect (for GSAP) */
+.magnetic-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.magnetic-btn:hover {
+  transform: scale(1.05);
+}
+
+/* 3D tilt card effect */
+.tilt-card {
+  transform-style: preserve-3d;
+  perspective: 1000px;
+}
+
+.tilt-card-content {
+  transform: translateZ(20px);
+  transition: transform 0.3s ease;
+}
+
+/* Cursor follower helper (for custom cursor) */
+.cursor-follower {
+  position: fixed;
+  width: 40px;
+  height: 40px;
+  border: 2px solid var(--accent-purple);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 10000;
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  transition: opacity 0.3s ease, transform 0.15s ease;
+}
+
+.cursor-follower.active {
+  opacity: 1;
+}
+
+.cursor-follower.hover {
+  transform: translate(-50%, -50%) scale(1.5);
+  background: rgba(167, 139, 250, 0.1);
+}
+
+/* Section reveal effect */
+.reveal-section {
+  position: relative;
+  overflow: hidden;
+}
+
+.reveal-section::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--bg-main);
+  transform: scaleY(1);
+  transform-origin: top;
+  transition: transform 0.8s cubic-bezier(0.77, 0, 0.175, 1);
+}
+
+.reveal-section.revealed::after {
+  transform: scaleY(0);
+  transform-origin: bottom;
+}
+
+/* Text split animation helper */
+.split-text .char {
+  display: inline-block;
+  opacity: 0;
+  transform: translateY(100%);
+}
+
+.split-text.animate .char {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.5s ease, transform 0.5s ease;
+}
+
+/* Marquee/scrolling text */
+.marquee {
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.marquee-content {
+  display: inline-flex;
+  animation: marquee 20s linear infinite;
+}
+
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+/* Smooth anchor scrolling for non-Locomotive pages */
+html:not(.has-scroll-smooth) {
+  scroll-behavior: smooth;
 }

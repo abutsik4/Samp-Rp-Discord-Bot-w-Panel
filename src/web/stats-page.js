@@ -1,6 +1,8 @@
 // User Statistics & Message Count Leaderboard Page
 // Displays all users' message counts with Discord usernames
 
+const { generateSidebarHTML, generateSidebarStyles, generateSidebarScripts } = require('./shared-template');
+
 function generateStatsPage(bot, PANEL_BASE) {
   return `<!doctype html>
 <html>
@@ -9,119 +11,199 @@ function generateStatsPage(bot, PANEL_BASE) {
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>JepsenCloud Panel — Statistics</title>
   <link rel="stylesheet" href="/shared.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.css">
   <style>
-    .user-cell{display:flex;align-items:center;gap:var(--space-sm)}
-    .avatar{width:32px;height:32px;border-radius:50%;background:var(--input-bg);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:var(--accent-cyan)}
+    ${generateSidebarStyles()}
+    
+    .user-cell{display:flex;align-items:center;gap:12px}
+    .avatar{width:36px;height:36px;border-radius:50%;background:var(--gradient-glass);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;color:var(--accent-cyan)}
     .username{font-weight:500;color:var(--text)}
     .userid{font-size:12px;color:var(--text-muted);font-family:monospace}
     .count{font-weight:600;color:var(--accent-emerald);text-align:right}
     .rank{width:40px;text-align:center;color:var(--accent-purple);font-weight:600}
-    .filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:var(--space-md);margin-bottom:var(--space-lg)}
-    .toolbar{display:flex;gap:var(--space-md);align-items:center;flex-wrap:wrap;margin-bottom:var(--space-lg);padding-bottom:var(--space-md);border-bottom:1px solid var(--border)}
+    .filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px}
+    .toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid var(--border)}
     .toolbar-info{color:var(--text-muted);font-size:13px;flex:1}
+    .stats-overview{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:32px}
+    .stat-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px;text-align:center}
+    .stat-value{font-size:32px;font-weight:700;color:var(--accent-cyan);margin-bottom:4px}
+    .stat-label{font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px}
+    .table-container{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden}
+    table{width:100%;border-collapse:collapse}
+    th{background:color-mix(in srgb, var(--accent-purple) 14%, transparent);padding:14px 12px;text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);font-weight:600}
+    td{padding:14px 12px;border-top:1px solid var(--border)}
+    tr:hover{background:color-mix(in srgb, var(--accent-purple) 7%, transparent)}
+    .pagination{display:flex;align-items:center;justify-content:center;gap:16px;padding:20px}
+    .loading,.empty,.error{text-align:center;padding:40px;color:var(--text-muted)}
+    .error{color:var(--accent-rose)}
+
+    .split-grid{display:grid;grid-template-columns:1fr;gap:16px}
+    @media(min-width: 1100px){.split-grid{grid-template-columns:1fr 1fr}}
+    .mini-help{font-size:12px;color:var(--text-muted);margin-top:6px}
+    .channel-row{display:flex;gap:10px;align-items:end;flex-wrap:wrap}
+    .channel-actions{display:flex;gap:10px;flex-wrap:wrap}
+    .pill{display:inline-flex;gap:8px;align-items:center;border:1px solid var(--border);border-radius:999px;padding:6px 10px;background:color-mix(in srgb, var(--accent-purple) 6%, transparent);color:var(--text);font-size:12px}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
   </style>
 </head>
 <body>
-  <div class="page-container-wide">
-    <div class="topbar">
-      <div class="topbar-content">
-        <div class="page-title"><span style="font-size:28px">📊</span> <span class="gradient-text">User Statistics</span></div>
-        <div class="muted">Message count leaderboard with Discord usernames</div>
-      </div>
-      <div class="topbar-actions">
-        <button onclick="history.back()" class="btn" type="button" style="padding:8px 16px">← Back</button>
-        <a href="${PANEL_BASE}/bot/${bot.key}" class="link">🏠 Panel</a>
-        <a href="${PANEL_BASE}/bot/${bot.key}/rate-limits" class="link">🚦 Rate Limits</a>
-        <a href="${PANEL_BASE}/bot/${bot.key}/consecutive-limits" class="link">🚫 Consecutive</a>
-        <a href="${PANEL_BASE}/bot/${bot.key}/messages" class="link">📨 Messages</a>
-        <a href="${PANEL_BASE}/bot/${bot.key}/ai-engagement" class="link">🤖 AI</a>
-        <a href="${PANEL_BASE}/bot/${bot.key}/commands" class="link">📚 Commands</a>
-        <a href="${PANEL_BASE}/bot/${bot.key}/accuracy" class="link">🎯 Accuracy</a>
-        <a href="${PANEL_BASE}/verification-dashboard?bot=${bot.key}" class="link">🔍 Verification</a>
-        <form method="post" action="${PANEL_BASE}/logout" style="display:inline;margin:0"><button class="btn" type="submit">Logout</button></form>
-      </div>
-    </div>
+  <div class="dashboard-wrapper">
+    ${generateSidebarHTML({
+      title: bot.name,
+      subtitle: 'Statistics',
+      icon: '📊',
+      botKey: bot.key,
+      PANEL_BASE,
+      currentPage: 'stats'
+    })}
 
-    <div class="card">
-      <div class="card-title">Overview</div>
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-value" id="totalUsers">-</div>
-          <div class="stat-label">Total Users</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value" id="totalMessages">-</div>
-          <div class="stat-label">Total Messages</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value" id="avgMessages">-</div>
-          <div class="stat-label">Avg per User</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value" id="topCount">-</div>
-          <div class="stat-label">Top User Count</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">Filters & Search</div>
-      
-      <div class="filters">
-        <div class="form-group mb-0">
-          <label for="searchInput">Search (username or ID)</label>
-          <input id="searchInput" type="text" placeholder="Find user..." />
-        </div>
-        <div class="form-group mb-0">
-          <label for="sortBy">Sort By</label>
-          <select id="sortBy">
-            <option value="count">Message Count (High to Low)</option>
-            <option value="username">Username (A to Z)</option>
-            <option value="recent">Recently Seen</option>
-          </select>
-        </div>
-        <div class="form-group mb-0">
-          <label for="guildId">Guild ID <span style="color:var(--text-muted);font-size:12px">(required for adjustments)</span></label>
-          <input id="guildId" type="text" placeholder="Enter Guild ID for filtering/adjustments" />
-        </div>
+    <main class="main-scroll-container">
+      <div class="scroll-progress">
+        <div class="scroll-progress-bar" id="scrollProgressBar"></div>
       </div>
 
-      <div class="toolbar">
-        <button class="btn btn-primary" id="refreshBtn">🔄 Refresh</button>
-        <button class="btn btn-secondary" id="exportBtn" title="Export as CSV">📥 Export</button>
-        <div class="toolbar-info">
-          <span id="loadingStatus"></span>
-        </div>
-      </div>
+      <div data-scroll-container id="scrollContainer">
+        <section class="panel-section" id="stats" data-scroll-section>
+          <div class="section-header" data-scroll data-scroll-class="is-inview">
+            <h1 class="section-title"><span>📊</span> User Statistics</h1>
+            <p class="section-subtitle">Message count leaderboard with Discord usernames</p>
+          </div>
 
-      <div id="errorMsg" class="error" style="display:none"></div>
+          <div class="stats-overview" data-scroll data-scroll-class="is-inview">
+            <div class="stat-card">
+              <div class="stat-value" id="totalUsers">-</div>
+              <div class="stat-label">Total Users</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="totalMessages">-</div>
+              <div class="stat-label">Total Messages</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="avgMessages">-</div>
+              <div class="stat-label">Avg per User</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="topCount">-</div>
+              <div class="stat-label">Top User Count</div>
+            </div>
+          </div>
 
-      <div class="table-container">
-        <div id="statsLoading" class="loading">Loading user statistics...</div>
-        <table id="statsTable" style="display:none">
-          <thead>
-            <tr>
-              <th style="width:40px">Rank</th>
-              <th>User</th>
-              <th style="text-align:right">Messages</th>
-              <th style="text-align:right;width:200px">Actions</th>
-            </tr>
-          </thead>
-          <tbody id="statsBody">
-          </tbody>
-        </table>
-        <div id="emptyMsg" class="empty" style="display:none">
-          No users found. Start counting messages!
-        </div>
-      </div>
+          <div class="content-card" data-scroll data-scroll-class="is-inview">
+            <div class="card-title">Filters, Leaderboard & Channel Management</div>
 
-      <div class="pagination" id="pagination" style="display:none">
-        <button id="prevBtn" class="btn btn-icon">← Previous</button>
-        <span class="current">Page <span id="currentPage">1</span> of <span id="totalPages">1</span></span>
-        <button id="nextBtn" class="btn btn-icon">Next →</button>
+            <div class="split-grid">
+              <div>
+                <div class="filters">
+                  <div class="form-group mb-0">
+                    <label for="searchInput">Search (username or ID)</label>
+                    <input id="searchInput" type="text" placeholder="Find user..." />
+                  </div>
+                  <div class="form-group mb-0">
+                    <label for="sortBy">Sort By</label>
+                    <select id="sortBy">
+                      <option value="count">Message Count (High to Low)</option>
+                      <option value="username">Username (A to Z)</option>
+                      <option value="recent">Recently Seen</option>
+                    </select>
+                  </div>
+                  <div class="form-group mb-0">
+                    <label for="guildId">Guild ID</label>
+                    <input id="guildId" type="text" placeholder="Enter Guild ID" />
+                  </div>
+                </div>
+
+                <div class="toolbar">
+                  <button class="btn btn-primary" id="refreshBtn">🔄 Refresh</button>
+                  <button class="btn btn-secondary" id="exportBtn">📥 Export CSV</button>
+                  <div class="toolbar-info">
+                    <span id="loadingStatus"></span>
+                  </div>
+                </div>
+
+                <div id="errorMsg" class="error" style="display:none"></div>
+
+                <div class="table-container">
+                  <div id="statsLoading" class="loading">Loading user statistics...</div>
+                  <table id="statsTable" style="display:none">
+                    <thead>
+                      <tr>
+                        <th style="width:50px">Rank</th>
+                        <th>User</th>
+                        <th style="text-align:right">Messages</th>
+                        <th style="text-align:right;width:200px">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody id="statsBody"></tbody>
+                  </table>
+                  <div id="emptyMsg" class="empty" style="display:none">No users found.</div>
+                </div>
+
+                <div class="pagination" id="pagination" style="display:none">
+                  <button id="prevBtn" class="btn btn-secondary">← Previous</button>
+                  <span>Page <span id="currentPage">1</span> of <span id="totalPages">1</span></span>
+                  <button id="nextBtn" class="btn btn-secondary">Next →</button>
+                </div>
+              </div>
+
+              <div>
+                <div class="content-card" style="margin:0">
+                  <div class="card-title">Channel-centric Controls</div>
+                  <div class="mini-help">Select a channel to view per-user counts, apply per-channel adjustments, and run recount actions.</div>
+
+                  <div class="channel-row" style="margin-top:14px">
+                    <div class="form-group mb-0" style="min-width:240px;flex:1">
+                      <label for="channelSelect">Channel</label>
+                      <select id="channelSelect">
+                        <option value="">— Select channel —</option>
+                      </select>
+                    </div>
+
+                    <div class="form-group mb-0" style="min-width:220px;flex:1">
+                      <label for="channelIdInput">Channel ID (optional)</label>
+                      <input id="channelIdInput" type="text" placeholder="Paste Channel ID" />
+                    </div>
+
+                    <div class="channel-actions">
+                      <button class="btn btn-secondary" id="loadChannelsBtn">📋 Load Channels</button>
+                      <button class="btn btn-secondary" id="loadChannelUsersBtn">👥 Load Users</button>
+                    </div>
+                  </div>
+
+                  <div class="channel-actions" style="margin-top:12px">
+                    <button class="btn btn-primary" id="recalcDbBtn">🧮 Recalculate (DB)</button>
+                    <button class="btn btn-secondary" id="backfillChannelBtn">🛰️ Backfill Channel (Discord)</button>
+                    <span class="pill"><span class="mono">Mode C</span> = DB recalc + Discord backfill</span>
+                  </div>
+
+                  <div id="channelStatus" class="mini-help" style="margin-top:10px"></div>
+                  <div id="channelError" class="error" style="display:none"></div>
+
+                  <div class="table-container" style="margin-top:14px">
+                    <div id="channelLoading" class="loading" style="display:none">Loading channel users…</div>
+                    <table id="channelUsersTable" style="display:none">
+                      <thead>
+                        <tr>
+                          <th>User</th>
+                          <th style="text-align:right">Base</th>
+                          <th style="text-align:right">Adj</th>
+                          <th style="text-align:right">Effective</th>
+                          <th style="text-align:right;width:220px">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody id="channelUsersBody"></tbody>
+                    </table>
+                    <div id="channelEmpty" class="empty" style="display:none">No per-user stats for this channel.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
-    </div>
+    </main>
   </div>
+
+  ${generateSidebarScripts()}
 
   <script>
     const PANEL_BASE = '${PANEL_BASE}';
@@ -132,16 +214,13 @@ function generateStatsPage(bot, PANEL_BASE) {
     const itemsPerPage = 50;
     let allUsers = [];
     let filteredUsers = [];
+    let lastChannelUsers = [];
 
-    // Fetch and display stats
     async function loadStats() {
       const loading = document.getElementById('statsLoading');
       const table = document.getElementById('statsTable');
       const empty = document.getElementById('emptyMsg');
       const error = document.getElementById('errorMsg');
-      const searchInput = document.getElementById('searchInput');
-      const sortBy = document.getElementById('sortBy');
-      const guildId = document.getElementById('guildId');
 
       loading.style.display = 'block';
       table.style.display = 'none';
@@ -151,31 +230,22 @@ function generateStatsPage(bot, PANEL_BASE) {
       try {
         const query = new URLSearchParams({
           limit: 1000,
-          sortBy: sortBy.value,
-          guildId: guildId.value || ''
+          sortBy: document.getElementById('sortBy').value,
+          guildId: document.getElementById('guildId').value || ''
         });
 
-        const response = await fetch(
-          PANEL_BASE + '/api/' + BOT_KEY + '/stats/users?' + query
-        );
-
-        if (!response.ok) {
-          throw new Error('Failed to fetch statistics');
-        }
+        const response = await fetch(PANEL_BASE + '/api/' + BOT_KEY + '/stats/users?' + query);
+        if (!response.ok) throw new Error('Failed to fetch statistics');
 
         const data = await response.json();
         allUsers = data.users || [];
 
-        // Update overview stats
         if (allUsers.length > 0) {
           const totalMessages = allUsers.reduce((sum, u) => sum + (u.message_count || 0), 0);
-          const avgMessages = Math.round(totalMessages / allUsers.length);
-          const topCount = allUsers[0]?.message_count || 0;
-
           document.getElementById('totalUsers').textContent = allUsers.length.toLocaleString();
           document.getElementById('totalMessages').textContent = totalMessages.toLocaleString();
-          document.getElementById('avgMessages').textContent = avgMessages.toLocaleString();
-          document.getElementById('topCount').textContent = topCount.toLocaleString();
+          document.getElementById('avgMessages').textContent = Math.round(totalMessages / allUsers.length).toLocaleString();
+          document.getElementById('topCount').textContent = (allUsers[0]?.message_count || 0).toLocaleString();
         }
 
         applyFiltersAndRender();
@@ -187,15 +257,11 @@ function generateStatsPage(bot, PANEL_BASE) {
     }
 
     function applyFiltersAndRender() {
-      const searchInput = document.getElementById('searchInput');
-      const search = searchInput.value.toLowerCase();
-      
-      // Apply search filter
+      const search = document.getElementById('searchInput').value.toLowerCase();
       filteredUsers = allUsers.filter(user => {
         const username = user.username || user.user_id;
         return username.toLowerCase().includes(search) || user.user_id.includes(search);
       });
-
       currentPage = 1;
       renderTable();
     }
@@ -213,14 +279,12 @@ function generateStatsPage(bot, PANEL_BASE) {
         table.style.display = 'none';
         empty.style.display = 'block';
         pagination.style.display = 'none';
-        document.getElementById('loadingStatus').textContent = '';
         return;
       }
 
       table.style.display = 'table';
       empty.style.display = 'none';
 
-      // Paginate
       const totalPages = Math.ceil(filteredUsers.length / itemsPerPage);
       const startIdx = (currentPage - 1) * itemsPerPage;
       const endIdx = startIdx + itemsPerPage;
@@ -229,35 +293,16 @@ function generateStatsPage(bot, PANEL_BASE) {
       tbody.innerHTML = pageUsers.map((user, idx) => {
         const rank = startIdx + idx + 1;
         const username = user.username || 'Unknown';
-        const avatar = username.charAt(0).toUpperCase();
-        const safeUserId = escapeHtml(user.user_id);
-        const safeUsername = escapeHtml(username);
-        return (
-          '<tr>' +
-            '<td class="rank">#' + rank + '</td>' +
-            '<td>' +
-              '<div class="user-cell">' +
-                '<div class="avatar">' + avatar + '</div>' +
-                '<div>' +
-                  '<div class="username">' + escapeHtml(username) + '</div>' +
-                  '<div class="userid">' + user.user_id + '</div>' +
-                '</div>' +
-              '</div>' +
-            '</td>' +
-            '<td class="count">' + user.message_count.toLocaleString() + '</td>' +
-            '<td style="text-align:right; display:flex; gap:8px; justify-content:flex-end">' +
-              '<button class="btn btn-icon" data-uid="' + safeUserId + '" onclick="adjustUserCount(this.dataset.uid)">Adjust</button>' +
-              '<button class="btn btn-icon" data-uid="' + safeUserId + '" data-uname="' + safeUsername + '" onclick="showChannelBreakdown(this.dataset.uid,this.dataset.uname)">Channels</button>' +
-            '</td>' +
-          '</tr>'
-        );
+        return '<tr>' +
+          '<td class="rank">#' + rank + '</td>' +
+          '<td><div class="user-cell"><div class="avatar">' + username.charAt(0).toUpperCase() + '</div><div><div class="username">' + escapeHtml(username) + '</div><div class="userid">' + user.user_id + '</div></div></div></td>' +
+          '<td class="count">' + user.message_count.toLocaleString() + '</td>' +
+          '<td style="text-align:right"><button class="btn btn-secondary btn-icon" onclick="adjustUserCount(\\'' + user.user_id + '\\')">Adjust</button> <button class="btn btn-secondary btn-icon" onclick="showChannelBreakdown(\\'' + user.user_id + '\\',\\'' + escapeHtml(username) + '\\')">Channels</button></td>' +
+        '</tr>';
       }).join('');
 
-      // Update status
-      document.getElementById('loadingStatus').textContent = 
-        'Showing ' + (startIdx + 1) + ' to ' + Math.min(endIdx, filteredUsers.length) + ' of ' + filteredUsers.length + ' users';
+      document.getElementById('loadingStatus').textContent = 'Showing ' + (startIdx + 1) + '-' + Math.min(endIdx, filteredUsers.length) + ' of ' + filteredUsers.length;
 
-      // Pagination
       if (totalPages > 1) {
         pagination.style.display = 'flex';
         document.getElementById('currentPage').textContent = currentPage;
@@ -270,197 +315,280 @@ function generateStatsPage(bot, PANEL_BASE) {
     }
 
     function escapeHtml(text) {
-      const map = {
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#039;'
-      };
-      return text.replace(/[&<>"']/g, m => map[m]);
+      return text.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#039;"})[m]);
     }
 
-
     function exportCSV() {
-      if (filteredUsers.length === 0) {
-        alert('No data to export');
+      if (!filteredUsers.length) return alert('No data');
+      const rows = filteredUsers.map((u, i) => [i + 1, '"' + (u.username || 'Unknown').replace(/"/g, '""') + '"', u.user_id, u.message_count].join(','));
+      const csv = ['Rank,Username,User ID,Messages', ...rows].join('\\n');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+      a.download = 'stats-' + new Date().toISOString().split('T')[0] + '.csv';
+      a.click();
+    }
+
+    async function adjustUserCount(userId) {
+      let guildId = document.getElementById('guildId')?.value || DEFAULT_GUILD_ID;
+      if (!guildId) return alert('Enter Guild ID first');
+      const mode = prompt('Adjustment: +N, -N, or =N');
+      if (!mode) return;
+      const payload = { guildId, userId };
+      if (mode.startsWith('=')) payload.setTo = parseInt(mode.slice(1));
+      else payload.delta = parseInt(mode);
+      const res = await fetch(PANEL_BASE + '/api/' + BOT_KEY + '/stats/adjust', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      });
+      if (res.ok) { alert('Done'); loadStats(); } else alert('Error');
+    }
+
+    async function showChannelBreakdown(userId, username) {
+      let guildId = document.getElementById('guildId')?.value || DEFAULT_GUILD_ID;
+      if (!guildId) return alert('Enter Guild ID first');
+      const res = await fetch(PANEL_BASE + '/api/' + BOT_KEY + '/stats/user-channels?guildId=' + guildId + '&userId=' + userId);
+      const data = await res.json();
+      if (!data.channels?.length) return alert('No channel data');
+      alert(username + '\\n\\n' + data.channels.map((c, i) => (i + 1) + '. #' + c.channel_id + ' — ' + c.count + ' msgs').join('\\n'));
+    }
+
+    function getGuildIdOrAlert() {
+      const guildId = document.getElementById('guildId')?.value || DEFAULT_GUILD_ID;
+      if (!guildId) {
+        alert('Enter Guild ID first');
+        return null;
+      }
+      return guildId;
+    }
+
+    function getSelectedChannelId() {
+      const input = (document.getElementById('channelIdInput')?.value || '').trim();
+      const selected = (document.getElementById('channelSelect')?.value || '').trim();
+      return input || selected || '';
+    }
+
+    async function loadChannels() {
+      const channelError = document.getElementById('channelError');
+      const channelStatus = document.getElementById('channelStatus');
+      channelError.style.display = 'none';
+      channelStatus.textContent = '';
+
+      const guildId = getGuildIdOrAlert();
+      if (!guildId) return;
+
+      channelStatus.textContent = 'Loading channels…';
+      const res = await fetch(PANEL_BASE + '/api/' + BOT_KEY + '/stats/channels?guildId=' + encodeURIComponent(guildId));
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        channelError.textContent = '❌ ' + (data.error || 'Failed to load channels');
+        channelError.style.display = 'block';
+        channelStatus.textContent = '';
         return;
       }
 
-      const rows = filteredUsers.map((user, idx) => {
-        const username = (user.username || 'Unknown').replace(/"/g, '""');
-        return [idx + 1, '"' + username + '"', user.user_id, user.message_count].join(',');
-      });
-      const csv = ['Rank,Username,User ID,Message Count', ...rows].join('\\n');
+      const select = document.getElementById('channelSelect');
+      const channels = data.channels || [];
+      select.innerHTML = '<option value="">— Select channel —</option>' + channels.map((c) => {
+        const label = (c.channel_name ? '#' + c.channel_name : '#' + c.channel_id) + ' — ' + (c.effective_count || 0).toLocaleString();
+        return '<option value="' + c.channel_id + '">' + escapeHtml(label) + '</option>';
+      }).join('');
 
-      const blob = new Blob([csv], { type: 'text/csv' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'message-stats-' + new Date().toISOString().split('T')[0] + '.csv';
-      a.click();
-      URL.revokeObjectURL(url);
+      channelStatus.textContent = 'Loaded ' + channels.length + ' channels.';
     }
 
-    // Event listeners
+    async function loadChannelUsers() {
+      const channelError = document.getElementById('channelError');
+      const channelStatus = document.getElementById('channelStatus');
+      const channelLoading = document.getElementById('channelLoading');
+      const table = document.getElementById('channelUsersTable');
+      const empty = document.getElementById('channelEmpty');
+      const tbody = document.getElementById('channelUsersBody');
+
+      channelError.style.display = 'none';
+      channelStatus.textContent = '';
+      channelLoading.style.display = 'block';
+      table.style.display = 'none';
+      empty.style.display = 'none';
+      tbody.innerHTML = '';
+
+      const guildId = getGuildIdOrAlert();
+      if (!guildId) {
+        channelLoading.style.display = 'none';
+        return;
+      }
+
+      const channelId = getSelectedChannelId();
+      if (!channelId) {
+        channelLoading.style.display = 'none';
+        alert('Select or enter a Channel ID');
+        return;
+      }
+
+      const res = await fetch(
+        PANEL_BASE + '/api/' + BOT_KEY + '/stats/channel-users?guildId=' + encodeURIComponent(guildId) +
+        '&channelId=' + encodeURIComponent(channelId) + '&limit=200&offset=0&sortBy=count'
+      );
+      const data = await res.json();
+      channelLoading.style.display = 'none';
+
+      if (!res.ok || !data.ok) {
+        channelError.textContent = '❌ ' + (data.error || 'Failed to load channel users');
+        channelError.style.display = 'block';
+        return;
+      }
+
+      const users = data.users || [];
+      lastChannelUsers = users;
+      if (!users.length) {
+        empty.style.display = 'block';
+        channelStatus.textContent = 'No users for this channel.';
+        return;
+      }
+
+      table.style.display = 'table';
+      tbody.innerHTML = users.map((u) => {
+        const username = u.username || u.user_id;
+        const base = Number(u.base_count || 0);
+        const adj = Number(u.adjustment || 0);
+        const eff = Number(u.effective_count || 0);
+        return '<tr>' +
+          '<td><div class="user-cell"><div class="avatar">' + escapeHtml(String(username).charAt(0).toUpperCase()) + '</div><div><div class="username">' + escapeHtml(String(username)) + '</div><div class="userid">' + escapeHtml(String(u.user_id)) + '</div></div></div></td>' +
+          '<td class="count" style="color:var(--text);text-align:right">' + base.toLocaleString() + '</td>' +
+          '<td class="count" style="color:var(--text-muted);text-align:right">' + (adj >= 0 ? '+' : '') + adj.toLocaleString() + '</td>' +
+          '<td class="count" style="text-align:right">' + eff.toLocaleString() + '</td>' +
+          '<td style="text-align:right">' +
+            '<button class="btn btn-secondary btn-icon" onclick="adjustChannelUser(\'' + escapeHtml(String(u.user_id)) + '\')">Adjust</button>' +
+            ' <button class="btn btn-secondary btn-icon" onclick="setChannelUser(\'' + escapeHtml(String(u.user_id)) + '\')">Set</button>' +
+          '</td>' +
+        '</tr>';
+      }).join('');
+
+      channelStatus.textContent = 'Loaded ' + users.length + ' users for channel ' + channelId + '.';
+    }
+
+    async function adjustChannelUser(userId) {
+      const guildId = getGuildIdOrAlert();
+      if (!guildId) return;
+      const channelId = getSelectedChannelId();
+      if (!channelId) return alert('Select or enter a Channel ID');
+
+      const mode = prompt('Channel adjustment delta: +N or -N');
+      if (!mode) return;
+      const delta = parseInt(mode, 10);
+      if (!Number.isFinite(delta) || delta === 0) return alert('Invalid delta');
+
+      const res = await fetch(PANEL_BASE + '/api/' + BOT_KEY + '/stats/channel-adjust', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guildId, channelId, userId, delta })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) return alert('Error: ' + (data.error || 'Failed'));
+      await loadStats();
+      await loadChannelUsers();
+    }
+
+    async function setChannelUser(userId) {
+      const guildId = getGuildIdOrAlert();
+      if (!guildId) return;
+      const channelId = getSelectedChannelId();
+      if (!channelId) return alert('Select or enter a Channel ID');
+
+      const mode = prompt('Set effective channel count to =N (non-negative)');
+      if (!mode) return;
+      const setTo = parseInt(mode.replace(/^=/, ''), 10);
+      if (!Number.isFinite(setTo) || setTo < 0) return alert('Invalid setTo');
+
+      const res = await fetch(PANEL_BASE + '/api/' + BOT_KEY + '/stats/channel-adjust', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guildId, channelId, userId, setTo })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) return alert('Error: ' + (data.error || 'Failed'));
+      await loadStats();
+      await loadChannelUsers();
+    }
+
+    async function recalcDb() {
+      const guildId = getGuildIdOrAlert();
+      if (!guildId) return;
+      if (!confirm('Recalculate from DB (message_index) for this guild?')) return;
+
+      const channelStatus = document.getElementById('channelStatus');
+      channelStatus.textContent = 'Recalculating…';
+      const res = await fetch(PANEL_BASE + '/api/' + BOT_KEY + '/stats/recalculate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guildId })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        alert('Error: ' + (data.error || 'Failed to recalculate'));
+        channelStatus.textContent = '';
+        return;
+      }
+
+      channelStatus.textContent = 'Recalculated in ' + (data.durationMs || 0) + 'ms.';
+      await loadStats();
+      await loadChannels();
+      await loadChannelUsers();
+    }
+
+    async function backfillChannel() {
+      const guildId = getGuildIdOrAlert();
+      if (!guildId) return;
+      const channelId = getSelectedChannelId();
+      if (!channelId) return alert('Select or enter a Channel ID');
+
+      const maxMessages = prompt('Max messages to scan (default 25000):');
+      const payload = { guildId, channelId };
+      if (maxMessages && Number.isFinite(Number(maxMessages))) payload.maxMessages = Number(maxMessages);
+
+      const channelStatus = document.getElementById('channelStatus');
+      channelStatus.textContent = 'Backfilling from Discord…';
+      const res = await fetch(PANEL_BASE + '/api/' + BOT_KEY + '/stats/backfill-channel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        alert('Error: ' + (data.error || 'Failed to backfill'));
+        channelStatus.textContent = '';
+        return;
+      }
+
+      channelStatus.textContent = 'Backfilled ' + (data.processed || 0) + ' messages in ' + (data.durationMs || 0) + 'ms.';
+      await loadStats();
+      await loadChannels();
+      await loadChannelUsers();
+    }
+
     document.getElementById('refreshBtn').addEventListener('click', loadStats);
     document.getElementById('exportBtn').addEventListener('click', exportCSV);
     document.getElementById('searchInput').addEventListener('input', applyFiltersAndRender);
     document.getElementById('sortBy').addEventListener('change', loadStats);
     document.getElementById('guildId').addEventListener('change', loadStats);
-    document.getElementById('prevBtn').addEventListener('click', () => {
-      if (currentPage > 1) {
-        currentPage--;
-        renderTable();
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      }
+    document.getElementById('prevBtn').addEventListener('click', () => { if (currentPage > 1) { currentPage--; renderTable(); } });
+    document.getElementById('nextBtn').addEventListener('click', () => { if (currentPage < Math.ceil(filteredUsers.length / itemsPerPage)) { currentPage++; renderTable(); } });
+
+    document.getElementById('loadChannelsBtn').addEventListener('click', loadChannels);
+    document.getElementById('loadChannelUsersBtn').addEventListener('click', loadChannelUsers);
+    document.getElementById('channelSelect').addEventListener('change', () => {
+      document.getElementById('channelIdInput').value = '';
+      loadChannelUsers();
     });
-    document.getElementById('nextBtn').addEventListener('click', () => {
-      const totalPages = Math.ceil(filteredUsers.length / itemsPerPage);
-      if (currentPage < totalPages) {
-        currentPage++;
-        renderTable();
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      }
-    });
+    document.getElementById('recalcDbBtn').addEventListener('click', recalcDb);
+    document.getElementById('backfillChannelBtn').addEventListener('click', backfillChannel);
 
-    // Live Stats Auto-Update (every 10 seconds for leaderboard)
-    let updateInterval;
-
-    async function fetchLiveStats() {
-      try {
-        const guildId = document.getElementById('guildId')?.value || '';
-        const url = PANEL_BASE + '/api/' + BOT_KEY + '/stats/live?guildId=' + encodeURIComponent(guildId);
-        const response = await fetch(url);
-        const data = await response.json();
-        if (data.ok && data.stats) {
-          updateStatsDisplay(data.stats);
-        }
-      } catch (err) {
-        console.error('Failed to fetch live stats:', err);
-      }
-    }
-
-    function updateStatsDisplay(stats) {
-      // Update overview stats
-      document.getElementById('totalUsers').textContent = stats.uniqueUsers.toLocaleString();
-      document.getElementById('totalMessages').textContent = stats.totalMessages.toLocaleString();
-      const avg = stats.uniqueUsers > 0 ? Math.round(stats.totalMessages / stats.uniqueUsers) : 0;
-      document.getElementById('avgMessages').textContent = avg.toLocaleString();
-    }
-
-    function startLiveStats() {
-      fetchLiveStats(); // Fetch immediately
-      updateInterval = setInterval(fetchLiveStats, 10000); // Then every 10 seconds
-    }
-
-    function stopLiveStats() {
-      if (updateInterval) clearInterval(updateInterval);
-    }
-
-    // Start polling when page loads
     document.addEventListener('DOMContentLoaded', () => {
-      // Initialize guild ID from URL parameters, or use default from bot config
-      const urlParams = new URLSearchParams(window.location.search);
-      const urlGuildId = urlParams.get('guildId') || DEFAULT_GUILD_ID;
-      if (urlGuildId) {
-        const guildIdInput = document.getElementById('guildId');
-        if (guildIdInput) {
-          guildIdInput.value = urlGuildId;
-          console.log('Guild ID set to:', urlGuildId);
-        }
-      }
-      startLiveStats();
+      const urlGuildId = new URLSearchParams(window.location.search).get('guildId') || DEFAULT_GUILD_ID;
+      if (urlGuildId) document.getElementById('guildId').value = urlGuildId;
       loadStats();
     });
-    
-    // Stop polling when user leaves
-    window.addEventListener('beforeunload', stopLiveStats);
-
-    // Adjust user count helper
-    async function adjustUserCount(userId) {
-      try {
-        let guildId = document.getElementById('guildId')?.value?.trim() || '';
-        console.log('Guild ID from input:', guildId);
-        
-        // Fallback: get guild ID from URL, or use default
-        if (!guildId) {
-          const urlParams = new URLSearchParams(window.location.search);
-          guildId = urlParams.get('guildId') || DEFAULT_GUILD_ID;
-          console.log('Guild ID from URL/default:', guildId);
-        }
-        
-        if (!guildId) {
-          const guildIdInput = document.getElementById('guildId');
-          alert('Please enter a Guild ID in the "Guild ID (optional)" filter field above before adjusting message counts.\\n\\nThis is required to specify which guild/server the user belongs to.');
-          if (guildIdInput) {
-            guildIdInput.focus();
-            guildIdInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }
-          return;
-        }
-        
-        console.log('Using guild ID:', guildId, 'for user:', userId);
-        const mode = prompt('Enter adjustment: "+N" to add, "-N" to subtract, or "=N" to set absolute value (e.g., +5, -3, =120).');
-        if (!mode) return;
-        const trimmed = mode.trim();
-        let payload = { guildId, userId };
-        if (trimmed.startsWith('=')) {
-          const val = parseInt(trimmed.slice(1), 10);
-          if (!Number.isFinite(val) || val < 0) throw new Error('Invalid absolute value');
-          payload.setTo = val;
-        } else {
-          const val = parseInt(trimmed, 10);
-          if (!Number.isFinite(val) || val === 0) throw new Error('Invalid delta');
-          payload.delta = val;
-        }
-        const res = await fetch(PANEL_BASE + '/api/' + BOT_KEY + '/stats/adjust', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        if (!res.ok) throw new Error((await res.json()).error || 'Failed to adjust');
-        alert('Adjusted. New count: ' + (await res.json()).messageCount);
-        await loadStats();
-      } catch (err) {
-        alert('Error: ' + err.message);
-      }
-    }
-
-    async function showChannelBreakdown(userId, username) {
-      try {
-        let guildId = document.getElementById('guildId')?.value || '';
-        if (!guildId) {
-          const urlParams = new URLSearchParams(window.location.search);
-          guildId = urlParams.get('guildId') || DEFAULT_GUILD_ID;
-        }
-        if (!guildId) {
-          alert('Please set Guild ID first.');
-          return;
-        }
-
-        const res = await fetch(PANEL_BASE + '/api/' + BOT_KEY + '/stats/user-channels?guildId=' + encodeURIComponent(guildId) + '&userId=' + encodeURIComponent(userId));
-        if (!res.ok) throw new Error((await res.json()).error || 'Failed to fetch channel breakdown');
-        const data = await res.json();
-
-        if (!data.channels?.length) {
-          alert('No channel breakdown available (channel data not yet collected for this user).');
-          return;
-        }
-
-        const lines = data.channels.map((c, idx) => {
-          const channelLabel = c.channel_id || 'unknown';
-          return (idx + 1) + '. #' + channelLabel + ' — ' + c.count.toLocaleString() + ' msgs';
-        });
-        alert('Channel breakdown for ' + (username || userId) + ':\\n\\n' + lines.join('\\n'));
-      } catch (err) {
-        alert('Error loading channels: ' + err.message);
-      }
-    }
   </script>
 </body>
-</html>
-  `;
+</html>`;
 }
 
 module.exports = { generateStatsPage };

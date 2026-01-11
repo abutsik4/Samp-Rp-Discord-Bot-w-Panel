@@ -136,11 +136,21 @@ class PageCache {
       }
 
       if (cleaned > 0) {
-        console.log(`[Page Cache] Cleaned ${cleaned} expired entries`);
+        if (process.env.PAGE_CACHE_LOG !== '0') {
+          console.log(`[Page Cache] Cleaned ${cleaned} expired entries`);
+        }
       }
     }, intervalMs);
 
-    console.log('[Page Cache] Auto-cleanup started');
+    // Do not keep the Node event loop alive solely for cache cleanup.
+    // This is important for unit tests and one-off scripts.
+    if (typeof this.cleanupInterval?.unref === 'function') {
+      this.cleanupInterval.unref();
+    }
+
+    if (process.env.PAGE_CACHE_LOG !== '0') {
+      console.log('[Page Cache] Auto-cleanup started');
+    }
   }
 
   /**
@@ -150,7 +160,9 @@ class PageCache {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
-      console.log('[Page Cache] Auto-cleanup stopped');
+      if (process.env.PAGE_CACHE_LOG !== '0') {
+        console.log('[Page Cache] Auto-cleanup stopped');
+      }
     }
   }
 }
@@ -160,10 +172,16 @@ const leaderboardCache = new PageCache(300); // 5 minutes for leaderboard pages
 const statsCache = new PageCache(60); // 1 minute for stats pages
 const analyticsCache = new PageCache(600); // 10 minutes for analytics
 
-// Start auto-cleanup
-leaderboardCache.startCleanup();
-statsCache.startCleanup();
-analyticsCache.startCleanup();
+// Start auto-cleanup (skip during `node --test` runs unless explicitly forced)
+const isNodeTestRun =
+  (Array.isArray(process.execArgv) && process.execArgv.includes('--test')) ||
+  (Array.isArray(process.argv) && process.argv.includes('--test'));
+
+if (process.env.PAGE_CACHE_AUTOCLEANUP !== '0' && !isNodeTestRun) {
+  leaderboardCache.startCleanup();
+  statsCache.startCleanup();
+  analyticsCache.startCleanup();
+}
 
 module.exports = {
   PageCache,

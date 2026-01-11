@@ -39,6 +39,7 @@ const { generateAccuracyMonitorPage } = require("./web/accuracy-monitor-page");
 const { generateWhitelistPage } = require("./web/whitelist-page");
 const { generateAutoModPage } = require("./web/automod-page");
 const { generateHistoryPage } = require("./web/history-page");
+const { generateDebugReportsPage } = require("./web/debug-reports-page");
 const { generateSampServersPage } = require("./web/samp-servers-page");
 const { SAMPStatusTracker } = require("./features/samp-status");
 require("dotenv").config();
@@ -49,6 +50,9 @@ const rateLimit = require("express-rate-limit");
 const session = require("express-session");
 const SQLiteStore = require("connect-sqlite3")(session);
 const bcrypt = require("bcryptjs");
+
+// Structured logging
+const { createLogger, newTraceId } = require("./utils/logger");
 
 // New feature modules
 const { dbRun: dbRunHelper, dbGet: dbGetHelper, dbAll: dbAllHelper } = require("./utils/db-helpers");
@@ -155,14 +159,20 @@ const dbPath = process.env.STATS_DB_PATH
 const db = new sqlite3.Database(dbPath);
 
 // Promisified helpers (using shared module)
-function dbRun(sql, params = []) {
-  return dbRunHelper(db, sql, params);
+// Supports both signatures:
+// - (sql, params)
+// - (dbInstance, sql, params)
+function dbRun(sqlOrDb, sqlOrParams = [], params = []) {
+  if (typeof sqlOrDb === 'string') return dbRunHelper(db, sqlOrDb, sqlOrParams);
+  return dbRunHelper(sqlOrDb, sqlOrParams, params);
 }
-function dbGet(sql, params = []) {
-  return dbGetHelper(db, sql, params);
+function dbGet(sqlOrDb, sqlOrParams = [], params = []) {
+  if (typeof sqlOrDb === 'string') return dbGetHelper(db, sqlOrDb, sqlOrParams);
+  return dbGetHelper(sqlOrDb, sqlOrParams, params);
 }
-function dbAll(sql, params = []) {
-  return dbAllHelper(db, sql, params);
+function dbAll(sqlOrDb, sqlOrParams = [], params = []) {
+  if (typeof sqlOrDb === 'string') return dbAllHelper(db, sqlOrDb, sqlOrParams);
+  return dbAllHelper(sqlOrDb, sqlOrParams, params);
 }
 
 // KV helpers for scheduler state
@@ -251,6 +261,30 @@ async function initDb() {
     )
   `);
 
+  // Per-channel manual adjustments (preserve channel-specific edits)
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS channel_user_adjustments (
+      guild_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      adjustment INTEGER NOT NULL DEFAULT 0,
+      updated_by TEXT,
+      reason TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (guild_id, channel_id, user_id)
+    )
+  `);
+
+  await dbRun(`
+    CREATE INDEX IF NOT EXISTS idx_channel_user_adjustments_user
+    ON channel_user_adjustments(guild_id, user_id)
+  `);
+
+  await dbRun(`
+    CREATE INDEX IF NOT EXISTS idx_channel_user_adjustments_channel
+    ON channel_user_adjustments(guild_id, channel_id)
+  `);
+
   // Panel sent items (messages + embeds)
   await dbRun(`
     CREATE TABLE IF NOT EXISTS panel_sent_items (
@@ -275,6 +309,22 @@ async function initDb() {
   // Helpful indexes for listing/searching
   await dbRun(`CREATE INDEX IF NOT EXISTS idx_panel_sent_items_updated ON panel_sent_items(updated_at)`);
   await dbRun(`CREATE INDEX IF NOT EXISTS idx_panel_sent_items_channel ON panel_sent_items(channel_id)`);
+
+  // Panel debug reports (submitted from in-browser debug overlay)
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS panel_debug_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at TEXT NOT NULL,
+      updated_by TEXT,
+      ip TEXT,
+      user_agent TEXT,
+      url TEXT,
+      client_trace_id TEXT,
+      server_trace_id TEXT,
+      report_json TEXT NOT NULL
+    )
+  `);
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_panel_debug_reports_created_at ON panel_debug_reports(created_at)`);
 
   // Holidays manual table
   await ensureHolidayTable(db);
@@ -378,9 +428,23 @@ async function initDb() {
       operation TEXT NOT NULL CHECK (operation IN ('increment', 'decrement')),
       error TEXT,
       retry_count INTEGER DEFAULT 0,
+      channel_id TEXT,
+      message_created_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
+
+  // Best-effort migration for existing DBs
+  try {
+    await dbRun(`ALTER TABLE message_count_errors ADD COLUMN channel_id TEXT`);
+  } catch (_) {
+    // ignore
+  }
+  try {
+    await dbRun(`ALTER TABLE message_count_errors ADD COLUMN message_created_at TEXT`);
+  } catch (_) {
+    // ignore
+  }
   
   await dbRun(`
     CREATE INDEX IF NOT EXISTS idx_errors_retry 
@@ -2929,12 +2993,21 @@ async function getAllSendableChannels(botClient) {
 const app = express();
 if (TRUST_PROXY) app.set("trust proxy", 1);
 
+const panelHttpLogger = createLogger("panel-http");
+
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json({ limit: "300kb" }));
 app.use(express.urlencoded({ extended: false }));
 
 const publicDir = path.join(__dirname, "..", "public");
 app.use(express.static(publicDir, { index: false }));
+
+// Assets referenced by EJS views as /public/* (bot.js, snow.js, etc.)
+const webPublicDir = path.join(__dirname, "web", "public");
+app.use("/public", express.static(webPublicDir, { index: false }));
+
+// Some browsers still request /favicon.ico even when an SVG favicon is set.
+app.get("/favicon.ico", (req, res) => res.redirect(302, "/icons/panel.svg"));
 
 
 app.set("views", path.join(__dirname, "views"));
@@ -2960,11 +3033,226 @@ app.use(
   })
 );
 
+// Request tracing + structured HTTP logging (panel + APIs)
+app.use((req, res, next) => {
+  const traceId = newTraceId();
+  req.traceId = traceId;
+  res.setHeader("X-Trace-Id", traceId);
+
+  const started = Date.now();
+  const ip = (req.headers["x-forwarded-for"] || req.ip || "").toString().split(",")[0].trim();
+  const ua = (req.headers["user-agent"] || "").toString().slice(0, 220);
+  const user = req.session?.user?.username || null;
+
+  // avoid logging extremely noisy long URLs (but keep enough for debugging)
+  const pathSafe = String(req.originalUrl || req.url || "").slice(0, 2048);
+
+  const isStaticAsset =
+    req.method === "GET" &&
+    (/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff2?|ttf|map)(\?|$)/i.test(pathSafe) ||
+      pathSafe.startsWith("/icons/") ||
+      pathSafe.startsWith("/public/") ||
+      pathSafe.startsWith("/shared.css"));
+
+  const logReq = isStaticAsset ? panelHttpLogger.debug : panelHttpLogger.info;
+  const logRes = isStaticAsset ? panelHttpLogger.debug : panelHttpLogger.info;
+
+  logReq("HTTP request", {
+    traceId,
+    method: req.method,
+    path: pathSafe,
+    ip,
+    user,
+    ua,
+  });
+
+  res.on("finish", () => {
+    const durationMs = Date.now() - started;
+    logRes("HTTP response", {
+      traceId,
+      method: req.method,
+      path: pathSafe,
+      status: res.statusCode,
+      durationMs,
+      ip,
+      user,
+    });
+  });
+
+  next();
+});
+
 // Rate limits
 const loginLimiter = rateLimit({ windowMs: 60_000, max: 10 });
 const apiLimiter = rateLimit({ windowMs: 10_000, max: 40 });
 
 app.get("/health", (req, res) => res.json({ ok: true }));
+
+// In-browser panel debug overlay report ingestion
+app.post(`${PANEL_BASE}/api/debug/report`, requireAuth, apiLimiter, async (req, res) => {
+  try {
+    const report = req.body?.report;
+    if (!report || typeof report !== "object") return res.status(400).json({ error: "report object is required" });
+
+    const reportJson = JSON.stringify(report);
+    if (reportJson.length > 100_000) return res.status(413).json({ error: "report too large" });
+
+    const ip = (req.headers["x-forwarded-for"] || req.ip || "").toString().split(",")[0].trim();
+    const ua = (req.headers["user-agent"] || "").toString().slice(0, 500);
+    const updatedBy = req.session?.user?.username || null;
+
+    await dbRun(
+      `INSERT INTO panel_debug_reports (created_at, updated_by, ip, user_agent, url, client_trace_id, server_trace_id, report_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        new Date().toISOString(),
+        updatedBy,
+        ip,
+        ua,
+        String(report.url || "").slice(0, 2000),
+        String(report.clientTraceId || "").slice(0, 120) || null,
+        req.traceId || null,
+        reportJson,
+      ]
+    );
+
+    panelHttpLogger.info("Panel debug report saved", { traceId: req.traceId, updatedBy, url: report.url || null });
+    return res.json({ ok: true, traceId: req.traceId });
+  } catch (e) {
+    panelHttpLogger.error("Panel debug report error", { traceId: req.traceId, error: e?.message || String(e) });
+    return res.status(500).json({ error: e?.message || "Failed to save report" });
+  }
+});
+
+// Debug reports viewer APIs
+app.get(`${PANEL_BASE}/api/debug/reports`, requireAuth, apiLimiter, async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(req.query.limit || 50, 10), 1), 200);
+    const offset = Math.max(parseInt(req.query.offset || 0, 10), 0);
+    const search = String(req.query.search || "").trim().toLowerCase();
+
+    let sql = `
+      SELECT id, created_at, updated_by, url, client_trace_id, server_trace_id
+      FROM panel_debug_reports
+    `;
+    const params = [];
+
+    let countSql = `SELECT COUNT(*) as total FROM panel_debug_reports`;
+    const countParams = [];
+    if (search) {
+      const where = ` WHERE (LOWER(COALESCE(updated_by,'')) LIKE ? OR LOWER(COALESCE(url,'')) LIKE ? OR LOWER(COALESCE(client_trace_id,'')) LIKE ? OR LOWER(COALESCE(server_trace_id,'')) LIKE ?)`;
+      sql += where;
+      countSql += where;
+      const like = `%${search}%`;
+      params.push(like, like, like, like);
+      countParams.push(like, like, like, like);
+    }
+    sql += ` ORDER BY id DESC LIMIT ? OFFSET ?`;
+    params.push(limit, offset);
+
+    const rows = await dbAll(sql, params);
+    const totalRow = await dbGet(countSql, countParams);
+    return res.json({
+      ok: true,
+      reports: rows || [],
+      pagination: { offset, limit, total: totalRow?.total || 0 }
+    });
+  } catch (e) {
+    panelHttpLogger.error("List debug reports error", { traceId: req.traceId, error: e?.message || String(e) });
+    return res.status(500).json({ error: e?.message || "Failed to list debug reports" });
+  }
+});
+
+app.get(`${PANEL_BASE}/api/debug/reports/:id`, requireAuth, apiLimiter, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid id" });
+
+    const row = await dbGet(
+      `SELECT id, created_at, updated_by, ip, user_agent, url, client_trace_id, server_trace_id, report_json
+       FROM panel_debug_reports
+       WHERE id = ?`,
+      [id]
+    );
+    if (!row) return res.status(404).json({ error: "Not found" });
+
+    let parsed = null;
+    try { parsed = JSON.parse(row.report_json); } catch (_) { parsed = row.report_json; }
+
+    return res.json({
+      ok: true,
+      report: {
+        id: row.id,
+        created_at: row.created_at,
+        updated_by: row.updated_by,
+        ip: row.ip,
+        user_agent: row.user_agent,
+        url: row.url,
+        client_trace_id: row.client_trace_id,
+        server_trace_id: row.server_trace_id,
+        data: parsed,
+      },
+    });
+  } catch (e) {
+    panelHttpLogger.error("Get debug report error", { traceId: req.traceId, error: e?.message || String(e) });
+    return res.status(500).json({ error: e?.message || "Failed to fetch debug report" });
+  }
+});
+
+// Public status endpoint with CORS for landing page at jepsencloud.com
+app.get("/api/status", (req, res) => {
+  // Allow CORS from any origin for public status
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET");
+  
+  const isReady = client && client.isReady();
+  
+  // Get bot info
+  const botInfo = isReady ? {
+    username: client.user?.username || "Unknown",
+    discriminator: client.user?.discriminator || "0",
+    id: client.user?.id || null,
+    avatar: client.user?.displayAvatarURL({ size: 64 }) || null
+  } : null;
+  
+  // Get guilds (servers) the bot is in
+  const guilds = isReady ? client.guilds.cache.map(g => ({
+    id: g.id,
+    name: g.name,
+    memberCount: g.memberCount,
+    icon: g.iconURL({ size: 64 })
+  })) : [];
+  
+  // Uptime
+  const uptime = isReady && client.uptime ? client.uptime : 0;
+  
+  // Helper to format uptime
+  function formatUptime(ms) {
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+    
+    if (days > 0) return `${days}d ${hours % 24}h`;
+    if (hours > 0) return `${hours}h ${minutes % 60}m`;
+    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+    return `${seconds}s`;
+  }
+  
+  res.json({
+    ok: true,
+    bot: {
+      online: isReady,
+      info: botInfo,
+      guilds: guilds,
+      guildCount: guilds.length,
+      uptime: uptime > 0 ? formatUptime(uptime) : "N/A",
+      uptimeMs: uptime,
+      ping: isReady ? client.ws.ping : null
+    },
+    timestamp: new Date().toISOString()
+  });
+});
 
 // Multi-bot registry (future-proof). Today: one bot.
 const bots = [{ key: "samprp", name: "JepsenCloud Bot", kind: "discord", client, guild_id: "537187880842559499" }];
@@ -2979,6 +3267,7 @@ app.get(`${PANEL_BASE}/login`, (req, res) => {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>JepsenCloud Panel — Login</title>
+  <link rel="icon" type="image/svg+xml" href="/icons/panel.svg" />
   <style>
     :root{color-scheme:dark}
     *{box-sizing:border-box}
@@ -3732,6 +4021,122 @@ app.delete(`${PANEL_BASE}/api/:botKey/messages/:id`, requireAuth, apiLimiter, as
     return res.status(500).json({ error: e.message || "Failed to delete message" });
   }
 });
+
+// Direct Discord message edit (by channelId + messageId)
+// Useful for editing older bot-sent embeds/messages that are not in panel_messages.
+app.get(`${PANEL_BASE}/api/:botKey/discord-message`, requireAuth, apiLimiter, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  const channelId = String(req.query.channelId || '').trim();
+  const messageId = String(req.query.messageId || '').trim();
+  if (!channelId || !messageId) return res.status(400).json({ error: "channelId and messageId are required" });
+
+  try {
+    const channel = await bot.client.channels.fetch(channelId);
+    if (!channel || !channel.isTextBased()) return res.status(400).json({ error: "Invalid channel" });
+
+    const perms = channel.permissionsFor(bot.client.user?.id || bot.client.application?.id);
+    const canView = perms?.has(PermissionsBitField.Flags.ViewChannel);
+    if (!canView) return res.status(403).json({ error: "Bot lacks permission to view this channel" });
+
+    const msg = await channel.messages.fetch(messageId);
+    if (!msg) return res.status(404).json({ error: "Message not found" });
+
+    // Only allow editing bot's own messages
+    if (msg.author?.id !== bot.client.user?.id) {
+      return res.status(403).json({ error: "Can only load/edit messages sent by this bot" });
+    }
+
+    const firstEmbed = Array.isArray(msg.embeds) && msg.embeds.length ? msg.embeds[0] : null;
+    const embed = firstEmbed
+      ? {
+          title: firstEmbed.title || '',
+          description: firstEmbed.description || '',
+          footer: firstEmbed.footer?.text || '',
+          color: (typeof firstEmbed.color === 'number')
+            ? ('#' + firstEmbed.color.toString(16).padStart(6, '0'))
+            : '',
+        }
+      : null;
+
+    return res.json({ ok: true, message: { id: msg.id, channelId, content: msg.content || '', embed } });
+  } catch (e) {
+    console.error('GET /discord-message error:', e);
+    return res.status(500).json({ error: "Failed to load message" });
+  }
+});
+
+app.post(`${PANEL_BASE}/api/:botKey/discord-message/edit`, requireAuth, apiLimiter, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  const { channelId, messageId, content, embed } = req.body || {};
+  const chId = String(channelId || '').trim();
+  const msgId = String(messageId || '').trim();
+  if (!chId || !msgId) return res.status(400).json({ error: "channelId and messageId are required" });
+
+  try {
+    // Validate lengths early
+    const contentCheck = validateLength(content, 2000, "Content");
+    if (!contentCheck.ok) return res.status(400).json({ error: contentCheck.error });
+    const titleCheck = validateLength(embed?.title, 256, "Embed title");
+    if (!titleCheck.ok) return res.status(400).json({ error: titleCheck.error });
+    const descCheck = validateLength(embed?.description, 4096, "Embed description");
+    if (!descCheck.ok) return res.status(400).json({ error: descCheck.error });
+    const footerCheck = validateLength(embed?.footer, 2048, "Embed footer");
+    if (!footerCheck.ok) return res.status(400).json({ error: footerCheck.error });
+
+    const channel = await bot.client.channels.fetch(chId);
+    if (!channel || !channel.isTextBased()) return res.status(400).json({ error: "Invalid channel" });
+
+    const perms = channel.permissionsFor(bot.client.user?.id || bot.client.application?.id);
+    const canView = perms?.has(PermissionsBitField.Flags.ViewChannel);
+    const canSend = perms?.has(channel.isThread() ? PermissionsBitField.Flags.SendMessagesInThreads : PermissionsBitField.Flags.SendMessages);
+    if (!canView || !canSend) return res.status(403).json({ error: "Bot lacks permission to edit in this channel" });
+
+    const msg = await channel.messages.fetch(msgId);
+    if (!msg) return res.status(404).json({ error: "Message not found" });
+    if (msg.author?.id !== bot.client.user?.id) {
+      return res.status(403).json({ error: "Can only edit messages sent by this bot" });
+    }
+
+    const payload = {};
+    if (contentCheck.value) payload.content = contentCheck.value;
+
+    const normalizedEmbed = (embed && (embed.title || embed.description || embed.footer || embed.color))
+      ? {
+          title: titleCheck.value || undefined,
+          description: descCheck.value || undefined,
+          color: embed.color || undefined,
+          footer: footerCheck.value || undefined,
+        }
+      : null;
+
+    if (normalizedEmbed && (normalizedEmbed.title || normalizedEmbed.description || normalizedEmbed.footer)) {
+      const embedBuilder = new EmbedBuilder();
+      if (normalizedEmbed.title) embedBuilder.setTitle(normalizedEmbed.title);
+      if (normalizedEmbed.description) embedBuilder.setDescription(normalizedEmbed.description);
+      embedBuilder.setColor(parseHexColor(normalizedEmbed.color, 0x00aeff));
+      if (normalizedEmbed.footer?.trim()) embedBuilder.setFooter({ text: normalizedEmbed.footer.trim() });
+      embedBuilder.setTimestamp();
+      payload.embeds = [embedBuilder];
+    } else if (embed && embed.clear === true) {
+      payload.embeds = [];
+    }
+
+    if (!payload.content && !payload.embeds) {
+      return res.status(400).json({ error: "Nothing to update (provide content and/or embed)" });
+    }
+
+    await msg.edit(payload);
+    return res.json({ ok: true, discordMessageId: msg.id });
+  } catch (e) {
+    console.error('POST /discord-message/edit error:', e);
+    return res.status(500).json({ error: e.message || "Failed to edit message" });
+  }
+});
+
 // ========================
 // STATS API ENDPOINTS
 // ========================
@@ -3928,6 +4333,408 @@ app.post(`${PANEL_BASE}/api/:botKey/stats/adjust`, requireAuth, apiLimiter, asyn
   } catch (e) {
     console.error('POST /stats/adjust error:', e);
     return res.status(500).json({ error: e.message || "Failed to adjust user stats" });
+  }
+});
+
+// List channels by activity (for channel-centric stats management)
+app.get(`${PANEL_BASE}/api/:botKey/stats/channels`, requireAuth, apiLimiter, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  try {
+    const { guildId } = req.query;
+    if (!guildId) return res.status(400).json({ error: "guildId is required" });
+
+    let rows = await dbAll(
+      `SELECT
+        channel_id,
+        SUM(count) as base_count
+       FROM daily_channel_stats
+       WHERE guild_id = ?
+       GROUP BY channel_id
+       ORDER BY base_count DESC
+       LIMIT 500`,
+      [guildId]
+    );
+
+    // Fallback: if daily_channel_stats isn't populated yet, derive from message_index
+    if (!rows || rows.length === 0) {
+      rows = await dbAll(
+        `SELECT
+          channel_id,
+          COUNT(*) as base_count
+         FROM message_index
+         WHERE guild_id = ? AND channel_id IS NOT NULL
+         GROUP BY channel_id
+         ORDER BY base_count DESC
+         LIMIT 500`,
+        [guildId]
+      );
+    }
+
+    const adjRows = await dbAll(
+      `SELECT channel_id, SUM(adjustment) as adjustment
+       FROM channel_user_adjustments
+       WHERE guild_id = ?
+       GROUP BY channel_id`,
+      [guildId]
+    );
+    const adjMap = new Map(adjRows.map((r) => [r.channel_id, r.adjustment || 0]));
+
+    const out = rows.map((r) => {
+      const adj = adjMap.get(r.channel_id) || 0;
+      return {
+        channel_id: r.channel_id,
+        base_count: r.base_count || 0,
+        adjustment: adj,
+        effective_count: Math.max(0, (r.base_count || 0) + adj),
+        channel_name: null,
+      };
+    });
+
+    // Best-effort name hydration (cache-based)
+    const guild = bot.client?.guilds?.cache?.get(String(guildId)) || null;
+    if (guild) {
+      for (const item of out) {
+        const ch = guild.channels?.cache?.get(item.channel_id);
+        if (ch?.name) item.channel_name = ch.name;
+      }
+    }
+
+    return res.json({ ok: true, channels: out });
+  } catch (e) {
+    console.error('GET /stats/channels error:', e);
+    return res.status(500).json({ error: e.message || "Failed to list channels" });
+  }
+});
+
+// Channel-centric: users for a channel (base from daily_channel_stats + adjustments)
+app.get(`${PANEL_BASE}/api/:botKey/stats/channel-users`, requireAuth, apiLimiter, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  try {
+    const guildId = String(req.query.guildId || '').trim();
+    const channelId = String(req.query.channelId || '').trim();
+    const limit = Math.min(parseInt(req.query.limit || 100, 10), 500);
+    const offset = Math.max(parseInt(req.query.offset || 0, 10), 0);
+    const search = String(req.query.search || '').trim().toLowerCase();
+    const sortBy = String(req.query.sortBy || 'count'); // count|username
+
+    if (!guildId || !channelId) return res.status(400).json({ error: "guildId and channelId are required" });
+
+    const orderClause = sortBy === 'username'
+      ? 'ORDER BY COALESCE(uc_guild.username, uc_any.username, t.user_id) ASC'
+      : 'ORDER BY effective_count DESC, t.user_id ASC';
+
+    let query = `
+      WITH totals AS (
+        SELECT user_id, SUM(count) as base_count
+        FROM daily_channel_stats
+        WHERE guild_id = ? AND channel_id = ?
+        GROUP BY user_id
+      ),
+      adj AS (
+        SELECT user_id, adjustment
+        FROM channel_user_adjustments
+        WHERE guild_id = ? AND channel_id = ?
+      ),
+      t AS (
+        SELECT
+          totals.user_id as user_id,
+          COALESCE(totals.base_count, 0) as base_count,
+          COALESCE(adj.adjustment, 0) as adjustment,
+          MAX(0, COALESCE(totals.base_count, 0) + COALESCE(adj.adjustment, 0)) as effective_count
+        FROM totals
+        LEFT JOIN adj ON totals.user_id = adj.user_id
+      )
+      SELECT
+        t.user_id,
+        COALESCE(uc_guild.username, uc_any.username, t.user_id) as username,
+        t.base_count,
+        t.adjustment,
+        t.effective_count,
+        COALESCE(uc_guild.avatar_url, uc_any.avatar_url) as avatar_url
+      FROM t
+      LEFT JOIN user_cache uc_guild ON uc_guild.guild_id = ? AND uc_guild.user_id = t.user_id
+      LEFT JOIN (
+        SELECT uc1.user_id, uc1.username, uc1.avatar_url, uc1.updated_at
+        FROM user_cache uc1
+        JOIN (
+          SELECT user_id, MAX(updated_at) AS max_updated_at
+          FROM user_cache
+          GROUP BY user_id
+        ) ucmax ON uc1.user_id = ucmax.user_id AND uc1.updated_at = ucmax.max_updated_at
+      ) uc_any ON uc_any.user_id = t.user_id
+    `;
+
+    const params = [guildId, channelId, guildId, channelId, guildId];
+
+    if (search) {
+      query += ` WHERE (LOWER(COALESCE(uc_guild.username, uc_any.username, t.user_id)) LIKE ? OR t.user_id LIKE ?)`;
+      params.push(`%${search}%`, `%${search}%`);
+    }
+
+    query += ` ${orderClause} LIMIT ? OFFSET ?`;
+    params.push(limit, offset);
+
+    const users = await dbAll(query, params);
+
+    // total count
+    let countQuery = `
+      WITH totals AS (
+        SELECT user_id
+        FROM daily_channel_stats
+        WHERE guild_id = ? AND channel_id = ?
+        GROUP BY user_id
+      )
+      SELECT COUNT(*) as total FROM totals
+    `;
+    const countParams = [guildId, channelId];
+    if (search) {
+      countQuery = `
+        WITH totals AS (
+          SELECT user_id
+          FROM daily_channel_stats
+          WHERE guild_id = ? AND channel_id = ?
+          GROUP BY user_id
+        )
+        SELECT COUNT(*) as total
+        FROM totals
+        LEFT JOIN user_cache uc_guild ON uc_guild.guild_id = ? AND uc_guild.user_id = totals.user_id
+        LEFT JOIN (
+          SELECT uc1.user_id, uc1.username, uc1.avatar_url, uc1.updated_at
+          FROM user_cache uc1
+          JOIN (
+            SELECT user_id, MAX(updated_at) AS max_updated_at
+            FROM user_cache
+            GROUP BY user_id
+          ) ucmax ON uc1.user_id = ucmax.user_id AND uc1.updated_at = ucmax.max_updated_at
+        ) uc_any ON uc_any.user_id = totals.user_id
+        WHERE (LOWER(COALESCE(uc_guild.username, uc_any.username, totals.user_id)) LIKE ? OR totals.user_id LIKE ?)
+      `;
+      countParams.push(guildId, `%${search}%`, `%${search}%`);
+    }
+
+    const countRow = await dbGet(countQuery, countParams);
+
+    return res.json({
+      ok: true,
+      users,
+      pagination: { offset, limit, total: countRow?.total || 0 }
+    });
+  } catch (e) {
+    console.error('GET /stats/channel-users error:', e);
+    return res.status(500).json({ error: e.message || "Failed to list channel users" });
+  }
+});
+
+// Apply a per-channel adjustment for a user (delta or setTo, persists via channel_user_adjustments)
+app.post(`${PANEL_BASE}/api/:botKey/stats/channel-adjust`, requireAuth, apiLimiter, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  try {
+    const { guildId, channelId, userId, delta, setTo, reason } = req.body || {};
+    if (!guildId || !channelId || !userId) return res.status(400).json({ error: "guildId, channelId, and userId are required" });
+
+    const baseRow = await dbGet(
+      `SELECT COALESCE(SUM(count), 0) as base_count
+       FROM daily_channel_stats
+       WHERE guild_id = ? AND channel_id = ? AND user_id = ?`,
+      [guildId, channelId, userId]
+    );
+    const baseCount = baseRow?.base_count || 0;
+
+    const adjRow = await dbGet(
+      `SELECT adjustment FROM channel_user_adjustments WHERE guild_id = ? AND channel_id = ? AND user_id = ?`,
+      [guildId, channelId, userId]
+    );
+    const currentAdj = adjRow?.adjustment || 0;
+    const currentEffective = Math.max(0, baseCount + currentAdj);
+
+    let appliedDelta = 0;
+    if (typeof setTo === 'number' && Number.isFinite(setTo) && setTo >= 0) {
+      const target = Math.floor(setTo);
+      appliedDelta = target - currentEffective;
+    } else if (typeof delta === 'number' && Number.isFinite(delta) && delta !== 0) {
+      appliedDelta = Math.floor(delta);
+    } else {
+      return res.status(400).json({ error: "Provide either a non-negative setTo or a non-zero delta" });
+    }
+
+    // Clamp so effective never goes below 0
+    const newEffective = Math.max(0, currentEffective + appliedDelta);
+    const clampedApplied = newEffective - currentEffective;
+    const newAdj = currentAdj + clampedApplied;
+
+    const updatedBy = req.session?.user?.username || null;
+
+    await dbRun(
+      `INSERT INTO channel_user_adjustments (guild_id, channel_id, user_id, adjustment, updated_by, reason, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(guild_id, channel_id, user_id)
+       DO UPDATE SET adjustment = excluded.adjustment,
+                     updated_by = excluded.updated_by,
+                     reason = excluded.reason,
+                     updated_at = excluded.updated_at`,
+      [guildId, channelId, userId, newAdj, updatedBy, String(reason || '').slice(0, 500) || null, new Date().toISOString()]
+    );
+
+    // Update overall user_stats so the leaderboard immediately reflects the change
+    const userRow = await dbGet(`SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`, [guildId, userId]);
+    const userCurrent = userRow?.message_count || 0;
+    const userNew = Math.max(0, userCurrent + clampedApplied);
+    await dbRun(
+      `INSERT INTO user_stats (guild_id, user_id, message_count)
+       VALUES (?, ?, ?)
+       ON CONFLICT(guild_id, user_id)
+       DO UPDATE SET message_count = excluded.message_count`,
+      [guildId, userId, userNew]
+    );
+
+    return res.json({
+      ok: true,
+      guildId,
+      channelId,
+      userId,
+      baseCount,
+      adjustment: newAdj,
+      effectiveCount: newEffective,
+      deltaApplied: clampedApplied,
+    });
+  } catch (e) {
+    console.error('POST /stats/channel-adjust error:', e);
+    return res.status(500).json({ error: e.message || "Failed to apply channel adjustment" });
+  }
+});
+
+// Recalculate daily_channel_stats and user_stats from message_index (DB-only rebuild)
+app.post(`${PANEL_BASE}/api/:botKey/stats/recalculate`, requireAuth, apiLimiter, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  try {
+    const { guildId } = req.body || {};
+    if (!guildId) return res.status(400).json({ error: "guildId is required" });
+
+    const start = Date.now();
+
+    // Rebuild daily_channel_stats (derived from message_index)
+    await dbRun(db, `DELETE FROM daily_channel_stats WHERE guild_id = ?`, [guildId]);
+    await dbRun(
+      db,
+      `INSERT INTO daily_channel_stats (guild_id, user_id, channel_id, message_date, count)
+       SELECT
+         guild_id,
+         user_id,
+         channel_id,
+         substr(created_at, 1, 10) as message_date,
+         COUNT(*) as count
+       FROM message_index
+       WHERE guild_id = ? AND channel_id IS NOT NULL
+       GROUP BY guild_id, user_id, channel_id, message_date`,
+      [guildId]
+    );
+
+    // Rebuild user_stats (derived from message_index + user_adjustments + channel_user_adjustments)
+    const actualCounts = await dbAll(
+      db,
+      `SELECT user_id, COUNT(*) as actual_count
+       FROM message_index
+       WHERE guild_id = ?
+       GROUP BY user_id`,
+      [guildId]
+    );
+    const userAdjRows = await dbAll(db, `SELECT user_id, adjustment FROM user_adjustments WHERE guild_id = ?`, [guildId]);
+    const chAdjRows = await dbAll(
+      db,
+      `SELECT user_id, SUM(adjustment) as adjustment
+       FROM channel_user_adjustments
+       WHERE guild_id = ?
+       GROUP BY user_id`,
+      [guildId]
+    );
+
+    const actualMap = new Map(actualCounts.map((r) => [r.user_id, r.actual_count || 0]));
+    const userAdj = new Map(userAdjRows.map((r) => [r.user_id, r.adjustment || 0]));
+    const chAdj = new Map(chAdjRows.map((r) => [r.user_id, r.adjustment || 0]));
+
+    const userIds = new Set();
+    for (const r of actualCounts) userIds.add(r.user_id);
+    for (const r of userAdjRows) userIds.add(r.user_id);
+    for (const r of chAdjRows) userIds.add(r.user_id);
+
+    let updated = 0;
+    for (const userId of userIds) {
+      const actual = actualMap.get(userId) || 0;
+      const expected = Math.max(0, actual + (userAdj.get(userId) || 0) + (chAdj.get(userId) || 0));
+      await dbRun(
+        db,
+        `INSERT INTO user_stats (guild_id, user_id, message_count)
+         VALUES (?, ?, ?)
+         ON CONFLICT(guild_id, user_id)
+         DO UPDATE SET message_count = excluded.message_count`,
+        [guildId, userId, expected]
+      );
+      updated++;
+    }
+
+    const duration = Date.now() - start;
+    return res.json({ ok: true, guildId, updatedUsers: updated, durationMs: duration });
+  } catch (e) {
+    console.error('POST /stats/recalculate error:', e);
+    return res.status(500).json({ error: e.message || "Failed to recalculate" });
+  }
+});
+
+// Backfill a single channel from Discord history into message_index (rate-limited)
+app.post(`${PANEL_BASE}/api/:botKey/stats/backfill-channel`, requireAuth, apiLimiter, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  try {
+    const { guildId, channelId, maxMessages } = req.body || {};
+    if (!guildId || !channelId) return res.status(400).json({ error: "guildId and channelId are required" });
+
+    const { incrementMessageCountRobust } = require('./features/robust-message-counting');
+
+    const channel = await bot.client.channels.fetch(String(channelId));
+    if (!channel || !channel.isTextBased || !channel.isTextBased()) {
+      return res.status(400).json({ error: "Channel not found or not text-based" });
+    }
+
+    const cap = Number.isFinite(Number(maxMessages)) && Number(maxMessages) > 0 ? Math.floor(Number(maxMessages)) : 25000;
+    const start = Date.now();
+    let lastId = null;
+    let processed = 0;
+    let fetchedBatches = 0;
+
+    while (processed < cap) {
+      const options = { limit: 100 };
+      if (lastId) options.before = lastId;
+      const batch = await channel.messages.fetch(options);
+      fetchedBatches++;
+      if (!batch || batch.size === 0) break;
+
+      for (const msg of batch.values()) {
+        if (!msg?.guild) continue;
+        if (!msg.author || msg.author.bot) continue;
+        await incrementMessageCountRobust(db, String(guildId), msg.author.id, msg.id, String(channelId), msg.createdAt?.toISOString?.() || new Date().toISOString());
+        processed++;
+        if (processed >= cap) break;
+      }
+
+      lastId = batch.last().id;
+      // gentle rate limit
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    const duration = Date.now() - start;
+    return res.json({ ok: true, guildId, channelId, processed, fetchedBatches, durationMs: duration, cappedAt: cap });
+  } catch (e) {
+    console.error('POST /stats/backfill-channel error:', e);
+    return res.status(500).json({ error: e.message || "Failed to backfill channel" });
   }
 });
 
@@ -4654,169 +5461,11 @@ app.get(`${PANEL_BASE}/bot/:botKey`, requireAuth, async (req, res) => {
   const bot = bots.find((b) => b.key === req.params.botKey);
   if (!bot) return res.status(404).send("Bot not found");
 
-  res.send(`<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>JepsenCloud Panel — ${escapeHtml(bot.name)}</title>
-  <link rel="stylesheet" href="/shared.css" />
-  <style>
-    .feature-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-      gap: 20px;
-      margin-top: 24px;
-    }
-    .feature-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
-      padding: 24px;
-      transition: all var(--transition-base);
-      cursor: pointer;
-      position: relative;
-      overflow: hidden;
-    }
-    .feature-card::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 3px;
-      background: var(--gradient-primary);
-      opacity: 0.7;
-    }
-    .feature-card:hover {
-      transform: translateY(-4px);
-      box-shadow: var(--shadow-lg), var(--shadow-glow);
-      border-color: var(--border-hover);
-    }
-    .feature-title {
-      font-size: 18px;
-      font-weight: 600;
-      color: var(--text-bright);
-      margin-bottom: 8px;
-    }
-    .feature-description {
-      font-size: 14px;
-      color: var(--text-muted);
-      line-height: 1.5;
-    }
-  </style>
-</head>
-<body>
-  <div class="page-container-wide">
-    <div class="topbar">
-      <div class="topbar-content">
-        <div class="page-title">
-          <span class="emoji">🤖</span>
-          <span class="gradient-text">${escapeHtml(bot.name)}</span>
-        </div>
-        <div class="muted">Bot Key: ${escapeHtml(bot.key)}</div>
-      </div>
-      <div class="topbar-actions">
-        <button onclick="toggleSnow()" class="btn btn-secondary btn-icon" type="button" id="snowToggle" title="Toggle Snow Effect">❄️</button>
-        <a href="${PANEL_BASE}" class="btn btn-secondary">← Dashboard</a>
-        <form method="post" action="${PANEL_BASE}/logout" style="margin: 0;"><button class="btn btn-secondary" type="submit">Logout</button></form>
-      </div>
-    </div>
-
-    <div class="feature-grid">
-      <div style="text-decoration:none;color:inherit">
-        <div class="feature-card" style="cursor: default;">
-          <div class="feature-title">📝 Content & Engagement</div>
-          <div class="feature-description" style="margin-bottom: 16px;">Manage messages, embeds, holidays, and AI chat interactions.</div>
-          <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/messages" class="btn btn-primary" style="flex: 1; min-width: 140px; text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(167, 139, 250, 0.1); border: 1px solid rgba(167, 139, 250, 0.3); color: #a78bfa; font-weight: 600; transition: all 0.2s;">
-              📨 Messages
-            </a>
-            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/holidays" class="btn btn-primary" style="flex: 1; min-width: 140px; text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(167, 139, 250, 0.1); border: 1px solid rgba(167, 139, 250, 0.3); color: #a78bfa; font-weight: 600; transition: all 0.2s;">
-              🎉 Holidays
-            </a>
-            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/ai-engagement" class="btn btn-primary" style="flex: 1; min-width: 140px; text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(167, 139, 250, 0.1); border: 1px solid rgba(167, 139, 250, 0.3); color: #a78bfa; font-weight: 600; transition: all 0.2s;">
-              🤖 AI Chat
-            </a>
-          </div>
-        </div>
-      </div>
-
-      <div style="text-decoration:none;color:inherit">
-        <div class="feature-card" style="cursor: default;">
-          <div class="feature-title">🛡️ Moderation & Controls</div>
-          <div class="feature-description" style="margin-bottom: 16px;">Manage chat rules, limits, filters, and channel configurations.</div>
-          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;">
-            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/rate-limits" class="btn btn-primary" style="text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(251, 113, 133, 0.1); border: 1px solid rgba(251, 113, 133, 0.3); color: #fb7185; font-weight: 600; transition: all 0.2s;">
-              🚦 Rate Limits
-            </a>
-            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/consecutive-limits" class="btn btn-primary" style="text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(251, 113, 133, 0.1); border: 1px solid rgba(251, 113, 133, 0.3); color: #fb7185; font-weight: 600; transition: all 0.2s;">
-              🚫 Consecutive
-            </a>
-            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/automod" class="btn btn-primary" style="text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(251, 113, 133, 0.1); border: 1px solid rgba(251, 113, 133, 0.3); color: #fb7185; font-weight: 600; transition: all 0.2s;">
-              🛡️ AutoMod
-            </a>
-            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/whitelist" class="btn btn-primary" style="text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(251, 113, 133, 0.1); border: 1px solid rgba(251, 113, 133, 0.3); color: #fb7185; font-weight: 600; transition: all 0.2s;">
-              📋 Whitelist
-            </a>
-          </div>
-        </div>
-      </div>
-
-      <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/commands" style="text-decoration:none;color:inherit">
-        <div class="feature-card">
-          <div class="feature-title">📚 Bot Commands</div>
-          <div class="feature-description">Complete list of all available bot commands and features.</div>
-        </div>
-      </a>
-
-      <div style="text-decoration:none;color:inherit">
-        <div class="feature-card" style="cursor: default;">
-          <div class="feature-title">📊 Statistics & Analytics</div>
-          <div class="feature-description" style="margin-bottom: 16px;">Comprehensive message tracking, leaderboards, trends, and admin tools.</div>
-          <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/stats" class="btn btn-primary" style="flex: 1; min-width: 140px; text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(88, 101, 242, 0.1); border: 1px solid rgba(88, 101, 242, 0.3); color: #5865f2; font-weight: 600; transition: all 0.2s;">
-              📊 Leaderboard
-            </a>
-            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/analytics" class="btn btn-primary" style="flex: 1; min-width: 140px; text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(52, 211, 153, 0.1); border: 1px solid rgba(52, 211, 153, 0.3); color: #34d399; font-weight: 600; transition: all 0.2s;">
-              📈 Trends
-            </a>
-            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/stats?adjustMode=true${bot.guildId ? '&guildId=' + bot.guildId : ''}" class="btn btn-primary" style="flex: 1; min-width: 140px; text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(251, 146, 60, 0.1); border: 1px solid rgba(251, 146, 60, 0.3); color: #fb923c; font-weight: 600; transition: all 0.2s;">
-              ⚙️ Adjust
-            </a>
-          </div>
-        </div>
-      </div>
-
-      <div style="text-decoration:none;color:inherit">
-        <div class="feature-card" style="cursor: default;">
-          <div class="feature-title">🔍 Monitoring & Verification</div>
-          <div class="feature-description" style="margin-bottom: 16px;">Track accuracy, verify data, and review operation history.</div>
-          <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/accuracy" class="btn btn-primary" style="flex: 1; min-width: 140px; text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(34, 211, 238, 0.1); border: 1px solid rgba(34, 211, 238, 0.3); color: #22d3ee; font-weight: 600; transition: all 0.2s;">
-              🔍 Accuracy
-            </a>
-            <a href="${PANEL_BASE}/verification-dashboard?bot=${encodeURIComponent(bot.key)}" class="btn btn-primary" style="flex: 1; min-width: 140px; text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(34, 211, 238, 0.1); border: 1px solid rgba(34, 211, 238, 0.3); color: #22d3ee; font-weight: 600; transition: all 0.2s;">
-              ✅ Verify
-            </a>
-            <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/history" class="btn btn-primary" style="flex: 1; min-width: 140px; text-align: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; background: rgba(34, 211, 238, 0.1); border: 1px solid rgba(34, 211, 238, 0.3); color: #22d3ee; font-weight: 600; transition: all 0.2s;">
-              📜 History
-            </a>
-          </div>
-        </div>
-      </div>
-
-      <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/samp-servers" style="text-decoration:none;color:inherit">
-        <div class="feature-card">
-          <div class="feature-title">🎮 SAMP Server Status</div>
-          <div class="feature-description">Monitor SA-MP servers with live player counts in voice channel names.</div>
-        </div>
-      </a>
-    </div>
-  </div>
-  <script src="/public/snow.js"></script>
-</body>
-</html>`);
+  res.render("bot", {
+    bot: { key: bot.key, name: bot.name },
+    username: req.session.user.username,
+    userRole: req.session.user.role
+  });
 });
 
 app.get(`${PANEL_BASE}/bot/:botKey/holidays`, requireAuth, async (req, res) => {
@@ -5079,6 +5728,61 @@ app.get(`${PANEL_BASE}/bot/:botKey/commands`, requireAuth, async (req, res) => {
   res.send(generateCommandsPage(bot, PANEL_BASE, disabledCommands));
 });
 
+// API: Get available commands list (from Discord) + enabled state
+app.get(`${PANEL_BASE}/api/:botKey/commands`, requireAuth, apiLimiter, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  try {
+    const requestedGuildId = String(req.query.guildId || "").trim();
+    const guildId = requestedGuildId || bot.client?.guilds.cache.first()?.id || null;
+    if (!guildId) return res.json({ ok: true, guildId: null, commands: [] });
+
+    const guild = await bot.client.guilds.fetch(guildId).catch(() => bot.client.guilds.cache.get(guildId));
+    if (!guild) return res.status(404).json({ error: "Guild not found" });
+
+    const commandCollection = await guild.commands.fetch();
+    const commands = Array.from(commandCollection.values());
+
+    let disabledList = [];
+    try {
+      disabledList = await getDisabledCommands(guildId);
+    } catch (e) {
+      console.error("Error getting disabled commands:", e);
+    }
+    const disabledSet = new Set((disabledList || []).map((d) => d.command_name));
+
+    function categorize(cmd) {
+      const name = String(cmd?.name || "").toLowerCase();
+      const desc = String(cmd?.description || "").toLowerCase();
+      if (name.includes("admin") || name.includes("sync") || name.includes("backfill")) return "admin";
+      if (desc.includes("owner") || desc.includes("admin")) return "admin";
+      return "user";
+    }
+
+    const out = commands
+      .filter((c) => c && c.type === 1) // 1 = ChatInput
+      .map((c) => ({
+        name: c.name,
+        description: c.description,
+        options: Array.isArray(c.options)
+          ? c.options.map((o) => ({
+              name: o?.name,
+              required: !!o?.required,
+            }))
+          : [],
+        enabled: !disabledSet.has(c.name),
+        category: categorize(c),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return res.json({ ok: true, guildId, commands: out });
+  } catch (e) {
+    console.error("Get commands error:", e);
+    return res.status(500).json({ error: "Failed to get commands" });
+  }
+});
+
 // API: Toggle command enabled/disabled
 app.post(`${PANEL_BASE}/api/:botKey/commands/toggle`, requireAuth, async (req, res) => {
   const bot = bots.find((b) => b.key === req.params.botKey);
@@ -5157,6 +5861,32 @@ app.post(`${PANEL_BASE}/api/accuracy/fullsync`, requireAuth, async (req, res) =>
   }
 });
 
+// Accuracy/Debug API - Trace a single message
+app.get(`${PANEL_BASE}/api/accuracy/trace/message`, requireAuth, apiLimiter, async (req, res) => {
+  try {
+    const { guildId, messageId, limit } = req.query;
+    const { getMessageTrace } = require("./features/message-counting-debug");
+    const out = await getMessageTrace(db, guildId || null, messageId, limit ? Number(limit) : 50);
+    return res.json({ ok: true, trace: out });
+  } catch (err) {
+    console.error("[API Trace Message] Error:", err);
+    return res.status(400).json({ ok: false, error: err.message || "Failed to trace message" });
+  }
+});
+
+// Accuracy/Debug API - Trace a user
+app.get(`${PANEL_BASE}/api/accuracy/trace/user`, requireAuth, apiLimiter, async (req, res) => {
+  try {
+    const { guildId, userId, limit } = req.query;
+    const { getUserTrace } = require("./features/message-counting-debug");
+    const out = await getUserTrace(db, guildId || null, userId, limit ? Number(limit) : 50);
+    return res.json({ ok: true, trace: out });
+  } catch (err) {
+    console.error("[API Trace User] Error:", err);
+    return res.status(400).json({ ok: false, error: err.message || "Failed to trace user" });
+  }
+});
+
 // Holidays API
 app.get(`${PANEL_BASE}/api/:botKey/holidays`, requireAuth, apiLimiter, async (req, res) => {
   const bot = bots.find((b) => b.key === req.params.botKey);
@@ -5215,7 +5945,7 @@ app.get(`${PANEL_BASE}/api/:botKey/ai-engagement/settings`, requireAuth, apiLimi
   const bot = bots.find((b) => b.key === req.params.botKey);
   if (!bot) return res.status(404).json({ error: "Bot not found" });
 
-  const guildId = String(req.query.guildId || "");
+  const guildId = String(req.query.guildId || bot.guild_id || bot.client?.guilds?.cache?.first()?.id || "");
   if (!guildId) return res.status(400).json({ error: "guildId query parameter required" });
 
   try {
@@ -5232,7 +5962,7 @@ app.post(`${PANEL_BASE}/api/:botKey/ai-engagement/settings`, requireAuth, apiLim
   const bot = bots.find((b) => b.key === req.params.botKey);
   if (!bot) return res.status(404).json({ error: "Bot not found" });
 
-  const guildId = String(req.body?.guildId || "");
+  const guildId = String(req.body?.guildId || bot.guild_id || bot.client?.guilds?.cache?.first()?.id || "");
   const settings = req.body?.settings;
 
   if (!guildId) return res.status(400).json({ error: "guildId required" });
@@ -5252,7 +5982,7 @@ app.get(`${PANEL_BASE}/api/:botKey/ai-engagement/history`, requireAuth, apiLimit
   const bot = bots.find((b) => b.key === req.params.botKey);
   if (!bot) return res.status(404).json({ error: "Bot not found" });
 
-  const guildId = String(req.query.guildId || "");
+  const guildId = String(req.query.guildId || bot.guild_id || bot.client?.guilds?.cache?.first()?.id || "");
   const limit = parseInt(req.query.limit || "20");
 
   if (!guildId) return res.status(400).json({ error: "guildId query parameter required" });
@@ -5277,7 +6007,7 @@ app.post(`${PANEL_BASE}/api/:botKey/ai-engagement/test`, requireAuth, apiLimiter
   const bot = bots.find((b) => b.key === req.params.botKey);
   if (!bot) return res.status(404).json({ error: "Bot not found" });
 
-  const guildId = String(req.body?.guildId || "");
+  const guildId = String(req.body?.guildId || bot.guild_id || bot.client?.guilds?.cache?.first()?.id || "");
   if (!guildId) return res.status(400).json({ error: "guildId required" });
 
   try {
@@ -5311,7 +6041,7 @@ app.delete(`${PANEL_BASE}/api/:botKey/ai-engagement/history`, requireAuth, apiLi
   const bot = bots.find((b) => b.key === req.params.botKey);
   if (!bot) return res.status(404).json({ error: "Bot not found" });
 
-  const guildId = String(req.body?.guildId || "");
+  const guildId = String(req.body?.guildId || bot.guild_id || bot.client?.guilds?.cache?.first()?.id || "");
   if (!guildId) return res.status(400).json({ error: "guildId required" });
 
   try {
@@ -5371,7 +6101,7 @@ app.delete(`${PANEL_BASE}/api/:botKey/ai-engagement/history`, requireAuth, apiLi
   const bot = bots.find((b) => b.key === req.params.botKey);
   if (!bot) return res.status(404).json({ error: "Bot not found" });
 
-  const guildId = String(req.body?.guildId || "");
+  const guildId = String(req.body?.guildId || bot.guild_id || bot.client?.guilds?.cache?.first()?.id || "");
   if (!guildId) return res.status(400).json({ error: "guildId required" });
 
   try {
@@ -5418,6 +6148,13 @@ app.get(`${PANEL_BASE}/bot/:botKey/history`, requireAuth, async (req, res) => {
   const bot = bots.find((b) => b.key === req.params.botKey);
   if (!bot) return res.status(404).send("Bot not found");
   res.send(generateHistoryPage(bot, PANEL_BASE));
+});
+
+// Debug Reports page
+app.get(`${PANEL_BASE}/bot/:botKey/debug-reports`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).send("Bot not found");
+  res.send(generateDebugReportsPage(bot, PANEL_BASE));
 });
 
 // SAMP Servers page
@@ -6116,6 +6853,25 @@ app.post(`${PANEL_BASE}/api/bot/:botKey/samp-servers/:serverId/stop`, requireAut
 // -------------------------
 // Start web server
 // -------------------------
+// Final error handler (keeps traceId context in logs)
+app.use((err, req, res, next) => {
+  try {
+    panelHttpLogger.error("Unhandled server error", {
+      traceId: req?.traceId || null,
+      method: req?.method,
+      path: req?.originalUrl,
+      status: res?.statusCode,
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
+  } catch (_) {
+    // ignore logging failures
+  }
+
+  if (res.headersSent) return next(err);
+  return res.status(500).json({ error: "Internal server error", traceId: req?.traceId || null });
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`JepsenCloud running on http://localhost:${PORT}`);

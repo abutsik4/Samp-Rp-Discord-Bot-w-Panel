@@ -32,6 +32,20 @@ async function reconcileGuild(db, guildId) {
       adjustments.set(row.user_id, row.adjustment || 0);
     }
 
+    // Load channel-level adjustments (sum to user totals)
+    const channelAdjustments = new Map();
+    const chAdjRows = await dbAll(
+      db,
+      `SELECT user_id, SUM(adjustment) as adjustment
+       FROM channel_user_adjustments
+       WHERE guild_id = ?
+       GROUP BY user_id`,
+      [guildId]
+    );
+    for (const row of chAdjRows) {
+      channelAdjustments.set(row.user_id, row.adjustment || 0);
+    }
+
     // Get actual counts from message_index
     const actualCounts = await dbAll(
       db,
@@ -54,9 +68,10 @@ async function reconcileGuild(db, guildId) {
 
       const storedCount = statsRow?.message_count || 0;
       
-      // Calculate expected count: actual messages + admin adjustment
+      // Calculate expected count: actual messages + user adjustment + channel adjustments
       const adjustment = adjustments.get(user_id) || 0;
-      const expectedCount = Math.max(0, actual_count + adjustment);
+      const channelAdj = channelAdjustments.get(user_id) || 0;
+      const expectedCount = Math.max(0, actual_count + adjustment + channelAdj);
 
       // Fix if mismatch (accounting for adjustments)
       if (storedCount !== expectedCount) {
@@ -69,7 +84,7 @@ async function reconcileGuild(db, guildId) {
           [guildId, user_id, expectedCount]
         );
         fixed++;
-        console.log(`[Reconcile] Fixed ${user_id}: ${storedCount} → ${expectedCount} (actual: ${actual_count}, adjustment: ${adjustment})`);
+        console.log(`[Reconcile] Fixed ${user_id}: ${storedCount} → ${expectedCount} (actual: ${actual_count}, userAdj: ${adjustment}, channelAdj: ${channelAdj})`);
       }
     }
 
@@ -83,7 +98,8 @@ async function reconcileGuild(db, guildId) {
     for (const stat of allStats) {
       const hasMessages = actualCounts.find((a) => a.user_id === stat.user_id);
       const adjustment = adjustments.get(stat.user_id) || 0;
-      const expectedCount = Math.max(0, adjustment); // No messages, but might have adjustment
+      const channelAdj = channelAdjustments.get(stat.user_id) || 0;
+      const expectedCount = Math.max(0, adjustment + channelAdj); // No messages, but might have adjustments
 
       if (!hasMessages && stat.message_count !== expectedCount) {
         // Orphaned entry - set to adjustment value (or 0 if no adjustment)
@@ -93,7 +109,7 @@ async function reconcileGuild(db, guildId) {
           [expectedCount, guildId, stat.user_id]
         );
         fixed++;
-        console.log(`[Reconcile] Fixed orphaned entry for ${stat.user_id}: ${stat.message_count} → ${expectedCount} (adjustment: ${adjustment})`);
+        console.log(`[Reconcile] Fixed orphaned entry for ${stat.user_id}: ${stat.message_count} → ${expectedCount} (userAdj: ${adjustment}, channelAdj: ${channelAdj})`);
       }
     }
 

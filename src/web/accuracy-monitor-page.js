@@ -35,16 +35,7 @@ function generateAccuracyMonitorPage(bot, PANEL_BASE) {
   <title>JepsenCloud Panel — Accuracy Monitor</title>
   <link rel="stylesheet" href="/shared.css" />
   <style>
-      --text:#e5e7eb;
-      --text-muted:#9ca3af;
-      --accent-purple:#a78bfa;
-      --accent-cyan:#22d3ee;
-      --accent-emerald:#34d399;
-      --accent-rose:#fb7185;
-      --accent-yellow:#fbbf24;
-      --input-bg:rgba(17,24,39,.9);
-      color-scheme:dark;
-    }
+    :root{color-scheme:dark;}
     *{box-sizing:border-box;margin:0;padding:0}
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg-main);color:var(--text);line-height:1.6}
     .wrap{max-width:1400px;margin:0 auto;padding:20px}
@@ -54,9 +45,9 @@ function generateAccuracyMonitorPage(bot, PANEL_BASE) {
     .muted{color:var(--text-muted);font-size:13px;margin-top:4px}
     .nav{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
     .nav a{color:var(--accent-cyan);text-decoration:none;font-size:14px;transition:color .2s;padding:8px 12px;border-radius:6px}
-    .nav a:hover{background:rgba(34,211,238,.1);color:var(--accent-purple)}
+    .nav a:hover{background:color-mix(in srgb, var(--accent-cyan) 10%, transparent);color:var(--accent-purple)}
     .btn{padding:10px 18px;border-radius:8px;border:1px solid var(--border);background:var(--input-bg);color:var(--text);cursor:pointer;font-size:14px;font-weight:500;transition:all .2s}
-    .btn:hover{background:rgba(30,41,59,.9);border-color:var(--accent-purple)}
+    .btn:hover{background:var(--input-bg-focus);border-color:var(--accent-purple)}
     .btn-primary{background:linear-gradient(135deg,var(--accent-purple),var(--accent-cyan));border:none;color:#fff;font-weight:600}
     .btn-primary:hover{opacity:.9;transform:translateY(-1px)}
     .btn-danger{background:linear-gradient(135deg,var(--accent-rose),#f97316);border:none;color:#fff;font-weight:600}
@@ -64,31 +55,31 @@ function generateAccuracyMonitorPage(bot, PANEL_BASE) {
     .card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,.3);margin-bottom:20px}
     .card-title{font-size:16px;font-weight:600;margin-bottom:16px;color:var(--accent-purple);display:flex;align-items:center;gap:8px}
     .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px}
-    .stat-box{background:rgba(167,139,250,.05);border:1px solid rgba(167,139,250,.2);border-radius:8px;padding:16px;text-align:center}
+    .stat-box{background:color-mix(in srgb, var(--accent-purple) 5%, transparent);border:1px solid color-mix(in srgb, var(--accent-purple) 20%, transparent);border-radius:8px;padding:16px;text-align:center}
     .stat-value{font-size:28px;font-weight:700;color:var(--accent-purple)}
     .stat-label{font-size:12px;color:var(--text-muted);margin-top:6px}
-    .stat-box.warning{background:rgba(251,191,36,.05);border-color:rgba(251,191,36,.2)}
-    .stat-box.warning .stat-value{color:var(--accent-yellow)}
-    .stat-box.danger{background:rgba(251,113,133,.05);border-color:rgba(251,113,133,.2)}
+    .stat-box.warning{background:color-mix(in srgb, var(--accent-amber) 5%, transparent);border-color:color-mix(in srgb, var(--accent-amber) 20%, transparent)}
+    .stat-box.warning .stat-value{color:var(--accent-amber)}
+    .stat-box.danger{background:color-mix(in srgb, var(--accent-rose) 5%, transparent);border-color:color-mix(in srgb, var(--accent-rose) 20%, transparent)}
     .stat-box.danger .stat-value{color:var(--accent-rose)}
-    .stat-box.success{background:rgba(52,211,153,.05);border-color:rgba(52,211,153,.2)}
+    .stat-box.success{background:color-mix(in srgb, var(--accent-emerald) 5%, transparent);border-color:color-mix(in srgb, var(--accent-emerald) 20%, transparent)}
     .stat-box.success .stat-value{color:var(--accent-emerald)}
     .table-container{overflow-x:auto;margin-top:12px}
     table{width:100%;border-collapse:collapse}
-    th{background:rgba(167,139,250,.05);padding:12px;text-align:left;font-size:12px;font-weight:600;color:var(--accent-purple);border-bottom:1px solid var(--border)}
-    td{padding:12px;border-bottom:1px solid rgba(45,55,75,.3);font-size:13px}
-    tr:hover{background:rgba(34,211,238,.03)}
+    th{background:color-mix(in srgb, var(--accent-purple) 5%, transparent);padding:12px;text-align:left;font-size:12px;font-weight:600;color:var(--accent-purple);border-bottom:1px solid var(--border)}
+    td{padding:12px;border-bottom:1px solid color-mix(in srgb, var(--border) 35%, transparent);font-size:13px}
+    tr:hover{background:color-mix(in srgb, var(--accent-cyan) 5%, transparent)}
     .event-type{padding:4px 8px;border-radius:4px;font-size:11px;font-weight:600;display:inline-block}
-    .event-increment{background:rgba(52,211,153,.2);color:var(--accent-emerald)}
-    .event-decrement{background:rgba(251,113,133,.2);color:var(--accent-rose)}
-    .event-retry{background:rgba(251,191,36,.2);color:var(--accent-yellow)}
+    .event-increment{background:color-mix(in srgb, var(--accent-emerald) 20%, transparent);color:var(--accent-emerald)}
+    .event-decrement{background:color-mix(in srgb, var(--accent-rose) 20%, transparent);color:var(--accent-rose)}
+    .event-retry{background:color-mix(in srgb, var(--accent-amber) 20%, transparent);color:var(--accent-amber)}
     .event-failed{background:rgba(239,68,68,.2);color:#ff6b6b}
     .event-bulk_decrement{background:rgba(88,166,255,.2);color:#5eb3ff}
     .empty{text-align:center;padding:40px 20px;color:var(--text-muted)}
     .loading{text-align:center;padding:40px 20px}
     .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)}
     .toolbar-info{color:var(--text-muted);font-size:13px;flex:1}
-    .accuracy-bar{width:100%;height:8px;background:rgba(45,55,75,.5);border-radius:4px;overflow:hidden;margin-top:8px}
+    .accuracy-bar{width:100%;height:8px;background:color-mix(in srgb, var(--border) 55%, transparent);border-radius:4px;overflow:hidden;margin-top:8px}
     .accuracy-fill{height:100%;background:linear-gradient(90deg,var(--accent-emerald),var(--accent-cyan));transition:width .3s}
   </style>
 </head>

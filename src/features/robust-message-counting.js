@@ -13,6 +13,9 @@
 
 const { dbRun, dbGet, dbAll } = require("../utils/db-helpers");
 const { updateLeaderboard } = require("./leaderboard-cache");
+const { createLogger, newTraceId } = require("../utils/logger");
+
+const log = createLogger("message-counting");
 
 // Retry configuration
 const RETRY_ATTEMPTS = 3;
@@ -46,25 +49,39 @@ async function logEvent(db, eventType, guildId, userId, messageId, details = {})
     );
   } catch (err) {
     // Don't fail the main operation if event logging fails
-    console.error("[Event Log] Failed to log event:", err.message);
+    log.warn("Event log write failed", { eventType, guildId, userId, messageId, err: err.message });
   }
 }
 
 /**
  * Save failed operation to error queue for retry
  */
-async function saveToErrorQueue(db, operation, guildId, userId, messageId, error) {
+async function saveToErrorQueue(db, operation, guildId, userId, messageId, error, meta = {}) {
   try {
     await dbRun(
       db,
       `INSERT INTO message_count_errors (
-        guild_id, user_id, message_id, operation, error, retry_count
-      ) VALUES (?, ?, ?, ?, ?, 0)`,
-      [guildId, userId, messageId, operation, error.message || String(error)]
+        guild_id, user_id, message_id, operation, error, retry_count, channel_id, message_created_at
+      ) VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
+      [
+        guildId,
+        userId,
+        messageId,
+        operation,
+        error.message || String(error),
+        meta.channelId || null,
+        meta.messageCreatedAt || null,
+      ]
     );
-    console.log(`[Error Queue] Saved ${operation} operation for user ${userId}`);
+    log.warn("Saved operation to error queue", {
+      operation,
+      guildId,
+      userId,
+      messageId,
+      channelId: meta.channelId || null,
+    });
   } catch (err) {
-    console.error("[Error Queue] Failed to save to error queue:", err.message);
+    log.error("Failed to save to error queue", { operation, guildId, userId, messageId, err: err.message });
   }
 }
 
@@ -72,8 +89,11 @@ async function saveToErrorQueue(db, operation, guildId, userId, messageId, error
  * Robust increment with retry logic
  * WAL mode provides atomicity - no manual transactions needed
  */
-async function incrementMessageCountRobust(db, guildId, userId, messageId, channelId, messageTimestamp, attempt = 1) {
+async function incrementMessageCountRobust(db, guildId, userId, messageId, channelId, messageTimestamp, attempt = 1, traceId = null) {
   try {
+    const opId = traceId || newTraceId();
+    const startMs = Date.now();
+
     // Extract date for daily stats (YYYY-MM-DD format)
     const messageDate = messageTimestamp ? new Date(messageTimestamp).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
 
@@ -91,7 +111,8 @@ async function incrementMessageCountRobust(db, guildId, userId, messageId, chann
         newCount: (await dbGet(db, `SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`, [guildId, userId]))?.message_count || 0,
         attempt,
         skipped: true,
-        reason: "duplicate messageId"
+        reason: "duplicate messageId",
+        opId,
       });
       return true;
     }
@@ -128,6 +149,8 @@ async function incrementMessageCountRobust(db, guildId, userId, messageId, chann
       newCount: newCount?.message_count || 0,
       attempt,
       dailyStats: true,
+      opId,
+      ms: Date.now() - startMs,
     });
 
     // Update leaderboard cache (non-blocking, optional)
@@ -137,7 +160,14 @@ async function incrementMessageCountRobust(db, guildId, userId, messageId, chann
 
     return true;
   } catch (err) {
-    console.error(`[Robust Count] Increment failed (attempt ${attempt}/${RETRY_ATTEMPTS}):`, err.message);
+    log.error("Increment failed", {
+      guildId,
+      userId,
+      messageId,
+      channelId,
+      attempt,
+      err: err.message,
+    });
 
     // Retry with exponential backoff
     if (attempt < RETRY_ATTEMPTS) {
@@ -148,16 +178,21 @@ async function incrementMessageCountRobust(db, guildId, userId, messageId, chann
         operation: "increment",
         attempt: attempt + 1,
         reason: err.message,
+        channelId,
       });
 
-      return incrementMessageCountRobust(db, guildId, userId, messageId, channelId, messageTimestamp, attempt + 1);
+      return incrementMessageCountRobust(db, guildId, userId, messageId, channelId, messageTimestamp, attempt + 1, traceId);
     }
 
     // All retries failed - save to error queue
-    await saveToErrorQueue(db, "increment", guildId, userId, messageId, err);
+    await saveToErrorQueue(db, "increment", guildId, userId, messageId, err, {
+      channelId,
+      messageCreatedAt: messageTimestamp || null,
+    });
     await logEvent(db, "failed", guildId, userId, messageId, {
       operation: "increment",
       error: err.message,
+      channelId,
     });
 
     return false;
@@ -168,14 +203,19 @@ async function incrementMessageCountRobust(db, guildId, userId, messageId, chann
  * Robust decrement with retry logic
  * WAL mode provides atomicity - no manual transactions needed
  */
-async function decrementMessageCountRobust(db, guildId, userId, messageId, attempt = 1) {
+async function decrementMessageCountRobust(db, guildId, userId, messageId, attempt = 1, traceId = null) {
   try {
+    const opId = traceId || newTraceId();
+    const startMs = Date.now();
+
     // 1. First, look up the message details from index (need channel_id and created_at for daily stats)
     const indexedMessage = await dbGet(
       db,
       `SELECT user_id, channel_id, created_at FROM message_index WHERE guild_id = ? AND message_id = ?`,
       [guildId, messageId]
     );
+
+    const effectiveUserId = indexedMessage?.user_id || userId;
 
     // 2. Remove from message index to gate duplicates
     const delResult = await dbRun(
@@ -190,7 +230,8 @@ async function decrementMessageCountRobust(db, guildId, userId, messageId, attem
         newCount: (await dbGet(db, `SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`, [guildId, userId]))?.message_count || 0,
         attempt,
         skipped: true,
-        reason: "messageId not in index"
+        reason: "messageId not in index",
+        opId,
       });
       return true;
     }
@@ -204,7 +245,7 @@ async function decrementMessageCountRobust(db, guildId, userId, messageId, attem
          ELSE message_count - 1
        END
        WHERE guild_id = ? AND user_id = ?`,
-      [guildId, userId]
+      [guildId, effectiveUserId]
     );
 
     // 4. Decrement daily stats if we have the indexed message details
@@ -226,24 +267,26 @@ async function decrementMessageCountRobust(db, guildId, userId, messageId, attem
     const newCount = await dbGet(
       db,
       `SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`,
-      [guildId, userId]
+      [guildId, effectiveUserId]
     );
 
     // Log successful event
-    await logEvent(db, "decrement", guildId, userId, messageId, {
+    await logEvent(db, "decrement", guildId, effectiveUserId, messageId, {
       newCount: newCount?.message_count || 0,
       attempt,
       dailyStats: !!indexedMessage,
+      opId,
+      ms: Date.now() - startMs,
     });
 
     // Update leaderboard cache (non-blocking, optional)
-    updateLeaderboard(guildId, userId, -1).catch(err => {
+    updateLeaderboard(guildId, effectiveUserId, -1).catch(err => {
       // Silently fail - cache is optional
     });
 
     return true;
   } catch (err) {
-    console.error(`[Robust Count] Decrement failed (attempt ${attempt}/${RETRY_ATTEMPTS}):`, err.message);
+    log.error("Decrement failed", { guildId, userId, messageId, attempt, err: err.message });
 
     // Retry with exponential backoff
     if (attempt < RETRY_ATTEMPTS) {
@@ -256,7 +299,7 @@ async function decrementMessageCountRobust(db, guildId, userId, messageId, attem
         reason: err.message,
       });
 
-      return decrementMessageCountRobust(db, guildId, userId, messageId, attempt + 1);
+      return decrementMessageCountRobust(db, guildId, userId, messageId, attempt + 1, traceId);
     }
 
     // All retries failed - save to error queue
@@ -312,7 +355,7 @@ async function bulkDecrementRobust(db, guildId, userCounts, messageIds, attempt 
 
     return true;
   } catch (err) {
-    console.error(`[Robust Count] Bulk decrement failed (attempt ${attempt}/${RETRY_ATTEMPTS}):`, err.message);
+    log.error("Bulk decrement failed", { guildId, attempt, err: err.message, messageCount: messageIds?.length || 0 });
 
     // Retry with exponential backoff
     if (attempt < RETRY_ATTEMPTS) {
@@ -323,7 +366,7 @@ async function bulkDecrementRobust(db, guildId, userCounts, messageIds, attempt 
     }
 
     // All retries failed
-    console.error("[Robust Count] Bulk decrement failed permanently");
+    log.error("Bulk decrement failed permanently", { guildId, messageCount: messageIds?.length || 0 });
     return false;
   }
 }
@@ -351,12 +394,43 @@ async function processErrorQueue(db) {
 
       let success = false;
       if (error.operation === "increment") {
+        let channelId = error.channel_id || null;
+        let messageCreatedAt = error.message_created_at || null;
+
+        // Best-effort fallback: if the message_index insert succeeded previously, reuse its metadata.
+        if (!channelId || !messageCreatedAt) {
+          try {
+            const idx = await dbGet(
+              db,
+              `SELECT channel_id, created_at FROM message_index WHERE guild_id = ? AND message_id = ?`,
+              [error.guild_id, error.message_id]
+            );
+            channelId = channelId || idx?.channel_id || null;
+            messageCreatedAt = messageCreatedAt || idx?.created_at || null;
+          } catch (_) {
+            // If message_index doesn't exist or query fails, continue without metadata.
+          }
+        }
+
+        if (!channelId) {
+          log.warn("Cannot replay increment without channel_id", {
+            guildId: error.guild_id,
+            userId: error.user_id,
+            messageId: error.message_id,
+            errorId: error.id,
+          });
+          success = false;
+        } else {
         success = await incrementMessageCountRobust(
           db,
           error.guild_id,
           error.user_id,
           error.message_id
+          ,
+          channelId,
+          messageCreatedAt
         );
+        }
       } else if (error.operation === "decrement") {
         success = await decrementMessageCountRobust(
           db,
@@ -381,12 +455,12 @@ async function processErrorQueue(db) {
     }
 
     if (processed > 0) {
-      console.log(`[Error Queue] Processed ${processed} errors, succeeded: ${succeeded}`);
+      log.info("Error queue processed", { processed, succeeded });
     }
 
     return { processed, succeeded };
   } catch (err) {
-    console.error("[Error Queue] Failed to process:", err.message);
+    log.error("Error queue processing failed", { err: err.message });
     return { processed: 0, succeeded: 0 };
   }
 }
@@ -406,7 +480,7 @@ async function cleanupEventLog(db) {
        )`
     );
   } catch (err) {
-    console.error("[Event Log] Cleanup failed:", err.message);
+    log.warn("Event log cleanup failed", { err: err.message });
   }
 }
 

@@ -12,7 +12,9 @@
     "audit:user": "node scripts/audit-user.js",
     "validate:messages": "node scripts/validate-message-counts.js",
     "backfill:safe": "node scripts/safe-backfill.js",
-    "test": "node --test"
+    "test": "node --test \"src/**/*.test.js\"",
+    "test:integration": "PAGE_CACHE_LOG=0 node scripts/test-analytics-integration.js",
+    "test:all": "npm run test && npm run test:integration"
   },
   "engines": {
     "node": ">=24.0.0"

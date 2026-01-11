@@ -1,5 +1,17 @@
 # Quick Test Reference
 
+## Recommended Quick Checks
+
+```bash
+cd /opt/jepsencloud-bot
+
+# Unit tests (fast, exits cleanly)
+npm test
+
+# Analytics integration checks (DB + endpoints)
+npm run test:integration
+```
+
 ## Run All Tests
 ```bash
 cd /opt/jepsencloud-bot
@@ -13,7 +25,7 @@ node scripts/stress-test-new-features.js && \
 
 ### 1. Unit Tests (Database & Features)
 ```bash
-node scripts/stress-test-new-features.js
+npm test
 ```
 - **Duration:** ~3 seconds
 - **Tests:** 40 tests

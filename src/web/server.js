@@ -66,6 +66,63 @@ function createWebServer({ discordClient, statsDb }) {
 
   app.get("/health", (req, res) => res.json({ ok: true }));
 
+  // Public status endpoint with CORS for landing page
+  app.get("/api/status", (req, res) => {
+    // Allow CORS from jepsencloud.com for the landing page
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET");
+    
+    const client = discordClient;
+    const isReady = client && client.isReady();
+    
+    // Get bot info
+    const botInfo = isReady ? {
+      username: client.user?.username || "Unknown",
+      discriminator: client.user?.discriminator || "0",
+      id: client.user?.id || null,
+      avatar: client.user?.displayAvatarURL({ size: 64 }) || null
+    } : null;
+    
+    // Get guilds (servers) the bot is in
+    const guilds = isReady ? client.guilds.cache.map(g => ({
+      id: g.id,
+      name: g.name,
+      memberCount: g.memberCount,
+      icon: g.iconURL({ size: 64 })
+    })) : [];
+    
+    // Uptime
+    const uptime = isReady && client.uptime ? client.uptime : 0;
+    const uptimeFormatted = uptime > 0 ? formatUptime(uptime) : "N/A";
+    
+    res.json({
+      ok: true,
+      bot: {
+        online: isReady,
+        info: botInfo,
+        guilds: guilds,
+        guildCount: guilds.length,
+        uptime: uptimeFormatted,
+        uptimeMs: uptime,
+        ping: isReady ? client.ws.ping : null
+      },
+      timestamp: new Date().toISOString()
+    });
+  });
+
+  // Helper to format uptime
+  function formatUptime(ms) {
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+    
+    if (days > 0) return `${days}d ${hours % 24}h`;
+    if (hours > 0) return `${hours}h ${minutes % 60}m`;
+    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+    return `${seconds}s`;
+  }
+
   // Redirect old /panel/* URLs to new paths
   app.get("/panel/login", (req, res) => res.redirect("/login"));
   app.get("/panel", (req, res) => res.redirect("/"));
@@ -545,29 +602,42 @@ function createWebServer({ discordClient, statsDb }) {
     const bot = bots[req.params.botKey];
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
-    // List of available slash commands
-    const availableCommands = [
-      { name: "mystats", description: "Show your message stats in this server", category: "user" },
-      { name: "userstats", description: "Show message stats for another user", category: "user" },
-      { name: "top5", description: "Show top 5 users by message count", category: "user" },
-      { name: "top10", description: "Show top 10 users by message count", category: "user" },
-      { name: "backfill", description: "Backfill message history (owner only)", category: "admin" },
-      { name: "demoembed", description: "Send an example embed", category: "user" },
-      { name: "synccommands", description: "Re-register slash commands (owner only)", category: "admin" }
-    ];
-
     try {
-      // Get first guild from bot's guilds
-      const guild = bot.client.guilds.cache.first();
-      const guildId = guild?.id || "global";
+      const requestedGuildId = String(req.query.guildId || "").trim();
+      const guildId = requestedGuildId || bot.client?.guilds.cache.first()?.id || null;
+      if (!guildId) return res.json({ ok: true, guildId: null, commands: [] });
 
-      const disabledList = await statsDb.getDisabledCommands(guildId);
-      const disabledSet = new Set(disabledList.map(d => d.command_name));
+      const guild = await bot.client.guilds.fetch(guildId).catch(() => bot.client.guilds.cache.get(guildId));
+      if (!guild) return res.status(404).json({ error: "Guild not found" });
 
-      const commands = availableCommands.map(cmd => ({
-        ...cmd,
-        enabled: !disabledSet.has(cmd.name)
-      }));
+      const commandCollection = await guild.commands.fetch();
+      const list = Array.from(commandCollection.values()).filter((c) => c && c.type === 1);
+
+      let disabledList = [];
+      try {
+        disabledList = await statsDb.getDisabledCommands(guildId);
+      } catch (e) {
+        console.error("Error getting disabled commands:", e);
+      }
+      const disabledSet = new Set((disabledList || []).map((d) => d.command_name));
+
+      function categorize(cmd) {
+        const name = String(cmd?.name || "").toLowerCase();
+        const desc = String(cmd?.description || "").toLowerCase();
+        if (name.includes("admin") || name.includes("sync") || name.includes("backfill")) return "admin";
+        if (desc.includes("owner") || desc.includes("admin")) return "admin";
+        return "user";
+      }
+
+      const commands = list
+        .map((c) => ({
+          name: c.name,
+          description: c.description,
+          options: Array.isArray(c.options) ? c.options.map((o) => ({ name: o?.name, required: !!o?.required })) : [],
+          category: categorize(c),
+          enabled: !disabledSet.has(c.name),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
 
       return res.json({ ok: true, commands, guildId });
     } catch (e) {

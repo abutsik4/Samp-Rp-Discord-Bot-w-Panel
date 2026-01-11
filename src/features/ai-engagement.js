@@ -24,6 +24,9 @@ async function ensureAIEngagementTables(db) {
       enabled INTEGER DEFAULT 1,
       probability REAL DEFAULT 3.0,
       cooldown_minutes INTEGER DEFAULT 5,
+      cooldown_jitter_seconds INTEGER DEFAULT 0,
+      response_delay_min_seconds INTEGER DEFAULT 0,
+      response_delay_max_seconds INTEGER DEFAULT 0,
       target_channels TEXT DEFAULT '[]',
       ml_confidence_threshold REAL DEFAULT 0.3,
       mode TEXT DEFAULT 'ml_only',
@@ -32,6 +35,18 @@ async function ensureAIEngagementTables(db) {
     )
   `
   );
+
+  // Lightweight migrations for existing installs
+  for (const stmt of [
+    `ALTER TABLE ai_engagement_settings ADD COLUMN cooldown_jitter_seconds INTEGER DEFAULT 0`,
+    `ALTER TABLE ai_engagement_settings ADD COLUMN response_delay_min_seconds INTEGER DEFAULT 0`,
+    `ALTER TABLE ai_engagement_settings ADD COLUMN response_delay_max_seconds INTEGER DEFAULT 0`,
+  ]) {
+    try {
+      // SQLite will throw if column already exists
+      await dbRun(db, stmt);
+    } catch (_) {}
+  }
 
   // Engagement history table
   await dbRun(
@@ -69,6 +84,9 @@ async function getEngagementSettings(db, guildId) {
       enabled: true,
       probability: 5.0, // Increased from 3.0 for better engagement
       cooldown_minutes: 5,
+      cooldown_jitter_seconds: 0,
+      response_delay_min_seconds: 0,
+      response_delay_max_seconds: 0,
       target_channels: [],
       ml_confidence_threshold: 0.2, // Lowered from 0.3 for more responses
       mode: "ml_only",
@@ -80,6 +98,9 @@ async function getEngagementSettings(db, guildId) {
     enabled: Boolean(row.enabled),
     target_channels: JSON.parse(row.target_channels || "[]"),
     ml_confidence_threshold: row.ml_confidence_threshold || 0.2, // Lowered default
+    cooldown_jitter_seconds: Number.isFinite(row.cooldown_jitter_seconds) ? row.cooldown_jitter_seconds : 0,
+    response_delay_min_seconds: Number.isFinite(row.response_delay_min_seconds) ? row.response_delay_min_seconds : 0,
+    response_delay_max_seconds: Number.isFinite(row.response_delay_max_seconds) ? row.response_delay_max_seconds : 0,
   };
 }
 
@@ -89,6 +110,9 @@ async function updateEngagementSettings(db, guildId, settings) {
   const enabled = settings.enabled !== undefined ? (settings.enabled ? 1 : 0) : 1;
   const probability = settings.probability !== undefined ? settings.probability : 3.0;
   const cooldownMinutes = settings.cooldown_minutes !== undefined ? settings.cooldown_minutes : 5;
+  const cooldownJitterSeconds = settings.cooldown_jitter_seconds !== undefined ? settings.cooldown_jitter_seconds : 0;
+  const responseDelayMinSeconds = settings.response_delay_min_seconds !== undefined ? settings.response_delay_min_seconds : 0;
+  const responseDelayMaxSeconds = settings.response_delay_max_seconds !== undefined ? settings.response_delay_max_seconds : 0;
   const targetChannels = JSON.stringify(settings.target_channels || []);
   const mlConfidenceThreshold = settings.ml_confidence_threshold !== undefined ? settings.ml_confidence_threshold : 0.3;
   const mode = settings.mode || "ml_only";
@@ -98,21 +122,22 @@ async function updateEngagementSettings(db, guildId, settings) {
       db,
       `
       UPDATE ai_engagement_settings
-      SET enabled = ?, probability = ?, cooldown_minutes = ?, 
+      SET enabled = ?, probability = ?, cooldown_minutes = ?, cooldown_jitter_seconds = ?,
+          response_delay_min_seconds = ?, response_delay_max_seconds = ?,
           target_channels = ?, ml_confidence_threshold = ?, mode = ?, updated_at = strftime('%s', 'now')
       WHERE guild_id = ?
     `,
-      [enabled, probability, cooldownMinutes, targetChannels, mlConfidenceThreshold, mode, guildId]
+      [enabled, probability, cooldownMinutes, cooldownJitterSeconds, responseDelayMinSeconds, responseDelayMaxSeconds, targetChannels, mlConfidenceThreshold, mode, guildId]
     );
   } else {
     await dbRun(
       db,
       `
       INSERT INTO ai_engagement_settings 
-      (guild_id, enabled, probability, cooldown_minutes, target_channels, ml_confidence_threshold, mode)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      (guild_id, enabled, probability, cooldown_minutes, cooldown_jitter_seconds, response_delay_min_seconds, response_delay_max_seconds, target_channels, ml_confidence_threshold, mode)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
-      [guildId, enabled, probability, cooldownMinutes, targetChannels, mlConfidenceThreshold, mode]
+      [guildId, enabled, probability, cooldownMinutes, cooldownJitterSeconds, responseDelayMinSeconds, responseDelayMaxSeconds, targetChannels, mlConfidenceThreshold, mode]
     );
   }
 }
@@ -154,6 +179,27 @@ async function analyzeContext(channel) {
 // ENGAGEMENT LOGIC
 // -------------------------
 
+function fnv1a32(input) {
+  let hash = 0x811c9dc5;
+  const str = String(input);
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = (hash * 0x01000193) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+function computeCooldownJitterSeconds(guildId, channelId, lastTimestampSeconds, maxJitterSeconds) {
+  const max = Math.max(0, Math.floor(Number(maxJitterSeconds) || 0));
+  if (!max) return 0;
+  const seed = `${guildId}:${channelId}:${lastTimestampSeconds}`;
+  return fnv1a32(seed) % (max + 1);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function shouldEngage(db, guildId, channelId, settings) {
   if (!settings.enabled) return false;
 
@@ -178,7 +224,9 @@ async function shouldEngage(db, guildId, channelId, settings) {
 
   if (lastEngagement) {
     const elapsed = Math.floor(Date.now() / 1000) - lastEngagement.timestamp;
-    if (elapsed < settings.cooldown_minutes * 60) {
+    const baseCooldown = Math.max(0, Math.floor((Number(settings.cooldown_minutes) || 0) * 60));
+    const jitter = computeCooldownJitterSeconds(guildId, channelId, lastEngagement.timestamp, settings.cooldown_jitter_seconds);
+    if (elapsed < baseCooldown + jitter) {
       return false;
     }
   }
@@ -223,26 +271,6 @@ async function tryEngageWithMessage(db, message, settings) {
     const context = await analyzeContext(message.channel);
     console.log(`[AI Engagement] Context analyzed - Sentiment: ${context.sentiment?.label}, Topics: ${context.topics?.join(", ")}, Confidence: ${context.confidence}`);
 
-    // Check cooldown (time since last engagement in this channel)
-    const cooldownCheck = await dbGet(
-      db,
-      `SELECT timestamp FROM ai_engagement_history 
-       WHERE guild_id = ? AND channel_id = ? 
-       ORDER BY timestamp DESC LIMIT 1`,
-      [guildId, channelId]
-    );
-
-    if (cooldownCheck) {
-      const lastEngagement = cooldownCheck.timestamp;
-      const now = Math.floor(Date.now() / 1000);
-      const elapsedMinutes = (now - lastEngagement) / 60;
-
-      if (elapsedMinutes < settings.cooldown_minutes) {
-        console.log(`[AI Engagement] Cooldown active: ${elapsedMinutes.toFixed(1)}/${settings.cooldown_minutes} min`);
-        return; // Skip - still in cooldown
-      }
-    }
-
     // Try to get ML-generated response (with fallback support)
     const mlResult = await generateContextualResponse(context, settings.ml_confidence_threshold || 0.2);
 
@@ -256,6 +284,19 @@ async function tryEngageWithMessage(db, message, settings) {
     const responseType = mlResult.method; // 'ml_generation' or 'ml_fallback'
 
     console.log(`[AI Engagement] Responding via ${responseType}, confidence: ${mlResult.confidence.toFixed(2)}, text: "${responseText}"`);
+
+    // Optional human-like delay before sending
+    const minDelay = Math.max(0, Math.floor(Number(settings.response_delay_min_seconds) || 0));
+    const maxDelay = Math.max(0, Math.floor(Number(settings.response_delay_max_seconds) || 0));
+    const low = Math.min(minDelay, maxDelay);
+    const high = Math.max(minDelay, maxDelay);
+    if (high > 0) {
+      const delaySeconds = low + Math.floor(Math.random() * (high - low + 1));
+      if (delaySeconds > 0) {
+        console.log(`[AI Engagement] Delaying response by ${delaySeconds}s`);
+        await sleep(delaySeconds * 1000);
+      }
+    }
 
     // Send response
     const sentMessage = await message.channel.send(responseText);

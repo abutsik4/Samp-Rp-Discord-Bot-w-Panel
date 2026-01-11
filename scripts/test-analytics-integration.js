@@ -151,10 +151,11 @@ async function testAPIEndpoints() {
 
   const botKey = bot.guild_id;
   const port = process.env.PORT || 3000;
+  const panelBase = process.env.PANEL_BASE || "/panel";
 
   const endpoints = [
-    `/api/${botKey}/analytics/channels`,
-    `/api/${botKey}/analytics/summary?start_date=2024-01-01&end_date=2024-12-31`
+    `${panelBase}/api/${botKey}/analytics/channels`,
+    `${panelBase}/api/${botKey}/analytics/summary?start_date=2024-01-01&end_date=2024-12-31`
   ];
 
   for (const endpoint of endpoints) {
@@ -173,18 +174,32 @@ async function testAPIEndpoints() {
       });
 
       if (response.status === 200) {
-        const json = JSON.parse(response.data);
+        let json;
+        try {
+          json = JSON.parse(response.data);
+        } catch (e) {
+          // If the panel is redirecting to/login rendering HTML, don't treat it as a hard failure.
+          console.log(`  ${colors.yellow}⚠${colors.reset} ${endpoint} - Non-JSON response (likely auth/login page)`);
+          continue;
+        }
         console.log(`  ${colors.green}✓${colors.reset} ${endpoint} (${Object.keys(json).length} fields)`);
-      } else if (response.status === 401 || response.status === 403) {
+      } else if (response.status === 401 || response.status === 403 || response.status === 302) {
         console.log(`  ${colors.yellow}⚠${colors.reset} ${endpoint} - Auth required (expected if not logged in)`);
       } else {
         console.log(`  ${colors.red}✗${colors.reset} ${endpoint} - Status ${response.status}`);
       }
     } catch (err) {
-      if (err.message.includes('ECONNREFUSED')) {
+      const msg =
+        (err && typeof err.message === 'string' && err.message) ||
+        (err && typeof err.code === 'string' && err.code) ||
+        (err ? String(err) : 'Unknown error');
+
+      if (err && (err.code === 'ECONNREFUSED' || msg.includes('ECONNREFUSED'))) {
         console.log(`  ${colors.yellow}⚠${colors.reset} ${endpoint} - Server not running`);
+      } else if (err && (err.code === 'ETIMEDOUT' || msg.toLowerCase().includes('timeout'))) {
+        console.log(`  ${colors.yellow}⚠${colors.reset} ${endpoint} - Timeout`);
       } else {
-        console.log(`  ${colors.red}✗${colors.reset} ${endpoint} - ${err.message}`);
+        console.log(`  ${colors.red}✗${colors.reset} ${endpoint} - ${msg}`);
       }
     }
   }

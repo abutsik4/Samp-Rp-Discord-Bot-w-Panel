@@ -417,11 +417,17 @@ pm2 logs jepsencloud-panel
 ### Testing
 
 ```bash
-# Run tests
+# Unit tests (fast, exits cleanly)
 npm test
 
-# Test specific feature
-node src/features/robust-message-counting.test.js
+# Analytics integration checks (DB + endpoints)
+npm run test:integration
+
+# Run both
+npm run test:all
+
+# Run a specific unit test file
+node --test src/features/robust-message-counting.test.js
 ```
 
 ### Database Utilities
@@ -429,6 +435,10 @@ node src/features/robust-message-counting.test.js
 ```bash
 # Validate message counts
 node scripts/validate-message-counts.js
+
+# Trace a specific message or user (debug)
+node scripts/trace-message-counting.js message <message_id> --guild <guild_id>
+node scripts/trace-message-counting.js user <user_id> --guild <guild_id>
 
 # Audit specific user
 node scripts/audit-user.js <user_id>
@@ -439,6 +449,34 @@ node scripts/safe-backfill.js
 # Verify counts from search
 node scripts/verify-counts-from-search.js
 ```
+
+### Debug Logging
+
+The message-counting pipeline uses structured logging.
+
+- `LOG_LEVEL`: `silent|error|warn|info|debug|trace` (default: `info`)
+- `LOG_FORMAT`: `pretty|json` (default: `pretty`)
+
+Example (more detailed logs in development):
+
+```bash
+LOG_LEVEL=debug npm run dev
+```
+
+Example (JSON logs for PM2):
+
+```bash
+LOG_LEVEL=info LOG_FORMAT=json pm2 start ecosystem.config.js
+```
+
+### Debug APIs (Panel)
+
+If you’re logged into the panel, you can query deep traces:
+
+- `GET /api/accuracy/trace/message?guildId=...&messageId=...&limit=50`
+- `GET /api/accuracy/trace/user?guildId=...&userId=...&limit=50`
+
+These endpoints return the `message_index` row (if present) plus recent `message_count_events` and `message_count_errors`.
 
 ### Code Structure
 

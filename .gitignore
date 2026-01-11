@@ -2,6 +2,12 @@ node_modules/
 data/*.db
 data/*.db-wal
 data/*.db-shm
+*.db
+*.db-wal
+*.db-shm
+sessions.db
+stats.db
+cookies.txt
 logs/*.log
 backups/
 .env
@@ -14,3 +20,6 @@ package-lock.json
 .cache/
 .local/
 ~
+
+# Landing page - DO NOT modify unless specifically requested by the user
+index.html

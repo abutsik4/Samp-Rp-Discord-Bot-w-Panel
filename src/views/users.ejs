@@ -5,22 +5,281 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>User Management — JepsenCloud Panel</title>
   <link rel="stylesheet" href="/shared.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.css">
   <style>
+    html, body {
+      overflow: hidden;
+      height: 100%;
+    }
+
+    .dashboard-wrapper {
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Sidebar */
+    .sidebar-nav {
+      width: 280px;
+      min-width: 280px;
+      background: rgba(10, 14, 23, 0.98);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      position: fixed;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      z-index: 100;
+      backdrop-filter: blur(20px);
+    }
+
+    .sidebar-header {
+      padding: 24px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .sidebar-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .sidebar-brand-icon {
+      width: 44px;
+      height: 44px;
+      background: var(--gradient-primary);
+      border-radius: var(--radius-lg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+    }
+
+    .sidebar-brand-text {
+      font-size: 18px;
+      font-weight: 700;
+      background: var(--gradient-primary);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .sidebar-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .sidebar-user {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: rgba(167, 139, 250, 0.08);
+      border-radius: var(--radius-md);
+      margin-top: 12px;
+    }
+
+    .sidebar-user-avatar {
+      width: 32px;
+      height: 32px;
+      background: var(--gradient-secondary);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+
+    .sidebar-user-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-bright);
+    }
+
+    .sidebar-user-role {
+      font-size: 11px;
+      color: var(--accent-cyan);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .sidebar-menu {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 12px;
+    }
+
+    .sidebar-section {
+      margin-bottom: 24px;
+    }
+
+    .sidebar-section-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-muted);
+      padding: 0 12px;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+
+    .sidebar-nav-link {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      border-radius: var(--radius-md);
+      color: var(--text-muted);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.25s ease;
+      text-decoration: none;
+      border: 1px solid transparent;
+    }
+
+    .sidebar-nav-link:hover {
+      background: rgba(167, 139, 250, 0.1);
+      color: var(--text-bright);
+      border-color: rgba(167, 139, 250, 0.2);
+    }
+
+    .sidebar-nav-link.active {
+      background: var(--gradient-glass);
+      color: var(--accent-cyan);
+      border-color: rgba(34, 211, 238, 0.3);
+    }
+
+    .sidebar-nav-icon { font-size: 18px; width: 24px; text-align: center; }
+
+    .sidebar-footer {
+      padding: 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    .sidebar-footer-links {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .sidebar-footer-link {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: var(--radius-md);
+      color: var(--text-muted);
+      font-size: 13px;
+      text-decoration: none;
+      transition: all 0.2s ease;
+      border: none;
+      background: none;
+      cursor: pointer;
+      width: 100%;
+      text-align: left;
+    }
+
+    .sidebar-footer-link:hover {
+      background: rgba(167, 139, 250, 0.1);
+      color: var(--text-bright);
+    }
+
+    /* Main Content */
+    .main-scroll-container {
+      flex: 1;
+      margin-left: 280px;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    .scroll-progress {
+      position: fixed;
+      top: 0;
+      left: 280px;
+      right: 0;
+      height: 3px;
+      background: rgba(45, 55, 75, 0.5);
+      z-index: 1000;
+    }
+
+    .scroll-progress-bar {
+      height: 100%;
+      background: var(--gradient-primary);
+      width: 0%;
+      transition: width 0.1s ease;
+    }
+
+    .panel-section {
+      min-height: 100vh;
+      padding: 60px 40px;
+    }
+
+    .section-header {
+      opacity: 0;
+      transform: translateY(30px);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 32px;
+    }
+
+    .section-header.is-inview {
+      opacity: 1;
+      transform: translateY(0);
+      transition: all 1s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .section-title {
+      font-size: 32px;
+      font-weight: 700;
+      background: var(--gradient-primary);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 0;
+    }
+
+    /* Table Styling */
+    .table-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      opacity: 0;
+      transform: translateY(30px);
+    }
+
+    .table-card.is-inview {
+      opacity: 1;
+      transform: translateY(0);
+      transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.2s;
+    }
+
     .users-table {
       width: 100%;
       border-collapse: collapse;
-      margin-top: 20px;
     }
     .users-table th {
       background: rgba(167, 139, 250, 0.1);
-      padding: 12px;
+      padding: 14px 12px;
       text-align: left;
-      border-bottom: 2px solid var(--border-color);
+      border-bottom: 2px solid var(--border);
       font-weight: 600;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
     }
     .users-table td {
-      padding: 12px;
-      border-bottom: 1px solid var(--border-color);
+      padding: 14px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .users-table tr {
+      transition: all 0.3s ease;
     }
     .users-table tr:hover {
       background: rgba(167, 139, 250, 0.05);
@@ -46,6 +305,28 @@
       font-size: 13px;
       margin-right: 6px;
     }
+
+    /* Alerts */
+    .alert {
+      padding: 16px 20px;
+      border-radius: var(--radius-md);
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .alert-success {
+      background: rgba(52, 211, 153, 0.1);
+      border: 1px solid rgba(52, 211, 153, 0.3);
+      color: var(--accent-emerald);
+    }
+    .alert-error {
+      background: rgba(251, 113, 133, 0.1);
+      border: 1px solid rgba(251, 113, 133, 0.3);
+      color: var(--accent-rose);
+    }
+
+    /* Modal */
     .modal {
       display: none;
       position: fixed;
@@ -58,14 +339,22 @@
       backdrop-filter: blur(4px);
     }
     .modal-content {
-      background-color: var(--bg-dark);
+      background-color: var(--bg-card);
       margin: 10% auto;
       padding: 30px;
-      border: 1px solid var(--border-color);
-      border-radius: 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
       width: 90%;
       max-width: 500px;
       box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    }
+    .modal-title {
+      font-size: 20px;
+      font-weight: 700;
+      margin: 0 0 20px;
+      background: var(--gradient-primary);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
     }
     .close {
       color: var(--text-muted);
@@ -73,102 +362,204 @@
       font-size: 28px;
       font-weight: bold;
       cursor: pointer;
+      transition: color 0.2s;
     }
     .close:hover {
-      color: var(--text-primary);
+      color: var(--text-bright);
+    }
+
+    /* Mobile */
+    .sidebar-toggle {
+      display: none;
+      position: fixed;
+      top: 20px;
+      left: 20px;
+      z-index: 200;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 12px;
+      cursor: pointer;
+      font-size: 20px;
+      color: var(--text);
+    }
+
+    .sidebar-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 99;
+      backdrop-filter: blur(4px);
+    }
+
+    @media (max-width: 1024px) {
+      .sidebar-nav {
+        transform: translateX(-100%);
+        transition: transform 0.3s ease;
+      }
+      .sidebar-nav.open { transform: translateX(0); }
+      .sidebar-toggle { display: flex; }
+      .sidebar-overlay.open { display: block; }
+      .main-scroll-container { margin-left: 0; }
+      .scroll-progress { left: 0; }
+      .panel-section { padding: 40px 20px; }
+      .section-header { flex-direction: column; gap: 16px; align-items: flex-start; }
+      .users-table { font-size: 13px; }
+      .btn-small { padding: 4px 8px; font-size: 11px; }
     }
   </style>
 </head>
 <body>
-  <div class="page-container">
-    <nav class="navbar">
-      <div class="navbar-brand">
-        <a href="/">🎮 JepsenCloud Panel</a>
+  <div class="dashboard-wrapper">
+    <button class="sidebar-toggle" id="sidebarToggle">☰</button>
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+    <nav class="sidebar-nav" id="sidebarNav">
+      <div class="sidebar-header">
+        <div class="sidebar-brand">
+          <div class="sidebar-brand-icon">👥</div>
+          <div>
+            <div class="sidebar-brand-text">User Management</div>
+            <div class="sidebar-subtitle">Administration</div>
+          </div>
+        </div>
+        <div class="sidebar-user">
+          <div class="sidebar-user-avatar">👤</div>
+          <div>
+            <div class="sidebar-user-name"><%= username %></div>
+            <div class="sidebar-user-role"><%= userRole %></div>
+          </div>
+        </div>
       </div>
-      <div class="navbar-links">
-        <span>👤 <%= username %> (<%= userRole %>)</span>
-        <a href="/change-password">🔐 Change Password</a>
-        <form method="post" action="/logout" style="display:inline">
-          <button class="btn btn-secondary" type="submit">Logout</button>
-        </form>
+
+      <div class="sidebar-menu">
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">Navigation</div>
+          <a href="#users" class="sidebar-nav-link active" data-section="users">
+            <span class="sidebar-nav-icon">👥</span>
+            <span>All Users</span>
+          </a>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">Actions</div>
+          <a href="#" class="sidebar-nav-link" onclick="showCreateUserModal(); return false;">
+            <span class="sidebar-nav-icon">➕</span>
+            <span>Create User</span>
+          </a>
+        </div>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="sidebar-footer-links">
+          <a href="/panel/change-password" class="sidebar-footer-link">
+            <span>🔐</span>
+            <span>Change Password</span>
+          </a>
+          <a href="/panel" class="sidebar-footer-link">
+            <span>←</span>
+            <span>Back to Dashboard</span>
+          </a>
+          <button onclick="toggleSnow()" class="sidebar-footer-link">
+            <span>❄️</span>
+            <span>Toggle Snow</span>
+          </button>
+          <form method="post" action="/panel/logout" style="margin:0">
+            <button type="submit" class="sidebar-footer-link" style="color: var(--accent-rose);">
+              <span>🚪</span>
+              <span>Logout</span>
+            </button>
+          </form>
+        </div>
       </div>
     </nav>
 
-    <div class="content">
-      <div class="card">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-          <h1 style="margin: 0;">👥 User Management</h1>
-          <button class="btn btn-primary" onclick="showCreateUserModal()">
-            ➕ Create User
-          </button>
-        </div>
-
-        <% if (message) { %>
-          <div class="alert-success mb-4">
-            <%= message %>
-          </div>
-        <% } %>
-
-        <% if (error) { %>
-          <div class="alert-error mb-4">
-            <%= error %>
-          </div>
-        <% } %>
-
-        <table class="users-table">
-          <thead>
-            <tr>
-              <th>Username</th>
-              <th>Role</th>
-              <th>Created</th>
-              <th>Last Login</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <% users.forEach(user => { %>
-              <tr>
-                <td><strong><%= user.username %></strong></td>
-                <td>
-                  <span class="role-badge role-<%= user.role %>"><%= user.role %></span>
-                </td>
-                <td><%= new Date(user.created_at).toLocaleDateString() %></td>
-                <td><%= user.last_login ? new Date(user.last_login).toLocaleString() : 'Never' %></td>
-                <td>
-                  <% if (user.username !== username) { %>
-                    <button class="btn btn-secondary btn-small" onclick="showResetPasswordModal('<%= user.username %>')">
-                      🔑 Reset
-                    </button>
-                    <button class="btn btn-secondary btn-small" onclick="confirmDelete('<%= user.username %>')">
-                      🗑️ Delete
-                    </button>
-                    <% if (user.role === 'user') { %>
-                      <button class="btn btn-primary btn-small" onclick="makeAdmin('<%= user.username %>')">
-                        ⬆️ Make Admin
-                      </button>
-                    <% } else { %>
-                      <button class="btn btn-secondary btn-small" onclick="makeUser('<%= user.username %>')">
-                        ⬇️ Make User
-                      </button>
-                    <% } %>
-                  <% } else { %>
-                    <a href="/change-password" class="btn btn-secondary btn-small">🔐 Change</a>
-                  <% } %>
-                </td>
-              </tr>
-            <% }) %>
-          </tbody>
-        </table>
+    <main class="main-scroll-container">
+      <div class="scroll-progress">
+        <div class="scroll-progress-bar" id="scrollProgressBar"></div>
       </div>
-    </div>
+
+      <div data-scroll-container id="scrollContainer">
+        <section class="panel-section" id="users" data-scroll-section>
+          <div class="section-header" data-scroll data-scroll-class="is-inview">
+            <h1 class="section-title">
+              <span>👥</span> User Management
+            </h1>
+            <button class="btn btn-primary" onclick="showCreateUserModal()">
+              ➕ Create User
+            </button>
+          </div>
+
+          <% if (message) { %>
+            <div class="alert alert-success">
+              ✅ <%= message %>
+            </div>
+          <% } %>
+
+          <% if (error) { %>
+            <div class="alert alert-error">
+              ❌ <%= error %>
+            </div>
+          <% } %>
+
+          <div class="table-card" data-scroll data-scroll-class="is-inview">
+            <table class="users-table">
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Role</th>
+                  <th>Created</th>
+                  <th>Last Login</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <% users.forEach(user => { %>
+                  <tr>
+                    <td><strong><%= user.username %></strong></td>
+                    <td>
+                      <span class="role-badge role-<%= user.role %>"><%= user.role %></span>
+                    </td>
+                    <td><%= new Date(user.created_at).toLocaleDateString() %></td>
+                    <td><%= user.last_login ? new Date(user.last_login).toLocaleString() : 'Never' %></td>
+                    <td>
+                      <% if (user.username !== username) { %>
+                        <button class="btn btn-secondary btn-small" onclick="showResetPasswordModal('<%= user.username %>')">
+                          🔑 Reset
+                        </button>
+                        <button class="btn btn-secondary btn-small" onclick="confirmDelete('<%= user.username %>')">
+                          🗑️ Delete
+                        </button>
+                        <% if (user.role === 'user') { %>
+                          <button class="btn btn-primary btn-small" onclick="makeAdmin('<%= user.username %>')">
+                            ⬆️ Admin
+                          </button>
+                        <% } else { %>
+                          <button class="btn btn-secondary btn-small" onclick="makeUser('<%= user.username %>')">
+                            ⬇️ User
+                          </button>
+                        <% } %>
+                      <% } else { %>
+                        <a href="/panel/change-password" class="btn btn-secondary btn-small">🔐 Change</a>
+                      <% } %>
+                    </td>
+                  </tr>
+                <% }) %>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </main>
   </div>
 
   <!-- Create User Modal -->
   <div id="createUserModal" class="modal">
     <div class="modal-content">
       <span class="close" onclick="closeCreateUserModal()">&times;</span>
-      <h2 style="margin-top: 0;">Create New User</h2>
-      <form method="post" action="/users/create">
+      <h2 class="modal-title">➕ Create New User</h2>
+      <form method="post" action="/panel/users/create">
         <div class="form-group">
           <label>Username</label>
           <input name="username" required minlength="3" maxlength="50" pattern="[a-zA-Z0-9_-]+" 
@@ -194,9 +585,9 @@
   <div id="resetPasswordModal" class="modal">
     <div class="modal-content">
       <span class="close" onclick="closeResetPasswordModal()">&times;</span>
-      <h2 style="margin-top: 0;">🔑 Reset User Password</h2>
+      <h2 class="modal-title">🔑 Reset User Password</h2>
       <p style="color: var(--text-muted); margin-bottom: 20px;">Set a new password for user: <strong id="resetUsername"></strong></p>
-      <form method="post" action="/users/reset-password">
+      <form method="post" action="/panel/users/reset-password">
         <input type="hidden" name="username" id="resetUsernameInput" />
         <div class="form-group">
           <label>New Password</label>
@@ -211,7 +602,54 @@
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
+  <script src="/public/snow.js"></script>
   <script>
+    // Initialize Locomotive Scroll
+    const locoScroll = new LocomotiveScroll({
+      el: document.querySelector('[data-scroll-container]'),
+      smooth: true,
+      lerp: 0.075,
+      multiplier: 0.8,
+      smartphone: { smooth: true },
+      tablet: { smooth: true }
+    });
+
+    gsap.registerPlugin(ScrollTrigger);
+    locoScroll.on('scroll', ScrollTrigger.update);
+    ScrollTrigger.scrollerProxy('[data-scroll-container]', {
+      scrollTop(value) {
+        return arguments.length ? locoScroll.scrollTo(value, 0, 0) : locoScroll.scroll.instance.scroll.y;
+      },
+      getBoundingClientRect() {
+        return { top: 0, left: 0, width: window.innerWidth, height: window.innerHeight };
+      },
+      pinType: document.querySelector('[data-scroll-container]').style.transform ? 'transform' : 'fixed'
+    });
+    ScrollTrigger.addEventListener('refresh', () => locoScroll.update());
+    ScrollTrigger.refresh();
+
+    locoScroll.on('scroll', (args) => {
+      const progress = (args.scroll.y / (args.limit.y || 1)) * 100;
+      document.getElementById('scrollProgressBar').style.width = progress + '%';
+    });
+
+    // Mobile sidebar
+    const toggle = document.getElementById('sidebarToggle');
+    const overlay = document.getElementById('sidebarOverlay');
+    const sidebar = document.getElementById('sidebarNav');
+    toggle.addEventListener('click', () => {
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('open');
+    });
+    overlay.addEventListener('click', () => {
+      sidebar.classList.remove('open');
+      overlay.classList.remove('open');
+    });
+
+    // Modal functions
     function showCreateUserModal() {
       document.getElementById('createUserModal').style.display = 'block';
     }
@@ -233,19 +671,15 @@
     window.onclick = function(event) {
       const createModal = document.getElementById('createUserModal');
       const resetModal = document.getElementById('resetPasswordModal');
-      if (event.target === createModal) {
-        createModal.style.display = 'none';
-      }
-      if (event.target === resetModal) {
-        resetModal.style.display = 'none';
-      }
+      if (event.target === createModal) createModal.style.display = 'none';
+      if (event.target === resetModal) resetModal.style.display = 'none';
     }
 
     function confirmDelete(username) {
       if (confirm(`Are you sure you want to delete user "${username}"?`)) {
         const form = document.createElement('form');
         form.method = 'POST';
-        form.action = '/users/delete';
+        form.action = '/panel/users/delete';
         const input = document.createElement('input');
         input.type = 'hidden';
         input.name = 'username';
@@ -260,7 +694,7 @@
       if (confirm(`Grant admin privileges to "${username}"?`)) {
         const form = document.createElement('form');
         form.method = 'POST';
-        form.action = '/users/update-role';
+        form.action = '/panel/users/update-role';
         const inputUser = document.createElement('input');
         inputUser.type = 'hidden';
         inputUser.name = 'username';
@@ -280,7 +714,7 @@
       if (confirm(`Revoke admin privileges from "${username}"?`)) {
         const form = document.createElement('form');
         form.method = 'POST';
-        form.action = '/users/update-role';
+        form.action = '/panel/users/update-role';
         const inputUser = document.createElement('input');
         inputUser.type = 'hidden';
         inputUser.name = 'username';

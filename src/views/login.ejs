@@ -4,48 +4,169 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>JepsenCloud Panel — Login</title>
+  <link rel="icon" type="image/svg+xml" href="/icons/panel.svg" />
   <link rel="stylesheet" href="/shared.css" />
   <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
     body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       background: linear-gradient(135deg, #0a0e17 0%, #1a1f3a 100%);
       position: relative;
       overflow: hidden;
     }
     
-    body::before {
+    /* Animated background */
+    .bg-animation {
+      position: fixed;
+      inset: 0;
+      overflow: hidden;
+      pointer-events: none;
+    }
+
+    .bg-animation::before {
       content: '';
       position: absolute;
       top: -50%;
       left: -50%;
       width: 200%;
       height: 200%;
-      background: radial-gradient(circle, rgba(167, 139, 250, 0.1) 0%, transparent 70%);
-      animation: rotate 30s linear infinite;
+      background: radial-gradient(circle at 30% 30%, rgba(167, 139, 250, 0.15) 0%, transparent 50%),
+                  radial-gradient(circle at 70% 70%, rgba(34, 211, 238, 0.1) 0%, transparent 50%);
+      animation: rotate 40s linear infinite;
+    }
+
+    .bg-animation::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: radial-gradient(ellipse at center, transparent 0%, rgba(10, 14, 23, 0.8) 100%);
     }
     
     @keyframes rotate {
       from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
     }
+
+    /* Floating particles */
+    .particles {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .particle {
+      position: absolute;
+      width: 4px;
+      height: 4px;
+      background: rgba(167, 139, 250, 0.6);
+      border-radius: 50%;
+      animation: float 15s infinite;
+    }
+
+    .particle:nth-child(1) { left: 10%; animation-delay: 0s; animation-duration: 20s; }
+    .particle:nth-child(2) { left: 20%; animation-delay: -2s; animation-duration: 18s; }
+    .particle:nth-child(3) { left: 30%; animation-delay: -4s; animation-duration: 22s; }
+    .particle:nth-child(4) { left: 40%; animation-delay: -6s; animation-duration: 16s; }
+    .particle:nth-child(5) { left: 50%; animation-delay: -8s; animation-duration: 24s; }
+    .particle:nth-child(6) { left: 60%; animation-delay: -10s; animation-duration: 19s; }
+    .particle:nth-child(7) { left: 70%; animation-delay: -12s; animation-duration: 21s; }
+    .particle:nth-child(8) { left: 80%; animation-delay: -14s; animation-duration: 17s; }
+    .particle:nth-child(9) { left: 90%; animation-delay: -16s; animation-duration: 23s; }
+
+    @keyframes float {
+      0%, 100% {
+        transform: translateY(100vh) scale(0);
+        opacity: 0;
+      }
+      10% {
+        opacity: 1;
+      }
+      90% {
+        opacity: 1;
+      }
+      100% {
+        transform: translateY(-100vh) scale(1);
+        opacity: 0;
+      }
+    }
+
+    /* Login container */
+    .login-container {
+      position: relative;
+      z-index: 10;
+      width: 100%;
+      max-width: 440px;
+      padding: 20px;
+    }
     
     .login-card {
       position: relative;
-      z-index: 1;
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      background: rgba(12, 17, 29, 0.8);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      background: rgba(12, 17, 29, 0.85);
       border: 1px solid rgba(167, 139, 250, 0.3);
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 40px rgba(167, 139, 250, 0.1);
+      border-radius: 20px;
+      padding: 40px;
+      box-shadow: 0 25px 80px rgba(0, 0, 0, 0.5), 
+                  0 0 60px rgba(167, 139, 250, 0.1),
+                  inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      animation: cardAppear 1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      opacity: 0;
+      transform: translateY(30px);
+    }
+
+    @keyframes cardAppear {
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .login-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: var(--gradient-primary);
+      border-radius: 20px 20px 0 0;
+    }
+
+    .login-icon {
+      font-size: 56px;
+      text-align: center;
+      margin-bottom: 20px;
+      display: block;
+      filter: drop-shadow(0 0 30px rgba(167, 139, 250, 0.4));
+      animation: iconPulse 3s ease-in-out infinite;
+    }
+
+    @keyframes iconPulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.05); }
     }
     
     .login-title {
-      font-size: 36px;
-      font-weight: 700;
+      font-size: 32px;
+      font-weight: 800;
       background: var(--gradient-primary);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       margin-bottom: 8px;
       text-align: center;
+      letter-spacing: -0.5px;
     }
     
     .login-subtitle {
@@ -54,30 +175,156 @@
       font-size: 15px;
       margin-bottom: 32px;
     }
-    
-    .login-icon {
-      font-size: 48px;
-      text-align: center;
+
+    .alert-error {
+      background: rgba(251, 113, 133, 0.1);
+      border: 1px solid rgba(251, 113, 133, 0.3);
+      color: var(--accent-rose);
+      padding: 14px 18px;
+      border-radius: var(--radius-md);
+      margin-bottom: 24px;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .form-group {
       margin-bottom: 20px;
+    }
+
+    .form-group label {
       display: block;
-      filter: drop-shadow(0 0 20px rgba(167, 139, 250, 0.3));
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .form-group input {
+      width: 100%;
+      padding: 14px 16px;
+      background: rgba(30, 41, 59, 0.6);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--text);
+      font-size: 15px;
+      transition: all 0.3s ease;
+    }
+
+    .form-group input:focus {
+      outline: none;
+      border-color: var(--accent-purple);
+      box-shadow: 0 0 0 4px rgba(167, 139, 250, 0.15);
+      background: rgba(30, 41, 59, 0.8);
+    }
+
+    .form-group input::placeholder {
+      color: var(--text-muted);
+      opacity: 0.6;
+    }
+
+    .btn-login {
+      width: 100%;
+      padding: 16px 24px;
+      background: var(--gradient-primary);
+      border: none;
+      border-radius: var(--radius-md);
+      color: white;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      transition: all 0.3s ease;
+      margin-top: 8px;
+    }
+
+    .btn-login:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 30px rgba(167, 139, 250, 0.3);
+    }
+
+    .btn-login:active {
+      transform: translateY(0);
+    }
+
+    .login-footer {
+      text-align: center;
+      margin-top: 24px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    /* Responsive */
+    @media (max-width: 480px) {
+      .login-card {
+        padding: 30px 24px;
+      }
+
+      .login-title {
+        font-size: 26px;
+      }
+
+      .login-icon {
+        width: 56px;
+        height: 56px;
+      }
+    }
+
+    .login-icon {
+      width: 72px;
+      height: 72px;
+      margin: 0 auto 18px;
+      display: block;
+      filter: drop-shadow(0 0 18px rgba(34, 211, 238, 0.25));
+      animation: float 3s ease-in-out infinite;
+    }
+
+    .login-icon img {
+      width: 100%;
+      height: 100%;
+      display: block;
     }
   </style>
 </head>
 <body>
-  <div class="page-container-centered">
-    <div class="card card-center login-card">
-      <div class="login-icon">🎮</div>
+  <div class="bg-animation"></div>
+  
+  <div class="particles">
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+  </div>
+
+  <div class="login-container">
+    <div class="login-card">
+      <div class="login-icon" aria-hidden="true">
+        <img src="/icons/panel.svg" alt="JepsenCloud Panel" />
+      </div>
       <h1 class="login-title">JepsenCloud Panel</h1>
       <p class="login-subtitle">Sign in to manage your Discord bots</p>
 
       <% if (error) { %>
-        <div class="alert-error mb-4">
-          <strong>⚠️ Error:</strong> <%= error %>
+        <div class="alert-error">
+          <span>⚠️</span>
+          <span><%= error %></span>
         </div>
       <% } %>
 
-      <form method="post" action="/login">
+      <form method="post" action="/panel/login">
         <div class="form-group">
           <label>Username</label>
           <input name="username" autocomplete="username" required placeholder="Enter username..." />
@@ -88,12 +335,18 @@
           <input name="password" type="password" autocomplete="current-password" required placeholder="Enter password..." />
         </div>
 
-        <button class="btn btn-primary w-full" type="submit">
+        <button class="btn-login" type="submit">
           <span>🔐</span>
           <span>Sign In</span>
         </button>
       </form>
+
+      <div class="login-footer">
+        Secure authentication powered by JepsenCloud
+      </div>
     </div>
   </div>
+
+  <script src="/public/snow.js"></script>
 </body>
 </html>

@@ -6,12 +6,270 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title><%= bot.name %> - Bot Panel</title>
   <link rel="stylesheet" href="/shared.css">
+  <!-- Locomotive Scroll CSS -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.css">
   <style>
+    /* Dashboard Layout with Sidebar */
+    html, body {
+      overflow: hidden;
+      height: 100%;
+    }
+
+    .dashboard-wrapper {
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Left Sidebar Navigation */
+    .sidebar-nav {
+      width: 280px;
+      min-width: 280px;
+      background: rgba(10, 14, 23, 0.98);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      position: fixed;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      z-index: 100;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+    }
+
+    .sidebar-header {
+      padding: 24px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .sidebar-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .sidebar-brand-icon {
+      width: 44px;
+      height: 44px;
+      background: var(--gradient-primary);
+      border-radius: var(--radius-lg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+    }
+
+    .sidebar-brand-text {
+      font-size: 18px;
+      font-weight: 700;
+      background: var(--gradient-primary);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .sidebar-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .sidebar-user {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: rgba(167, 139, 250, 0.08);
+      border-radius: var(--radius-md);
+      margin-top: 12px;
+    }
+
+    .sidebar-user-avatar {
+      width: 32px;
+      height: 32px;
+      background: var(--gradient-secondary);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+
+    .sidebar-user-info {
+      flex: 1;
+    }
+
+    .sidebar-user-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-bright);
+    }
+
+    .sidebar-user-role {
+      font-size: 11px;
+      color: var(--accent-cyan);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* Navigation Menu */
+    .sidebar-menu {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 12px;
+    }
+
+    .sidebar-section {
+      margin-bottom: 24px;
+    }
+
+    .sidebar-section-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-muted);
+      padding: 0 12px;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+
+    .sidebar-nav-link {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      border-radius: var(--radius-md);
+      color: var(--text-muted);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.25s ease;
+      text-decoration: none;
+      border: 1px solid transparent;
+    }
+
+    .sidebar-nav-link:hover {
+      background: rgba(167, 139, 250, 0.1);
+      color: var(--text-bright);
+      border-color: rgba(167, 139, 250, 0.2);
+    }
+
+    .sidebar-nav-link.active {
+      background: var(--gradient-glass);
+      color: var(--accent-cyan);
+      border-color: rgba(34, 211, 238, 0.3);
+    }
+
+    .sidebar-nav-icon {
+      font-size: 18px;
+      opacity: 0.8;
+      width: 24px;
+      text-align: center;
+    }
+
+    .sidebar-nav-badge {
+      margin-left: auto;
+      padding: 2px 8px;
+      background: rgba(34, 211, 238, 0.2);
+      border-radius: var(--radius-full);
+      font-size: 10px;
+      color: var(--accent-cyan);
+      font-weight: 600;
+    }
+
+    /* Sidebar Footer */
+    .sidebar-footer {
+      padding: 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    .sidebar-footer-links {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .sidebar-footer-link {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: var(--radius-md);
+      color: var(--text-muted);
+      font-size: 13px;
+      text-decoration: none;
+      transition: all 0.2s ease;
+    }
+
+    .sidebar-footer-link:hover {
+      background: rgba(167, 139, 250, 0.1);
+      color: var(--text-bright);
+    }
+
+    /* Main Scroll Container */
+    .main-scroll-container {
+      flex: 1;
+      margin-left: 280px;
+      height: 100vh;
+      overflow: hidden;
+      position: relative;
+    }
+
+    [data-scroll-container] {
+      min-height: 100vh;
+    }
+
+    /* Section Styling */
+    .panel-section {
+      min-height: 100vh;
+      padding: 60px 40px;
+      position: relative;
+    }
+
+    .section-header {
+      margin-bottom: 40px;
+      opacity: 0;
+      transform: translateY(30px);
+    }
+
+    .section-header.is-inview {
+      opacity: 1;
+      transform: translateY(0);
+      transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .section-title-main {
+      font-size: 32px;
+      font-weight: 700;
+      background: var(--gradient-primary);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .section-description {
+      font-size: 16px;
+      color: var(--text-muted);
+      max-width: 600px;
+    }
+
+    /* Action Cards with Animation */
     .action-card {
       position: relative;
       overflow: hidden;
+      opacity: 0;
+      transform: translateY(40px);
     }
-    
+
+    .action-card.is-inview {
+      opacity: 1;
+      transform: translateY(0);
+      transition: all 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
     .action-card::before {
       content: '';
       position: absolute;
@@ -22,14 +280,95 @@
       background: var(--gradient-primary);
       opacity: 0.7;
     }
-    
+
     .card-icon {
-      font-size: 24px;
-      opacity: 0.7;
-      margin-bottom: 8px;
+      font-size: 28px;
+      opacity: 0.8;
+      margin-bottom: 12px;
       display: inline-block;
     }
-    
+
+    /* Feature Cards Grid */
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+      gap: 24px;
+    }
+
+    .feature-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 28px;
+      position: relative;
+      overflow: hidden;
+      opacity: 0;
+      transform: translateY(40px) scale(0.95);
+    }
+
+    .feature-card.is-inview {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      transition: all 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .feature-card:hover {
+      border-color: var(--border-hover);
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-lg), var(--shadow-glow);
+    }
+
+    .feature-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: var(--gradient-primary);
+    }
+
+    .feature-icon {
+      font-size: 32px;
+      margin-bottom: 16px;
+      display: inline-block;
+    }
+
+    .feature-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--accent-purple);
+      margin-bottom: 10px;
+    }
+
+    .feature-desc {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 20px;
+      line-height: 1.6;
+    }
+
+    .feature-list {
+      list-style: none;
+      margin-bottom: 20px;
+    }
+
+    .feature-list li {
+      font-size: 13px;
+      color: var(--text-muted);
+      padding: 6px 0;
+      padding-left: 20px;
+      position: relative;
+    }
+
+    .feature-list li::before {
+      content: '→';
+      position: absolute;
+      left: 0;
+      color: var(--accent-cyan);
+    }
+
+    /* Result Messages */
     .result-message {
       margin-top: 16px;
       padding: 12px;
@@ -42,215 +381,683 @@
       background: rgba(52, 211, 153, 0.1);
       border: 1px solid rgba(52, 211, 153, 0.3);
       color: var(--accent-emerald);
+      display: block;
     }
     
     .result-error {
       background: rgba(251, 113, 133, 0.1);
       border: 1px solid rgba(251, 113, 133, 0.3);
       color: var(--accent-rose);
+      display: block;
     }
+
+    /* Scroll Progress Indicator */
+    .scroll-progress {
+      position: fixed;
+      top: 0;
+      left: 280px;
+      right: 0;
+      height: 3px;
+      background: rgba(45, 55, 75, 0.5);
+      z-index: 1000;
+    }
+
+    .scroll-progress-bar {
+      height: 100%;
+      background: var(--gradient-primary);
+      width: 0%;
+      transition: width 0.1s ease;
+    }
+
+    /* Section Divider */
+    .section-divider {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--border), transparent);
+      margin: 60px 0;
+    }
+
+    /* Hero Section */
+    .hero-section {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-height: 50vh;
+      text-align: center;
+      padding-top: 40px;
+    }
+
+    .hero-title {
+      font-size: 48px;
+      font-weight: 800;
+      background: var(--gradient-primary);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 16px;
+      opacity: 0;
+      transform: translateY(30px);
+    }
+
+    .hero-title.is-inview {
+      opacity: 1;
+      transform: translateY(0);
+      transition: all 1s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .hero-subtitle {
+      font-size: 18px;
+      color: var(--text-muted);
+      max-width: 500px;
+      margin: 0 auto 30px;
+      opacity: 0;
+      transform: translateY(20px);
+    }
+
+    .hero-subtitle.is-inview {
+      opacity: 1;
+      transform: translateY(0);
+      transition: all 1s cubic-bezier(0.16, 1, 0.3, 1) 0.15s;
+    }
+
+    .hero-stats {
+      display: flex;
+      justify-content: center;
+      gap: 40px;
+      margin-top: 30px;
+      opacity: 0;
+      transform: translateY(20px);
+    }
+
+    .hero-stats.is-inview {
+      opacity: 1;
+      transform: translateY(0);
+      transition: all 1s cubic-bezier(0.16, 1, 0.3, 1) 0.3s;
+    }
+
+    .hero-stat {
+      text-align: center;
+    }
+
+    .hero-stat-value {
+      font-size: 36px;
+      font-weight: 700;
+      color: var(--accent-cyan);
+    }
+
+    .hero-stat-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* Mobile Sidebar Toggle */
+    .sidebar-toggle {
+      display: none;
+      position: fixed;
+      top: 20px;
+      left: 20px;
+      z-index: 200;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 12px;
+      cursor: pointer;
+      font-size: 20px;
+      color: var(--text);
+    }
+
+    .sidebar-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 99;
+      backdrop-filter: blur(4px);
+    }
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+      .sidebar-nav {
+        transform: translateX(-100%);
+        transition: transform 0.3s ease;
+      }
+
+      .sidebar-nav.open {
+        transform: translateX(0);
+      }
+
+      .sidebar-toggle {
+        display: flex;
+      }
+
+      .sidebar-overlay.open {
+        display: block;
+      }
+
+      .main-scroll-container {
+        margin-left: 0;
+      }
+
+      .scroll-progress {
+        left: 0;
+      }
+
+      .panel-section {
+        padding: 40px 20px;
+      }
+
+      .feature-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-title {
+        font-size: 32px;
+      }
+
+      .hero-stats {
+        flex-wrap: wrap;
+        gap: 20px;
+      }
+    }
+
+    /* Stagger animation delays for cards */
+    .feature-card:nth-child(1) { transition-delay: 0s; }
+    .feature-card:nth-child(2) { transition-delay: 0.1s; }
+    .feature-card:nth-child(3) { transition-delay: 0.2s; }
+    .feature-card:nth-child(4) { transition-delay: 0.3s; }
+    .feature-card:nth-child(5) { transition-delay: 0.4s; }
+    .feature-card:nth-child(6) { transition-delay: 0.5s; }
   </style>
 </head>
 
 <body>
-  <div class="page-container-wide">
-    <div class="topbar">
-      <div class="topbar-content">
-        <div class="page-title">
-          <span class="emoji">🤖</span>
-          <span class="gradient-text"><%= bot.name %></span>
-        </div>
-        <div class="muted">Bot management and message controls</div>
-      </div>
-      <div class="topbar-actions">
-        <span style="margin-right: 10px; color: var(--text-muted);">👤 <%= username %></span>
-        <a class="btn btn-secondary" href="/change-password">🔐 Password</a>
-        <% if (userRole === 'admin') { %>
-          <a class="btn btn-secondary" href="/users">👥 Users</a>
-        <% } %>
-        <button onclick="toggleSnow()" class="btn btn-secondary btn-icon" type="button" id="snowToggle"
-          title="Toggle Snow Effect">
-          ❄️
-        </button>
-        <a class="btn btn-secondary" href="/">← Dashboard</a>
-      </div>
-    </div>
+  <div class="dashboard-wrapper">
+    <!-- Mobile Toggle -->
+    <button class="sidebar-toggle" id="sidebarToggle">☰</button>
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
-    <div class="grid-2col">
-      <div class="card card-glass action-card">
-        <div class="card-icon">📤</div>
-        <h2 class="card-title">Send Message</h2>
-        <div class="form-group">
-          <label>Channel ID</label>
-          <input id="msgChannel" placeholder="Enter channel ID..." />
-        </div>
-        <div class="form-group">
-          <label>Content</label>
-          <textarea id="msgContent" placeholder="Type your message here..."></textarea>
-        </div>
-        <button class="btn btn-primary w-full" id="msgSend">
-          <span>📨</span>
-          <span>Send Message</span>
-        </button>
-        <div id="msgSendResult" class="result-message"></div>
-      </div>
-
-      <div class="card card-glass action-card">
-        <div class="card-icon">✏️</div>
-        <h2 class="card-title">Edit Message</h2>
-        <div class="form-group">
-          <label>Channel ID</label>
-          <input id="msgEditChannel" placeholder="Enter channel ID..." />
-        </div>
-        <div class="form-group">
-          <label>Message ID</label>
-          <input id="msgEditId" placeholder="Enter message ID..." />
-        </div>
-        <div class="form-group">
-          <label>New Content</label>
-          <textarea id="msgEditContent" placeholder="Enter updated message..."></textarea>
-        </div>
-        <button class="btn btn-primary w-full" id="msgEdit">
-          <span>💾</span>
-          <span>Update Message</span>
-        </button>
-        <div id="msgEditResult" class="result-message"></div>
-      </div>
-
-      <div class="card card-glass action-card">
-        <div class="card-icon">🎨</div>
-        <h2 class="card-title">Send Embed</h2>
-        <div class="form-group">
-          <label>Channel ID</label>
-          <input id="embChannel" placeholder="Enter channel ID..." />
-        </div>
-        <div class="form-group">
-          <label>Title</label>
-          <input id="embTitle" placeholder="Embed title..." />
-        </div>
-        <div class="form-group">
-          <label>Description</label>
-          <textarea id="embDesc" placeholder="Embed description..."></textarea>
-        </div>
-        <div class="flex gap-3">
-          <div class="form-group" style="flex:1">
-            <label>Color</label>
-            <input id="embColor" placeholder="#a78bfa" />
-          </div>
-          <div class="form-group" style="flex:1">
-            <label>Footer (Optional)</label>
-            <input id="embFooter" placeholder="Footer text..." />
+    <!-- Left Sidebar Navigation -->
+    <nav class="sidebar-nav" id="sidebarNav">
+      <div class="sidebar-header">
+        <div class="sidebar-brand">
+          <div class="sidebar-brand-icon">🤖</div>
+          <div>
+            <div class="sidebar-brand-text"><%= bot.name %></div>
+            <div class="sidebar-subtitle">Control Panel</div>
           </div>
         </div>
-        <button class="btn btn-primary w-full" id="embSend">
-          <span>🎨</span>
-          <span>Send Embed</span>
-        </button>
-        <div id="embSendResult" class="result-message"></div>
-      </div>
-
-      <div class="card card-glass action-card">
-        <div class="card-icon">🖌️</div>
-        <h2 class="card-title">Edit Embed</h2>
-        <div class="form-group">
-          <label>Channel ID</label>
-          <input id="embEditChannel" placeholder="Enter channel ID..." />
-        </div>
-        <div class="form-group">
-          <label>Message ID</label>
-          <input id="embEditId" placeholder="Enter message ID..." />
-        </div>
-        <div class="form-group">
-          <label>Title</label>
-          <input id="embEditTitle" placeholder="New title..." />
-        </div>
-        <div class="form-group">
-          <label>Description</label>
-          <textarea id="embEditDesc" placeholder="New description..."></textarea>
-        </div>
-        <div class="flex gap-3">
-          <div class="form-group" style="flex:1">
-            <label>Color</label>
-            <input id="embEditColor" placeholder="#22d3ee" />
-          </div>
-          <div class="form-group" style="flex:1">
-            <label>Footer (Optional)</label>
-            <input id="embEditFooter" placeholder="Footer text..." />
+        <div class="sidebar-user">
+          <div class="sidebar-user-avatar">👤</div>
+          <div class="sidebar-user-info">
+            <div class="sidebar-user-name"><%= username %></div>
+            <div class="sidebar-user-role"><%= userRole %></div>
           </div>
         </div>
-        <button class="btn btn-primary w-full" id="embEdit">
-          <span>💾</span>
-          <span>Update Embed</span>
-        </button>
-        <div id="embEditResult" class="result-message"></div>
       </div>
 
-      <div class="card card-glass action-card">
-        <div class="card-icon">📊</div>
-        <h2 class="card-title">Accuracy Monitor</h2>
-        <p class="muted">Real-time message counting accuracy and system health metrics.</p>
-        <div style="margin-top: 16px;">
-          <div class="kpi-grid" style="margin-bottom: 16px;">
-            <div style="padding: 12px; background: rgba(34, 211, 238, 0.05); border-radius: var(--radius-md); border: 1px solid rgba(34, 211, 238, 0.2);">
-              <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Target Accuracy</div>
-              <div style="font-size: 24px; font-weight: 700; color: var(--accent-emerald);">99.5%</div>
+      <div class="sidebar-menu">
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">Navigation</div>
+          <a href="#hero" class="sidebar-nav-link active" data-section="hero">
+            <span class="sidebar-nav-icon">🏠</span>
+            <span>Overview</span>
+          </a>
+          <a href="#messaging" class="sidebar-nav-link" data-section="messaging">
+            <span class="sidebar-nav-icon">💬</span>
+            <span>Messaging</span>
+          </a>
+          <a href="#embeds" class="sidebar-nav-link" data-section="embeds">
+            <span class="sidebar-nav-icon">🎨</span>
+            <span>Embeds</span>
+          </a>
+          <a href="#features" class="sidebar-nav-link" data-section="features">
+            <span class="sidebar-nav-icon">⚡</span>
+            <span>Features</span>
+            <span class="sidebar-nav-badge">4</span>
+          </a>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">Tools</div>
+          <a href="<%= `/panel/bot/${bot.key}/accuracy` %>" class="sidebar-nav-link">
+            <span class="sidebar-nav-icon">📊</span>
+            <span>Accuracy Monitor</span>
+          </a>
+          <a href="<%= `/panel/bot/${bot.key}/samp-servers` %>" class="sidebar-nav-link">
+            <span class="sidebar-nav-icon">🎮</span>
+            <span>SAMP Servers</span>
+          </a>
+          <a href="<%= `/panel/bot/${bot.key}/commands` %>" class="sidebar-nav-link">
+            <span class="sidebar-nav-icon">⚙️</span>
+            <span>Bot Commands</span>
+          </a>
+        </div>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="sidebar-footer-links">
+          <a href="/panel/change-password" class="sidebar-footer-link">
+            <span>🔐</span>
+            <span>Change Password</span>
+          </a>
+          <% if (userRole === 'admin') { %>
+          <a href="/panel/users" class="sidebar-footer-link">
+            <span>👥</span>
+            <span>Manage Users</span>
+          </a>
+          <% } %>
+          <a href="/panel" class="sidebar-footer-link">
+            <span>←</span>
+            <span>Back to Dashboard</span>
+          </a>
+          <button onclick="toggleSnow()" class="sidebar-footer-link" style="width: 100%; border: none; background: none; cursor: pointer; text-align: left;">
+            <span>❄️</span>
+            <span>Toggle Snow</span>
+          </button>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Main Scrollable Content -->
+    <main class="main-scroll-container">
+      <div class="scroll-progress">
+        <div class="scroll-progress-bar" id="scrollProgressBar"></div>
+      </div>
+
+      <div data-scroll-container id="scrollContainer">
+        <!-- Hero Section -->
+        <section class="panel-section" id="hero" data-scroll-section>
+          <div class="hero-section">
+            <h1 class="hero-title" data-scroll data-scroll-class="is-inview">
+              <%= bot.name %> Control Panel
+            </h1>
+            <p class="hero-subtitle" data-scroll data-scroll-class="is-inview">
+              Manage messages, embeds, and monitor your bot's performance from one unified dashboard.
+            </p>
+            <div class="hero-stats" data-scroll data-scroll-class="is-inview">
+              <div class="hero-stat">
+                <div class="hero-stat-value">99.5%</div>
+                <div class="hero-stat-label">Accuracy</div>
+              </div>
+              <div class="hero-stat">
+                <div class="hero-stat-value">4</div>
+                <div class="hero-stat-label">Features</div>
+              </div>
+              <div class="hero-stat">
+                <div class="hero-stat-value">24/7</div>
+                <div class="hero-stat-label">Uptime</div>
+              </div>
             </div>
           </div>
-          <strong style="font-size: 14px; color: var(--accent-cyan);">Features:</strong>
-          <ul style="font-size: 13px; margin: 10px 0; padding-left: 20px; color: var(--text-muted);">
-            <li>Live accuracy metrics</li>
-            <li>Recent counting events</li>
-            <li>Error queue monitoring</li>
-            <li>Auto-refresh dashboard</li>
-          </ul>
-        </div>
-        <a href="<%= `/panel/bot/${bot.key}/accuracy` %>" class="btn btn-primary w-full" style="margin-top: 16px;">
-          <span>📊</span>
-          <span>Open Dashboard</span>
-        </a>
-      </div>
-      <div class="card card-glass action-card">
-        <div class="card-icon">🎮</div>
-        <h2 class="card-title">SAMP Server Status</h2>
-        <p class="muted">Monitor SA-MP servers with live player counts in voice channel names.</p>
-        <div style="margin-top: 16px;">
-          <strong style="font-size: 14px; color: var(--accent-cyan);">Features:</strong>
-          <ul style="font-size: 13px; margin: 10px 0; padding-left: 20px; color: var(--text-muted);">
-            <li>Track multiple SAMP servers</li>
-            <li>Live player count updates</li>
-            <li>Voice channel name display</li>
-            <li>Auto-refresh every 2 minutes</li>
-            <li>Server status indicators</li>
-          </ul>
-        </div>
-        <a href="<%= `/panel/bot/${bot.key}/samp-servers` %>" class="btn btn-primary w-full" style="margin-top: 16px;">
-          <span>🎮</span>
-          <span>Manage SAMP Servers</span>
-        </a>
-      </div>
+        </section>
 
-      <div class="card card-glass action-card">
-        <div class="card-icon">⚙️</div>
-        <h2 class="card-title">Bot Commands</h2>
-        <p class="muted">Manage slash commands - enable or disable individual commands.</p>
-        <div style="margin-top: 16px;">
-          <strong style="font-size: 14px; color: var(--accent-cyan);">Features:</strong>
-          <ul style="font-size: 13px; margin: 10px 0; padding-left: 20px; color: var(--text-muted);">
-            <li>Enable/disable individual commands</li>
-            <li>View all available commands</li>
-            <li>Command usage documentation</li>
-          </ul>
-        </div>
-        <a href="<%= `/panel/bot/${bot.key}/commands` %>" class="btn btn-primary w-full" style="margin-top: 16px;">
-          <span>⚙️</span>
-          <span>Manage Commands</span>
-        </a>
+        <!-- Messaging Section -->
+        <section class="panel-section" id="messaging" data-scroll-section>
+          <div class="section-header" data-scroll data-scroll-class="is-inview">
+            <h2 class="section-title-main">
+              <span>💬</span>
+              Message Management
+            </h2>
+            <p class="section-description">Send and edit messages through your bot in any channel.</p>
+          </div>
+
+          <div class="feature-grid">
+            <div class="card card-glass action-card feature-card" data-scroll data-scroll-class="is-inview">
+              <div class="card-icon">📤</div>
+              <h2 class="card-title">Send Message</h2>
+              <div class="form-group">
+                <label>Channel ID</label>
+                <input id="msgChannel" placeholder="Enter channel ID..." />
+              </div>
+              <div class="form-group">
+                <label>Content</label>
+                <textarea id="msgContent" placeholder="Type your message here..."></textarea>
+              </div>
+              <button class="btn btn-primary w-full" id="msgSend">
+                <span>📨</span>
+                <span>Send Message</span>
+              </button>
+              <div id="msgSendResult" class="result-message"></div>
+            </div>
+
+            <div class="card card-glass action-card feature-card" data-scroll data-scroll-class="is-inview">
+              <div class="card-icon">✏️</div>
+              <h2 class="card-title">Edit Message</h2>
+              <div class="form-group">
+                <label>Channel ID</label>
+                <input id="msgEditChannel" placeholder="Enter channel ID..." />
+              </div>
+              <div class="form-group">
+                <label>Message ID</label>
+                <input id="msgEditId" placeholder="Enter message ID..." />
+              </div>
+              <div class="form-group">
+                <label>New Content</label>
+                <textarea id="msgEditContent" placeholder="Enter updated message..."></textarea>
+              </div>
+              <button class="btn btn-primary w-full" id="msgEdit">
+                <span>💾</span>
+                <span>Update Message</span>
+              </button>
+              <div id="msgEditResult" class="result-message"></div>
+            </div>
+          </div>
+        </section>
+
+        <div class="section-divider" data-scroll-section></div>
+
+        <!-- Embeds Section -->
+        <section class="panel-section" id="embeds" data-scroll-section>
+          <div class="section-header" data-scroll data-scroll-class="is-inview">
+            <h2 class="section-title-main">
+              <span>🎨</span>
+              Embed Management
+            </h2>
+            <p class="section-description">Create beautiful rich embeds with custom colors, titles, and footers.</p>
+          </div>
+
+          <div class="feature-grid">
+            <div class="card card-glass action-card feature-card" data-scroll data-scroll-class="is-inview">
+              <div class="card-icon">🎨</div>
+              <h2 class="card-title">Send Embed</h2>
+              <div class="form-group">
+                <label>Channel ID</label>
+                <input id="embChannel" placeholder="Enter channel ID..." />
+              </div>
+              <div class="form-group">
+                <label>Title</label>
+                <input id="embTitle" placeholder="Embed title..." />
+              </div>
+              <div class="form-group">
+                <label>Description</label>
+                <textarea id="embDesc" placeholder="Embed description..."></textarea>
+              </div>
+              <div class="flex gap-3">
+                <div class="form-group" style="flex:1">
+                  <label>Color</label>
+                  <input id="embColor" placeholder="#a78bfa" />
+                </div>
+                <div class="form-group" style="flex:1">
+                  <label>Footer (Optional)</label>
+                  <input id="embFooter" placeholder="Footer text..." />
+                </div>
+              </div>
+              <button class="btn btn-primary w-full" id="embSend">
+                <span>🎨</span>
+                <span>Send Embed</span>
+              </button>
+              <div id="embSendResult" class="result-message"></div>
+            </div>
+
+            <div class="card card-glass action-card feature-card" data-scroll data-scroll-class="is-inview">
+              <div class="card-icon">🖌️</div>
+              <h2 class="card-title">Edit Embed</h2>
+              <div class="form-group">
+                <label>Channel ID</label>
+                <input id="embEditChannel" placeholder="Enter channel ID..." />
+              </div>
+              <div class="form-group">
+                <label>Message ID</label>
+                <input id="embEditId" placeholder="Enter message ID..." />
+              </div>
+              <div class="form-group">
+                <label>Title</label>
+                <input id="embEditTitle" placeholder="New title..." />
+              </div>
+              <div class="form-group">
+                <label>Description</label>
+                <textarea id="embEditDesc" placeholder="New description..."></textarea>
+              </div>
+              <div class="flex gap-3">
+                <div class="form-group" style="flex:1">
+                  <label>Color</label>
+                  <input id="embEditColor" placeholder="#22d3ee" />
+                </div>
+                <div class="form-group" style="flex:1">
+                  <label>Footer (Optional)</label>
+                  <input id="embEditFooter" placeholder="Footer text..." />
+                </div>
+              </div>
+              <button class="btn btn-primary w-full" id="embEdit">
+                <span>💾</span>
+                <span>Update Embed</span>
+              </button>
+              <div id="embEditResult" class="result-message"></div>
+            </div>
+          </div>
+        </section>
+
+        <div class="section-divider" data-scroll-section></div>
+
+        <!-- Features Section -->
+        <section class="panel-section" id="features" data-scroll-section>
+          <div class="section-header" data-scroll data-scroll-class="is-inview">
+            <h2 class="section-title-main">
+              <span>⚡</span>
+              Bot Features
+            </h2>
+            <p class="section-description">Advanced tools and monitoring capabilities for your bot.</p>
+          </div>
+
+          <div class="feature-grid">
+            <div class="card card-glass feature-card" data-scroll data-scroll-class="is-inview">
+              <div class="feature-icon">📊</div>
+              <h3 class="feature-title">Accuracy Monitor</h3>
+              <p class="feature-desc">Real-time message counting accuracy and system health metrics.</p>
+              <div style="padding: 12px; background: rgba(34, 211, 238, 0.05); border-radius: var(--radius-md); border: 1px solid rgba(34, 211, 238, 0.2); margin-bottom: 16px;">
+                <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Target Accuracy</div>
+                <div style="font-size: 24px; font-weight: 700; color: var(--accent-emerald);">99.5%</div>
+              </div>
+              <ul class="feature-list">
+                <li>Live accuracy metrics</li>
+                <li>Recent counting events</li>
+                <li>Error queue monitoring</li>
+                <li>Auto-refresh dashboard</li>
+              </ul>
+              <a href="<%= `/panel/bot/${bot.key}/accuracy` %>" class="btn btn-primary w-full">
+                <span>📊</span>
+                <span>Open Dashboard</span>
+              </a>
+            </div>
+
+            <div class="card card-glass feature-card" data-scroll data-scroll-class="is-inview">
+              <div class="feature-icon">🎮</div>
+              <h3 class="feature-title">SAMP Server Status</h3>
+              <p class="feature-desc">Monitor SA-MP servers with live player counts in voice channel names.</p>
+              <ul class="feature-list">
+                <li>Track multiple SAMP servers</li>
+                <li>Live player count updates</li>
+                <li>Voice channel name display</li>
+                <li>Auto-refresh every 2 minutes</li>
+                <li>Server status indicators</li>
+              </ul>
+              <a href="<%= `/panel/bot/${bot.key}/samp-servers` %>" class="btn btn-primary w-full">
+                <span>🎮</span>
+                <span>Manage SAMP Servers</span>
+              </a>
+            </div>
+
+            <div class="card card-glass feature-card" data-scroll data-scroll-class="is-inview">
+              <div class="feature-icon">⚙️</div>
+              <h3 class="feature-title">Bot Commands</h3>
+              <p class="feature-desc">Manage slash commands - enable or disable individual commands.</p>
+              <ul class="feature-list">
+                <li>Enable/disable individual commands</li>
+                <li>View all available commands</li>
+                <li>Command usage documentation</li>
+              </ul>
+              <a href="<%= `/panel/bot/${bot.key}/commands` %>" class="btn btn-primary w-full">
+                <span>⚙️</span>
+                <span>Manage Commands</span>
+              </a>
+            </div>
+
+            <div class="card card-glass feature-card" data-scroll data-scroll-class="is-inview">
+              <div class="feature-icon">🤖</div>
+              <h3 class="feature-title">AI Engagement</h3>
+              <p class="feature-desc">Smart conversation features powered by machine learning.</p>
+              <ul class="feature-list">
+                <li>Markov chain responses</li>
+                <li>Context-aware replies</li>
+                <li>Auto-moderation</li>
+                <li>Learning from chat</li>
+              </ul>
+              <a href="<%= `/panel/bot/${bot.key}/ai-engagement` %>" class="btn btn-primary w-full">
+                <span>🤖</span>
+                <span>Configure AI</span>
+              </a>
+            </div>
+          </div>
+        </section>
+
+        <!-- Footer spacer -->
+        <div style="height: 100px;" data-scroll-section></div>
       </div>
-    </div>
+    </main>
   </div>
 
+  <!-- Scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
   <script>
     window.BOT_KEY = "<%= bot.key %>";
+    
+    // Initialize Locomotive Scroll
+    const scroll = new LocomotiveScroll({
+      el: document.querySelector('[data-scroll-container]'),
+      smooth: true,
+      smartphone: { smooth: true },
+      tablet: { smooth: true },
+      lerp: 0.075,
+      multiplier: 0.8
+    });
+
+    // Update ScrollTrigger with Locomotive Scroll
+    gsap.registerPlugin(ScrollTrigger);
+    
+    scroll.on('scroll', ScrollTrigger.update);
+    
+    ScrollTrigger.scrollerProxy('[data-scroll-container]', {
+      scrollTop(value) {
+        return arguments.length ? scroll.scrollTo(value, 0, 0) : scroll.scroll.instance.scroll.y;
+      },
+      getBoundingClientRect() {
+        return { top: 0, left: 0, width: window.innerWidth, height: window.innerHeight };
+      },
+      pinType: document.querySelector('[data-scroll-container]').style.transform ? 'transform' : 'fixed'
+    });
+
+    ScrollTrigger.addEventListener('refresh', () => scroll.update());
+    ScrollTrigger.refresh();
+
+    // Scroll progress bar
+    scroll.on('scroll', (args) => {
+      const progress = (args.scroll.y / args.limit.y) * 100;
+      document.getElementById('scrollProgressBar').style.width = progress + '%';
+      
+      // Update active nav link
+      const sections = ['hero', 'messaging', 'embeds', 'features'];
+      sections.forEach(section => {
+        const el = document.getElementById(section);
+        if (el) {
+          const rect = el.getBoundingClientRect();
+          const inView = rect.top < window.innerHeight / 2 && rect.bottom > window.innerHeight / 2;
+          const link = document.querySelector(`[data-section="${section}"]`);
+          if (link) {
+            link.classList.toggle('active', inView);
+          }
+        }
+      });
+    });
+
+    // Sidebar navigation smooth scroll
+    document.querySelectorAll('.sidebar-nav-link[data-section]').forEach(link => {
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        const section = link.getAttribute('data-section');
+        scroll.scrollTo(`#${section}`);
+        
+        // Close mobile sidebar
+        document.getElementById('sidebarNav').classList.remove('open');
+        document.getElementById('sidebarOverlay').classList.remove('open');
+      });
+    });
+
+    // Mobile sidebar toggle
+    document.getElementById('sidebarToggle').addEventListener('click', () => {
+      document.getElementById('sidebarNav').classList.toggle('open');
+      document.getElementById('sidebarOverlay').classList.toggle('open');
+    });
+
+    document.getElementById('sidebarOverlay').addEventListener('click', () => {
+      document.getElementById('sidebarNav').classList.remove('open');
+      document.getElementById('sidebarOverlay').classList.remove('open');
+    });
+
+    // GSAP Animations for cards on scroll
+    gsap.utils.toArray('.feature-card').forEach((card, i) => {
+      gsap.fromTo(card, 
+        { 
+          y: 60, 
+          opacity: 0,
+          scale: 0.95
+        },
+        {
+          y: 0,
+          opacity: 1,
+          scale: 1,
+          duration: 0.8,
+          ease: 'power3.out',
+          scrollTrigger: {
+            trigger: card,
+            scroller: '[data-scroll-container]',
+            start: 'top 85%',
+            toggleActions: 'play none none reverse'
+          },
+          delay: i * 0.1
+        }
+      );
+    });
+
+    // Hero animations
+    gsap.fromTo('.hero-title', 
+      { y: 50, opacity: 0 },
+      { 
+        y: 0, 
+        opacity: 1, 
+        duration: 1,
+        ease: 'power3.out',
+        delay: 0.2
+      }
+    );
+
+    gsap.fromTo('.hero-subtitle', 
+      { y: 30, opacity: 0 },
+      { 
+        y: 0, 
+        opacity: 1, 
+        duration: 1,
+        ease: 'power3.out',
+        delay: 0.4
+      }
+    );
+
+    gsap.fromTo('.hero-stats', 
+      { y: 30, opacity: 0 },
+      { 
+        y: 0, 
+        opacity: 1, 
+        duration: 1,
+        ease: 'power3.out',
+        delay: 0.6
+      }
+    );
+
+    // Update Locomotive on window resize
+    window.addEventListener('resize', () => {
+      scroll.update();
+    });
   </script>
   <script src="/public/bot.js"></script>
   <script src="/public/snow.js"></script>
