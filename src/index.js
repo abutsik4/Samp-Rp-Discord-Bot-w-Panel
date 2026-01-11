@@ -368,12 +368,31 @@ async function initDb() {
   // Incremental sync tracking
   await dbRun(`
     CREATE TABLE IF NOT EXISTS backfill_watermarks (
-      guild_id TEXT PRIMARY KEY,
+      guild_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL DEFAULT '__guild__',
       last_message_id TEXT NOT NULL,
       last_synced_at TEXT NOT NULL DEFAULT (datetime('now')),
-      messages_synced INTEGER DEFAULT 0
+      messages_synced INTEGER DEFAULT 0,
+      PRIMARY KEY (guild_id, channel_id)
     )
   `);
+
+  // Best-effort migration for existing DBs
+  try {
+    await dbRun(`ALTER TABLE backfill_watermarks ADD COLUMN channel_id TEXT DEFAULT '__guild__'`);
+  } catch (_) {
+    // ignore
+  }
+  try {
+    await dbRun(`ALTER TABLE backfill_watermarks ADD COLUMN last_synced_at TEXT DEFAULT CURRENT_TIMESTAMP`);
+  } catch (_) {
+    // ignore
+  }
+  try {
+    await dbRun(`ALTER TABLE backfill_watermarks ADD COLUMN messages_synced INTEGER DEFAULT 0`);
+  } catch (_) {
+    // ignore
+  }
 
   // Panel messages table for new message/embed management
   await dbRun(`

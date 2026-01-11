@@ -10,17 +10,52 @@
 const { dbRun, dbGet, dbAll } = require('../utils/db-helpers');
 const { incrementMessageCountRobust } = require('./robust-message-counting');
 
+const GLOBAL_WATERMARK_CHANNEL_ID = '__guild__';
+
+let cachedWatermarkSchema = null;
+
+async function getWatermarkSchema(db) {
+  if (cachedWatermarkSchema) return cachedWatermarkSchema;
+
+  try {
+    const columns = await dbAll(db, `PRAGMA table_info(backfill_watermarks)`);
+    const names = new Set(columns.map((c) => c.name));
+
+    cachedWatermarkSchema = {
+      hasChannelId: names.has('channel_id'),
+      hasLastSyncedAt: names.has('last_synced_at'),
+      hasMessagesSynced: names.has('messages_synced'),
+    };
+  } catch (_) {
+    cachedWatermarkSchema = {
+      hasChannelId: false,
+      hasLastSyncedAt: true,
+      hasMessagesSynced: true,
+    };
+  }
+
+  return cachedWatermarkSchema;
+}
+
 /**
  * Get the last synced message ID for a guild
  */
 async function getWatermark(db, guildId) {
-  const row = await dbGet(
-    db,
-    `SELECT last_message_id, last_synced_at, messages_synced 
-     FROM backfill_watermarks 
-     WHERE guild_id = ?`,
-    [guildId]
-  );
+  const schema = await getWatermarkSchema(db);
+  const selectParts = [
+    'last_message_id',
+    schema.hasLastSyncedAt ? 'last_synced_at' : 'NULL AS last_synced_at',
+    schema.hasMessagesSynced ? 'messages_synced' : '0 AS messages_synced',
+  ];
+
+  const where = schema.hasChannelId
+    ? 'WHERE guild_id = ? AND channel_id = ?'
+    : 'WHERE guild_id = ?';
+  const params = schema.hasChannelId
+    ? [guildId, GLOBAL_WATERMARK_CHANNEL_ID]
+    : [guildId];
+
+  const row = await dbGet(db, `SELECT ${selectParts.join(', ')} FROM backfill_watermarks ${where}`, params);
   return row || null;
 }
 
@@ -28,19 +63,84 @@ async function getWatermark(db, guildId) {
  * Update watermark after successful sync
  */
 async function updateWatermark(db, guildId, messageId, messagesSynced = 0) {
+  const schema = await getWatermarkSchema(db);
   const existing = await getWatermark(db, guildId);
   const totalSynced = (existing?.messages_synced || 0) + messagesSynced;
 
+  if (schema.hasChannelId) {
+    const insertCols = ['guild_id', 'channel_id', 'last_message_id'];
+    const insertValues = ['?', '?', '?'];
+    const insertParams = [guildId, GLOBAL_WATERMARK_CHANNEL_ID, messageId];
+
+    if (schema.hasMessagesSynced) {
+      insertCols.push('messages_synced');
+      insertValues.push('?');
+      insertParams.push(totalSynced);
+    }
+
+    if (schema.hasLastSyncedAt) {
+      insertCols.push('last_synced_at');
+      insertValues.push("datetime('now')");
+    }
+
+    const updateSet = ['last_message_id = ?'];
+    const updateParams = [messageId];
+
+    if (schema.hasMessagesSynced) {
+      updateSet.push('messages_synced = ?');
+      updateParams.push(totalSynced);
+    }
+
+    if (schema.hasLastSyncedAt) {
+      updateSet.push("last_synced_at = datetime('now')");
+    }
+
+    await dbRun(
+      db,
+      `INSERT INTO backfill_watermarks (${insertCols.join(', ')})
+       VALUES (${insertValues.join(', ')})
+       ON CONFLICT(guild_id, channel_id)
+       DO UPDATE SET ${updateSet.join(', ')}`,
+      [...insertParams, ...updateParams]
+    );
+    return;
+  }
+
+  // Fallback for older schemas without channel_id
+  const insertCols = ['guild_id', 'last_message_id'];
+  const insertValues = ['?', '?'];
+  const insertParams = [guildId, messageId];
+
+  if (schema.hasMessagesSynced) {
+    insertCols.push('messages_synced');
+    insertValues.push('?');
+    insertParams.push(totalSynced);
+  }
+
+  if (schema.hasLastSyncedAt) {
+    insertCols.push('last_synced_at');
+    insertValues.push("datetime('now')");
+  }
+
+  const updateSet = ['last_message_id = ?'];
+  const updateParams = [messageId];
+
+  if (schema.hasMessagesSynced) {
+    updateSet.push('messages_synced = ?');
+    updateParams.push(totalSynced);
+  }
+
+  if (schema.hasLastSyncedAt) {
+    updateSet.push("last_synced_at = datetime('now')");
+  }
+
   await dbRun(
     db,
-    `INSERT INTO backfill_watermarks (guild_id, last_message_id, messages_synced, last_synced_at)
-     VALUES (?, ?, ?, datetime('now'))
+    `INSERT INTO backfill_watermarks (${insertCols.join(', ')})
+     VALUES (${insertValues.join(', ')})
      ON CONFLICT(guild_id)
-     DO UPDATE SET 
-       last_message_id = ?,
-       messages_synced = ?,
-       last_synced_at = datetime('now')`,
-    [guildId, messageId, totalSynced, messageId, totalSynced]
+     DO UPDATE SET ${updateSet.join(', ')}`,
+    [...insertParams, ...updateParams]
   );
 }
 
@@ -220,12 +320,20 @@ async function initializeWatermark(client, db, guildId) {
  * Get sync statistics for all guilds
  */
 async function getSyncStats(db) {
-  const stats = await dbAll(
-    db,
-    `SELECT guild_id, last_message_id, last_synced_at, messages_synced 
-     FROM backfill_watermarks 
-     ORDER BY last_synced_at DESC`
-  );
+  const schema = await getWatermarkSchema(db);
+  const selectParts = [
+    'guild_id',
+    schema.hasChannelId ? 'channel_id' : "'__guild__' AS channel_id",
+    'last_message_id',
+    schema.hasLastSyncedAt ? 'last_synced_at' : 'NULL AS last_synced_at',
+    schema.hasMessagesSynced ? 'messages_synced' : '0 AS messages_synced',
+  ];
+
+  const where = schema.hasChannelId ? 'WHERE channel_id = ?' : '';
+  const params = schema.hasChannelId ? [GLOBAL_WATERMARK_CHANNEL_ID] : [];
+
+  const orderBy = schema.hasLastSyncedAt ? 'ORDER BY last_synced_at DESC' : 'ORDER BY guild_id';
+  const stats = await dbAll(db, `SELECT ${selectParts.join(', ')} FROM backfill_watermarks ${where} ${orderBy}`, params);
   return stats || [];
 }
 
