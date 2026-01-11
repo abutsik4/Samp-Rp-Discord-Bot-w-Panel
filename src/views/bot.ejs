@@ -598,8 +598,72 @@
       <div class="sidebar-menu">
         <div class="sidebar-section">
           <div class="sidebar-section-title">Navigation</div>
-          <a href="#hero" class="sidebar-nav-link active" data-section="hero">
+          <a href="<%= `/panel/bot/${bot.key}` %>" class="sidebar-nav-link active">
             <span class="sidebar-nav-icon">🏠</span>
+            <span>Panel</span>
+          </a>
+          <a href="<%= `/panel/bot/${bot.key}/stats` %>" class="sidebar-nav-link">
+            <span class="sidebar-nav-icon">📊</span>
+            <span>Statistics</span>
+          </a>
+          <a href="<%= `/panel/bot/${bot.key}/analytics` %>" class="sidebar-nav-link">
+            <span class="sidebar-nav-icon">📈</span>
+            <span>Analytics</span>
+          </a>
+          <a href="<%= `/panel/bot/${bot.key}/messages` %>" class="sidebar-nav-link">
+            <span class="sidebar-nav-icon">📨</span>
+            <span>Messages</span>
+          </a>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">Management</div>
+          <a href="<%= `/panel/bot/${bot.key}/rate-limits` %>" class="sidebar-nav-link">
+            <span class="sidebar-nav-icon">🚦</span>
+            <span>Rate Limits</span>
+          </a>
+          <a href="<%= `/panel/bot/${bot.key}/consecutive-limits` %>" class="sidebar-nav-link">
+            <span class="sidebar-nav-icon">🚫</span>
+            <span>Consecutive</span>
+          </a>
+          <a href="<%= `/panel/bot/${bot.key}/whitelist` %>" class="sidebar-nav-link">
+            <span class="sidebar-nav-icon">📋</span>
+            <span>Whitelist</span>
+          </a>
+          <a href="<%= `/panel/bot/${bot.key}/automod` %>" class="sidebar-nav-link">
+            <span class="sidebar-nav-icon">🛡️</span>
+            <span>Automod</span>
+          </a>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">AI &amp; Tools</div>
+          <a href="<%= `/panel/bot/${bot.key}/ai-engagement` %>" class="sidebar-nav-link">
+            <span class="sidebar-nav-icon">🤖</span>
+            <span>AI Engagement</span>
+          </a>
+          <a href="<%= `/panel/bot/${bot.key}/commands` %>" class="sidebar-nav-link">
+            <span class="sidebar-nav-icon">📚</span>
+            <span>Commands</span>
+          </a>
+          <a href="<%= `/panel/bot/${bot.key}/accuracy` %>" class="sidebar-nav-link">
+            <span class="sidebar-nav-icon">🎯</span>
+            <span>Accuracy</span>
+          </a>
+          <a href="<%= `/panel/bot/${bot.key}/debug-reports` %>" class="sidebar-nav-link">
+            <span class="sidebar-nav-icon">🪲</span>
+            <span>Debug Reports</span>
+          </a>
+          <a href="<%= `/panel/bot/${bot.key}/samp-servers` %>" class="sidebar-nav-link">
+            <span class="sidebar-nav-icon">🎮</span>
+            <span>SAMP Servers</span>
+          </a>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">On This Page</div>
+          <a href="#hero" class="sidebar-nav-link" data-section="hero">
+            <span class="sidebar-nav-icon">✨</span>
             <span>Overview</span>
           </a>
           <a href="#messaging" class="sidebar-nav-link" data-section="messaging">
@@ -613,23 +677,6 @@
           <a href="#features" class="sidebar-nav-link" data-section="features">
             <span class="sidebar-nav-icon">⚡</span>
             <span>Features</span>
-            <span class="sidebar-nav-badge">4</span>
-          </a>
-        </div>
-
-        <div class="sidebar-section">
-          <div class="sidebar-section-title">Tools</div>
-          <a href="<%= `/panel/bot/${bot.key}/accuracy` %>" class="sidebar-nav-link">
-            <span class="sidebar-nav-icon">📊</span>
-            <span>Accuracy Monitor</span>
-          </a>
-          <a href="<%= `/panel/bot/${bot.key}/samp-servers` %>" class="sidebar-nav-link">
-            <span class="sidebar-nav-icon">🎮</span>
-            <span>SAMP Servers</span>
-          </a>
-          <a href="<%= `/panel/bot/${bot.key}/commands` %>" class="sidebar-nav-link">
-            <span class="sidebar-nav-icon">⚙️</span>
-            <span>Bot Commands</span>
           </a>
         </div>
       </div>
