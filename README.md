@@ -38,7 +38,7 @@ A comprehensive Discord bot with an advanced web-based administration panel, fea
 ### Moderation & Rate Limiting
 - **Channel-Based Rate Limits** - Customizable message frequency controls
 - **Role-Based Limits** - Different limits for different roles
-- **Consecutive Message Limiter** - Prevent spam with consecutive message detection
+- **Rate Limiter** - Prevent spam with per-channel message limits
 - **Strike System** - Track violations with `/mystrikes`
 
 ### Holiday System
@@ -112,7 +112,6 @@ A comprehensive Discord bot with an advanced web-based administration panel, fea
 │       ├── commands-page.js     # Commands documentation
 │       ├── ai-engagement-page.js
 │       ├── rate-limiter-page.js
-│       ├── consecutive-limiter-page.js
 │       ├── messages-page.js
 │       ├── stats-page.js
 │       ├── accuracy-monitor-page.js
@@ -142,7 +141,6 @@ A comprehensive Discord bot with an advanced web-based administration panel, fea
 - **holidays** - Manual holidays
 - **user_preferences** - User settings
 - **rate_limit_config** - Rate limit rules
-- **consecutive_limit_config** - Consecutive message rules
 - **panel_users** - Web panel user accounts and authentication
 
 ## 📦 Installation
@@ -318,12 +316,6 @@ All users can change their own password at `/change-password`:
 - Configure role-based limits
 - Set time windows
 - View active limits
-
-#### Consecutive Limiter
-- Prevent message spam
-- Set consecutive message thresholds
-- Configure cooldown periods
-- Manage strikes
 
 #### Accuracy Monitor
 - View message counting accuracy

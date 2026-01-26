@@ -28,14 +28,26 @@ function initStatsDb() {
       username TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'user',
+      permissions TEXT DEFAULT '{}',
       created_at INTEGER NOT NULL,
       last_login INTEGER,
-      CONSTRAINT check_role CHECK (role IN ('admin', 'user'))
+      CONSTRAINT check_role CHECK (role IN ('admin', 'user', 'moderator'))
     )
     `,
         (err) => {
             if (err) console.error("Error creating panel_users table:", err);
             else console.log("Panel users table ready");
+        }
+    );
+    
+    // Add permissions column if it doesn't exist (migration for existing databases)
+    db.run(
+        `ALTER TABLE panel_users ADD COLUMN permissions TEXT DEFAULT '{}'`,
+        (err) => {
+            // Ignore error if column already exists
+            if (err && !err.message.includes('duplicate column')) {
+                console.error("Error adding permissions column:", err);
+            }
         }
     );
 
@@ -127,9 +139,19 @@ function initStatsDb() {
     function getAllPanelUsers() {
         return new Promise((resolve, reject) => {
             db.all(
-                `SELECT id, username, role, created_at, last_login FROM panel_users ORDER BY created_at DESC`,
+                `SELECT id, username, role, permissions, created_at, last_login FROM panel_users ORDER BY created_at DESC`,
                 [],
-                (err, rows) => (err ? reject(err) : resolve(rows || []))
+                (err, rows) => {
+                    if (err) reject(err);
+                    else {
+                        // Parse permissions JSON for each user
+                        const users = (rows || []).map(user => ({
+                            ...user,
+                            permissions: user.permissions ? JSON.parse(user.permissions) : {}
+                        }));
+                        resolve(users);
+                    }
+                }
             );
         });
     }
@@ -170,6 +192,16 @@ function initStatsDb() {
             db.run(
                 `UPDATE panel_users SET role = ? WHERE username = ?`,
                 [newRole, username],
+                (err) => (err ? reject(err) : resolve())
+            );
+        });
+    }
+
+    function updatePanelUserPermissions(username, permissionsJson) {
+        return new Promise((resolve, reject) => {
+            db.run(
+                `UPDATE panel_users SET permissions = ? WHERE username = ?`,
+                [permissionsJson, username],
                 (err) => (err ? reject(err) : resolve())
             );
         });
@@ -240,6 +272,7 @@ function initStatsDb() {
         updatePanelUserLastLogin,
         deletePanelUser,
         updatePanelUserRole,
+        updatePanelUserPermissions,
         disableCommand,
         enableCommand,
         isCommandDisabled,

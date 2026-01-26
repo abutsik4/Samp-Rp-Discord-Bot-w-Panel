@@ -18,11 +18,11 @@
       overflow: hidden;
     }
 
-    /* Sidebar */
+    /* Sidebar - Using new color palette */
     .sidebar-nav {
       width: 280px;
       min-width: 280px;
-      background: rgba(10, 14, 23, 0.98);
+      background: color-mix(in srgb, var(--coffee-bean) 98%, black);
       border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
@@ -75,15 +75,16 @@
       align-items: center;
       gap: 10px;
       padding: 10px 14px;
-      background: rgba(167, 139, 250, 0.08);
+      background: color-mix(in srgb, var(--pearl-aqua) 10%, transparent);
       border-radius: var(--radius-md);
       margin-top: 12px;
+      border: 1px solid color-mix(in srgb, var(--pearl-aqua) 20%, transparent);
     }
 
     .sidebar-user-avatar {
       width: 32px;
       height: 32px;
-      background: var(--gradient-secondary);
+      background: var(--gradient-primary);
       border-radius: 50%;
       display: flex;
       align-items: center;
@@ -99,7 +100,7 @@
 
     .sidebar-user-role {
       font-size: 11px;
-      color: var(--accent-cyan);
+      color: var(--pearl-aqua);
       text-transform: uppercase;
       letter-spacing: 0.5px;
     }
@@ -140,15 +141,15 @@
     }
 
     .sidebar-nav-link:hover {
-      background: rgba(167, 139, 250, 0.1);
+      background: color-mix(in srgb, var(--pearl-aqua) 12%, transparent);
       color: var(--text-bright);
-      border-color: rgba(167, 139, 250, 0.2);
+      border-color: color-mix(in srgb, var(--pearl-aqua) 25%, transparent);
     }
 
     .sidebar-nav-link.active {
       background: var(--gradient-glass);
-      color: var(--accent-cyan);
-      border-color: rgba(34, 211, 238, 0.3);
+      color: var(--pearl-aqua);
+      border-color: color-mix(in srgb, var(--pearl-aqua) 35%, transparent);
     }
 
     .sidebar-nav-icon { font-size: 18px; width: 24px; text-align: center; }
@@ -182,7 +183,7 @@
     }
 
     .sidebar-footer-link:hover {
-      background: rgba(167, 139, 250, 0.1);
+      background: color-mix(in srgb, var(--pearl-aqua) 12%, transparent);
       color: var(--text-bright);
     }
 
@@ -264,7 +265,7 @@
       border-collapse: collapse;
     }
     .users-table th {
-      background: rgba(167, 139, 250, 0.1);
+      background: color-mix(in srgb, var(--pearl-aqua) 10%, transparent);
       padding: 14px 12px;
       text-align: left;
       border-bottom: 2px solid var(--border);
@@ -282,7 +283,7 @@
       transition: all 0.3s ease;
     }
     .users-table tr:hover {
-      background: rgba(167, 139, 250, 0.05);
+      background: color-mix(in srgb, var(--pearl-aqua) 5%, transparent);
     }
     .role-badge {
       display: inline-block;
@@ -293,17 +294,188 @@
       text-transform: uppercase;
     }
     .role-admin {
-      background: rgba(239, 68, 68, 0.2);
-      color: #f87171;
+      background: color-mix(in srgb, var(--bubblegum-pink) 25%, transparent);
+      color: var(--bubblegum-pink);
     }
     .role-user {
-      background: rgba(59, 130, 246, 0.2);
-      color: #60a5fa;
+      background: color-mix(in srgb, var(--pearl-aqua) 25%, transparent);
+      color: var(--pearl-aqua);
+    }
+    .role-moderator {
+      background: color-mix(in srgb, var(--lavender-blush) 35%, transparent);
+      color: var(--lavender-blush);
     }
     .btn-small {
       padding: 6px 12px;
       font-size: 13px;
       margin-right: 6px;
+    }
+    
+    /* Permissions Grid */
+    .permissions-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      margin-top: 32px;
+      opacity: 0;
+      transform: translateY(30px);
+    }
+    .permissions-card.is-inview {
+      opacity: 1;
+      transform: translateY(0);
+      transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.3s;
+    }
+    .permissions-card-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text-bright);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .permissions-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 12px;
+    }
+    .permission-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      background: color-mix(in srgb, var(--graphite) 60%, transparent);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      transition: all 0.25s ease;
+    }
+    .permission-item:hover {
+      border-color: var(--pearl-aqua);
+      background: color-mix(in srgb, var(--pearl-aqua) 10%, transparent);
+    }
+    .permission-item.active {
+      border-color: var(--pearl-aqua);
+      background: color-mix(in srgb, var(--pearl-aqua) 15%, transparent);
+    }
+    .permission-toggle {
+      width: 18px;
+      height: 18px;
+      border: 2px solid var(--border);
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+    }
+    .permission-item.active .permission-toggle {
+      background: var(--pearl-aqua);
+      border-color: var(--pearl-aqua);
+    }
+    .permission-toggle::after {
+      content: '';
+      display: none;
+    }
+    .permission-item.active .permission-toggle::after {
+      content: '✓';
+      display: block;
+      font-size: 12px;
+      color: var(--coffee-bean);
+      font-weight: 700;
+    }
+    .permission-label {
+      font-size: 13px;
+      color: var(--text);
+    }
+    
+    /* Edit User Modal Extension */
+    .modal-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .modal-tab {
+      padding: 8px 16px;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-size: 13px;
+    }
+    .modal-tab:hover {
+      background: color-mix(in srgb, var(--pearl-aqua) 12%, transparent);
+      color: var(--text);
+    }
+    .modal-tab.active {
+      background: var(--pearl-aqua);
+      color: var(--coffee-bean);
+      border-color: var(--pearl-aqua);
+    }
+    .modal-tab-panel {
+      display: none;
+    }
+    .modal-tab-panel.active {
+      display: block;
+    }
+    
+    /* User Stats Card */
+    .user-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .stat-card {
+      background: color-mix(in srgb, var(--graphite) 50%, transparent);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 16px;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--pearl-aqua);
+    }
+    .stat-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    /* Action Buttons Enhanced */
+    .btn-icon {
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: var(--radius-md);
+      background: color-mix(in srgb, var(--graphite) 80%, transparent);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-size: 14px;
+    }
+    .btn-icon:hover {
+      background: color-mix(in srgb, var(--pearl-aqua) 20%, transparent);
+      border-color: var(--pearl-aqua);
+    }
+    .btn-icon.danger:hover {
+      background: color-mix(in srgb, var(--bubblegum-pink) 20%, transparent);
+      border-color: var(--bubblegum-pink);
+    }
+    
+    .actions-row {
+      display: flex;
+      gap: 6px;
     }
 
     /* Alerts */
@@ -504,11 +676,28 @@
           <% } %>
 
           <div class="table-card" data-scroll data-scroll-class="is-inview">
+            <!-- User Statistics -->
+            <div class="user-stats">
+              <div class="stat-card">
+                <div class="stat-value"><%= users.length %></div>
+                <div class="stat-label">Total Users</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-value"><%= users.filter(u => u.role === 'admin').length %></div>
+                <div class="stat-label">Administrators</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-value"><%= users.filter(u => u.last_login && new Date(u.last_login) > new Date(Date.now() - 86400000)).length %></div>
+                <div class="stat-label">Active Today</div>
+              </div>
+            </div>
+            
             <table class="users-table">
               <thead>
                 <tr>
                   <th>Username</th>
                   <th>Role</th>
+                  <th>Permissions</th>
                   <th>Created</th>
                   <th>Last Login</th>
                   <th>Actions</th>
@@ -521,33 +710,85 @@
                     <td>
                       <span class="role-badge role-<%= user.role %>"><%= user.role %></span>
                     </td>
+                    <td>
+                      <% if (user.role === 'admin') { %>
+                        <span style="font-size: 12px; color: var(--pearl-aqua);">All Permissions</span>
+                      <% } else { %>
+                        <button class="btn btn-secondary btn-small" onclick="showPermissionsModal('<%= user.username %>', '<%= JSON.stringify(user.permissions || {}).replace(/'/g, "\\'") %>')">
+                          ⚙️ Configure
+                        </button>
+                      <% } %>
+                    </td>
                     <td><%= new Date(user.created_at).toLocaleDateString() %></td>
                     <td><%= user.last_login ? new Date(user.last_login).toLocaleString() : 'Never' %></td>
                     <td>
-                      <% if (user.username !== username) { %>
-                        <button class="btn btn-secondary btn-small" onclick="showResetPasswordModal('<%= user.username %>')">
-                          🔑 Reset
-                        </button>
-                        <button class="btn btn-secondary btn-small" onclick="confirmDelete('<%= user.username %>')">
-                          🗑️ Delete
-                        </button>
-                        <% if (user.role === 'user') { %>
-                          <button class="btn btn-primary btn-small" onclick="makeAdmin('<%= user.username %>')">
-                            ⬆️ Admin
+                      <div class="actions-row">
+                        <% if (user.username !== username) { %>
+                          <button class="btn-icon" onclick="showResetPasswordModal('<%= user.username %>')" title="Reset Password">
+                            🔑
                           </button>
+                          <button class="btn-icon danger" onclick="confirmDelete('<%= user.username %>')" title="Delete User">
+                            🗑️
+                          </button>
+                          <% if (user.role === 'user') { %>
+                            <button class="btn-icon" onclick="makeAdmin('<%= user.username %>')" title="Promote to Admin">
+                              ⬆️
+                            </button>
+                          <% } else { %>
+                            <button class="btn-icon" onclick="makeUser('<%= user.username %>')" title="Demote to User">
+                              ⬇️
+                            </button>
+                          <% } %>
                         <% } else { %>
-                          <button class="btn btn-secondary btn-small" onclick="makeUser('<%= user.username %>')">
-                            ⬇️ User
-                          </button>
+                          <a href="/panel/change-password" class="btn-icon" title="Change Your Password">🔐</a>
                         <% } %>
-                      <% } else { %>
-                        <a href="/panel/change-password" class="btn btn-secondary btn-small">🔐 Change</a>
-                      <% } %>
+                      </div>
                     </td>
                   </tr>
                 <% }) %>
               </tbody>
             </table>
+          </div>
+          
+          <!-- Permissions Legend -->
+          <div class="permissions-card" data-scroll data-scroll-class="is-inview">
+            <div class="permissions-card-title">
+              <span>🔐</span> Permission Levels Guide
+            </div>
+            <div class="permissions-grid">
+              <div class="permission-item active">
+                <div class="permission-toggle"></div>
+                <span class="permission-label">View Dashboard</span>
+              </div>
+              <div class="permission-item">
+                <div class="permission-toggle"></div>
+                <span class="permission-label">Send Messages</span>
+              </div>
+              <div class="permission-item">
+                <div class="permission-toggle"></div>
+                <span class="permission-label">View Analytics</span>
+              </div>
+              <div class="permission-item">
+                <div class="permission-toggle"></div>
+                <span class="permission-label">Manage Bot Settings</span>
+              </div>
+              <div class="permission-item">
+                <div class="permission-toggle"></div>
+                <span class="permission-label">Edit Message Library</span>
+              </div>
+              <div class="permission-item">
+                <div class="permission-toggle"></div>
+                <span class="permission-label">View Debug Logs</span>
+              </div>
+              <div class="permission-item">
+                <div class="permission-toggle"></div>
+                <span class="permission-label">Schedule Messages</span>
+              </div>
+              <div class="permission-item">
+                <div class="permission-toggle"></div>
+                <span class="permission-label">Export Data</span>
+              </div>
+            </div>
           </div>
         </section>
       </div>
@@ -559,24 +800,82 @@
     <div class="modal-content">
       <span class="close" onclick="closeCreateUserModal()">&times;</span>
       <h2 class="modal-title">➕ Create New User</h2>
-      <form method="post" action="/panel/users/create">
-        <div class="form-group">
-          <label>Username</label>
-          <input name="username" required minlength="3" maxlength="50" pattern="[a-zA-Z0-9_-]+" 
-                 placeholder="alphanumeric, dashes, underscores" />
+      
+      <div class="modal-tabs">
+        <button class="modal-tab active" data-tab="basic">Basic Info</button>
+        <button class="modal-tab" data-tab="permissions">Permissions</button>
+      </div>
+      
+      <form method="post" action="/panel/users/create" id="createUserForm">
+        <div class="modal-tab-panel active" data-panel="basic">
+          <div class="form-group">
+            <label>Username</label>
+            <input name="username" required minlength="3" maxlength="50" pattern="[a-zA-Z0-9_-]+" 
+                   placeholder="alphanumeric, dashes, underscores" />
+          </div>
+          <div class="form-group">
+            <label>Password</label>
+            <input name="password" type="password" required minlength="8" placeholder="min 8 characters" />
+          </div>
+          <div class="form-group">
+            <label>Role</label>
+            <select name="role" required id="createUserRole" onchange="togglePermissionsVisibility()">
+              <option value="user">User</option>
+              <option value="moderator">Moderator</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
         </div>
-        <div class="form-group">
-          <label>Password</label>
-          <input name="password" type="password" required minlength="8" placeholder="min 8 characters" />
+        
+        <div class="modal-tab-panel" data-panel="permissions" id="createPermissionsPanel">
+          <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 16px;">
+            Configure granular access controls for this user. Admins automatically have all permissions.
+          </p>
+          <div class="permissions-grid" id="createPermissionsGrid">
+            <label class="permission-item" data-perm="view_dashboard">
+              <input type="checkbox" name="perm_view_dashboard" value="1" hidden>
+              <div class="permission-toggle"></div>
+              <span class="permission-label">View Dashboard</span>
+            </label>
+            <label class="permission-item" data-perm="send_messages">
+              <input type="checkbox" name="perm_send_messages" value="1" hidden>
+              <div class="permission-toggle"></div>
+              <span class="permission-label">Send Messages</span>
+            </label>
+            <label class="permission-item" data-perm="view_analytics">
+              <input type="checkbox" name="perm_view_analytics" value="1" hidden>
+              <div class="permission-toggle"></div>
+              <span class="permission-label">View Analytics</span>
+            </label>
+            <label class="permission-item" data-perm="manage_bot">
+              <input type="checkbox" name="perm_manage_bot" value="1" hidden>
+              <div class="permission-toggle"></div>
+              <span class="permission-label">Manage Bot Settings</span>
+            </label>
+            <label class="permission-item" data-perm="edit_library">
+              <input type="checkbox" name="perm_edit_library" value="1" hidden>
+              <div class="permission-toggle"></div>
+              <span class="permission-label">Edit Message Library</span>
+            </label>
+            <label class="permission-item" data-perm="view_debug">
+              <input type="checkbox" name="perm_view_debug" value="1" hidden>
+              <div class="permission-toggle"></div>
+              <span class="permission-label">View Debug Logs</span>
+            </label>
+            <label class="permission-item" data-perm="schedule_messages">
+              <input type="checkbox" name="perm_schedule_messages" value="1" hidden>
+              <div class="permission-toggle"></div>
+              <span class="permission-label">Schedule Messages</span>
+            </label>
+            <label class="permission-item" data-perm="export_data">
+              <input type="checkbox" name="perm_export_data" value="1" hidden>
+              <div class="permission-toggle"></div>
+              <span class="permission-label">Export Data</span>
+            </label>
+          </div>
         </div>
-        <div class="form-group">
-          <label>Role</label>
-          <select name="role" required>
-            <option value="user">User</option>
-            <option value="admin">Admin</option>
-          </select>
-        </div>
-        <button class="btn btn-primary w-full" type="submit">Create User</button>
+        
+        <button class="btn btn-primary w-full" type="submit" style="margin-top: 20px;">Create User</button>
       </form>
     </div>
   </div>
@@ -602,10 +901,134 @@
     </div>
   </div>
 
+  <!-- Permissions Modal -->
+  <div id="permissionsModal" class="modal">
+    <div class="modal-content" style="max-width: 600px;">
+      <span class="close" onclick="closePermissionsModal()">&times;</span>
+      <h2 class="modal-title">⚙️ User Permissions</h2>
+      <p style="color: var(--text-muted); margin-bottom: 20px;">Configuring permissions for: <strong id="permissionsUsername"></strong></p>
+      <form method="post" action="/panel/users/update-permissions" id="permissionsForm">
+        <input type="hidden" name="username" id="permissionsUsernameInput" />
+        
+        <div class="permissions-grid" id="editPermissionsGrid">
+          <label class="permission-item" data-perm="view_dashboard">
+            <input type="checkbox" name="perm_view_dashboard" value="1" hidden>
+            <div class="permission-toggle"></div>
+            <span class="permission-label">View Dashboard</span>
+          </label>
+          <label class="permission-item" data-perm="send_messages">
+            <input type="checkbox" name="perm_send_messages" value="1" hidden>
+            <div class="permission-toggle"></div>
+            <span class="permission-label">Send Messages</span>
+          </label>
+          <label class="permission-item" data-perm="view_analytics">
+            <input type="checkbox" name="perm_view_analytics" value="1" hidden>
+            <div class="permission-toggle"></div>
+            <span class="permission-label">View Analytics</span>
+          </label>
+          <label class="permission-item" data-perm="manage_bot">
+            <input type="checkbox" name="perm_manage_bot" value="1" hidden>
+            <div class="permission-toggle"></div>
+            <span class="permission-label">Manage Bot Settings</span>
+          </label>
+          <label class="permission-item" data-perm="edit_library">
+            <input type="checkbox" name="perm_edit_library" value="1" hidden>
+            <div class="permission-toggle"></div>
+            <span class="permission-label">Edit Message Library</span>
+          </label>
+          <label class="permission-item" data-perm="view_debug">
+            <input type="checkbox" name="perm_view_debug" value="1" hidden>
+            <div class="permission-toggle"></div>
+            <span class="permission-label">View Debug Logs</span>
+          </label>
+          <label class="permission-item" data-perm="schedule_messages">
+            <input type="checkbox" name="perm_schedule_messages" value="1" hidden>
+            <div class="permission-toggle"></div>
+            <span class="permission-label">Schedule Messages</span>
+          </label>
+          <label class="permission-item" data-perm="export_data">
+            <input type="checkbox" name="perm_export_data" value="1" hidden>
+            <div class="permission-toggle"></div>
+            <span class="permission-label">Export Data</span>
+          </label>
+        </div>
+        
+        <div style="display: flex; gap: 12px; margin-top: 24px;">
+          <button type="button" class="btn btn-secondary" style="flex: 1;" onclick="selectAllPermissions()">Select All</button>
+          <button type="button" class="btn btn-secondary" style="flex: 1;" onclick="clearAllPermissions()">Clear All</button>
+        </div>
+        
+        <button class="btn btn-primary w-full" type="submit" style="margin-top: 12px;">Save Permissions</button>
+      </form>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
   <script src="/public/snow.js"></script>
+  
+  <!-- Global Error Tracking & Debug -->
+  <script>
+    (function() {
+      window.__panelErrorLog = [];
+      const MAX_ERROR_LOG = 50;
+      
+      function logError(error, context = {}) {
+        const entry = {
+          time: new Date().toISOString(),
+          message: error?.message || String(error),
+          stack: error?.stack || null,
+          context,
+          url: location.href
+        };
+        window.__panelErrorLog.unshift(entry);
+        if (window.__panelErrorLog.length > MAX_ERROR_LOG) window.__panelErrorLog.pop();
+        console.error('[Panel Error]', entry);
+        return entry;
+      }
+      
+      window.panelLogError = logError;
+      window.addEventListener('error', (e) => logError(e.error || e.message, { type: 'uncaught' }));
+      window.addEventListener('unhandledrejection', (e) => logError(e.reason, { type: 'unhandledrejection' }));
+      
+      // Toast notifications
+      window.showPanelToast = function(message, type = 'info', duration = 4000) {
+        let container = document.getElementById('panelToastContainer');
+        if (!container) {
+          container = document.createElement('div');
+          container.id = 'panelToastContainer';
+          container.style.cssText = 'position:fixed;top:20px;right:20px;z-index:25000;display:flex;flex-direction:column;gap:10px;max-width:380px;';
+          document.body.appendChild(container);
+        }
+        
+        const colors = {
+          success: { bg: 'color-mix(in srgb, var(--pearl-aqua) 20%, var(--bg-card))', border: 'var(--pearl-aqua)', icon: '✅' },
+          error: { bg: 'color-mix(in srgb, var(--bubblegum-pink) 20%, var(--bg-card))', border: 'var(--bubblegum-pink)', icon: '❌' },
+          warning: { bg: 'color-mix(in srgb, #f5c77e 20%, var(--bg-card))', border: '#f5c77e', icon: '⚠️' },
+          info: { bg: 'var(--bg-card)', border: 'var(--border)', icon: '💡' }
+        };
+        const style = colors[type] || colors.info;
+        
+        const toast = document.createElement('div');
+        toast.style.cssText = 'background:' + style.bg + ';border:1px solid ' + style.border + ';border-radius:12px;padding:14px 18px;color:var(--text);font-size:14px;display:flex;align-items:center;gap:10px;box-shadow:0 8px 32px rgba(0,0,0,0.3);backdrop-filter:blur(8px);';
+        toast.innerHTML = '<span style="font-size:18px;">' + style.icon + '</span><span style="flex:1;">' + message + '</span><button style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;" onclick="this.parentElement.remove()">×</button>';
+        container.appendChild(toast);
+        setTimeout(() => toast.remove(), duration);
+      };
+      
+      // Debug console (Ctrl+Shift+D)
+      window.debugLog = function(msg, type = 'info') { console.log('[Debug][' + type + ']', msg); };
+      document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.shiftKey && (e.key === 'd' || e.key === 'D')) {
+          e.preventDefault();
+          console.log('Error Log:', window.__panelErrorLog);
+          window.showPanelToast('Check console for error log (Ctrl+Shift+D)', 'info');
+        }
+      });
+    })();
+  </script>
+  
   <script>
     // Initialize Locomotive Scroll
     const locoScroll = new LocomotiveScroll({
@@ -649,13 +1072,57 @@
       overlay.classList.remove('open');
     });
 
+    // Permission item toggle behavior
+    document.querySelectorAll('.permission-item').forEach(item => {
+      item.addEventListener('click', function(e) {
+        if (e.target.tagName !== 'INPUT') {
+          const checkbox = this.querySelector('input[type="checkbox"]');
+          if (checkbox) {
+            checkbox.checked = !checkbox.checked;
+            this.classList.toggle('active', checkbox.checked);
+          }
+        }
+      });
+    });
+    
+    // Modal tab switching
+    document.querySelectorAll('.modal-tab').forEach(tab => {
+      tab.addEventListener('click', function() {
+        const targetPanel = this.dataset.tab;
+        const modal = this.closest('.modal-content');
+        
+        modal.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
+        modal.querySelectorAll('.modal-tab-panel').forEach(p => p.classList.remove('active'));
+        
+        this.classList.add('active');
+        modal.querySelector(`[data-panel="${targetPanel}"]`).classList.add('active');
+      });
+    });
+
     // Modal functions
     function showCreateUserModal() {
       document.getElementById('createUserModal').style.display = 'block';
+      togglePermissionsVisibility();
     }
 
     function closeCreateUserModal() {
       document.getElementById('createUserModal').style.display = 'none';
+    }
+    
+    function togglePermissionsVisibility() {
+      const role = document.getElementById('createUserRole').value;
+      const permPanel = document.getElementById('createPermissionsPanel');
+      const permTab = document.querySelector('.modal-tab[data-tab="permissions"]');
+      
+      if (role === 'admin') {
+        permPanel.style.opacity = '0.5';
+        permPanel.style.pointerEvents = 'none';
+        permTab.style.opacity = '0.5';
+      } else {
+        permPanel.style.opacity = '1';
+        permPanel.style.pointerEvents = 'auto';
+        permTab.style.opacity = '1';
+      }
     }
 
     function showResetPasswordModal(username) {
@@ -667,12 +1134,64 @@
     function closeResetPasswordModal() {
       document.getElementById('resetPasswordModal').style.display = 'none';
     }
+    
+    function showPermissionsModal(username, permissionsJson) {
+      document.getElementById('permissionsUsername').textContent = username;
+      document.getElementById('permissionsUsernameInput').value = username;
+      
+      // Reset all permissions
+      document.querySelectorAll('#editPermissionsGrid .permission-item').forEach(item => {
+        item.classList.remove('active');
+        const checkbox = item.querySelector('input[type="checkbox"]');
+        if (checkbox) checkbox.checked = false;
+      });
+      
+      // Parse and apply permissions
+      try {
+        const permissions = JSON.parse(permissionsJson || '{}');
+        Object.keys(permissions).forEach(perm => {
+          if (permissions[perm]) {
+            const item = document.querySelector(`#editPermissionsGrid [data-perm="${perm}"]`);
+            if (item) {
+              item.classList.add('active');
+              const checkbox = item.querySelector('input[type="checkbox"]');
+              if (checkbox) checkbox.checked = true;
+            }
+          }
+        });
+      } catch (e) {
+        console.error('Error parsing permissions:', e);
+      }
+      
+      document.getElementById('permissionsModal').style.display = 'block';
+    }
+    
+    function closePermissionsModal() {
+      document.getElementById('permissionsModal').style.display = 'none';
+    }
+    
+    function selectAllPermissions() {
+      document.querySelectorAll('#editPermissionsGrid .permission-item').forEach(item => {
+        item.classList.add('active');
+        const checkbox = item.querySelector('input[type="checkbox"]');
+        if (checkbox) checkbox.checked = true;
+      });
+    }
+    
+    function clearAllPermissions() {
+      document.querySelectorAll('#editPermissionsGrid .permission-item').forEach(item => {
+        item.classList.remove('active');
+        const checkbox = item.querySelector('input[type="checkbox"]');
+        if (checkbox) checkbox.checked = false;
+      });
+    }
 
     window.onclick = function(event) {
-      const createModal = document.getElementById('createUserModal');
-      const resetModal = document.getElementById('resetPasswordModal');
-      if (event.target === createModal) createModal.style.display = 'none';
-      if (event.target === resetModal) resetModal.style.display = 'none';
+      const modals = ['createUserModal', 'resetPasswordModal', 'permissionsModal'];
+      modals.forEach(modalId => {
+        const modal = document.getElementById(modalId);
+        if (event.target === modal) modal.style.display = 'none';
+      });
     }
 
     function confirmDelete(username) {
@@ -691,7 +1210,7 @@
     }
 
     function makeAdmin(username) {
-      if (confirm(`Grant admin privileges to "${username}"?`)) {
+      if (confirm(`Grant admin privileges to "${username}"? This user will have all permissions.`)) {
         const form = document.createElement('form');
         form.method = 'POST';
         form.action = '/panel/users/update-role';
@@ -711,7 +1230,7 @@
     }
 
     function makeUser(username) {
-      if (confirm(`Revoke admin privileges from "${username}"?`)) {
+      if (confirm(`Revoke admin privileges from "${username}"? You can still configure specific permissions after.`)) {
         const form = document.createElement('form');
         form.method = 'POST';
         form.action = '/panel/users/update-role';
@@ -729,6 +1248,19 @@
         form.submit();
       }
     }
+    
+    // Keyboard shortcut: Ctrl+Shift+N to create new user
+    document.addEventListener('keydown', function(e) {
+      if (e.ctrlKey && e.shiftKey && e.key === 'N') {
+        e.preventDefault();
+        showCreateUserModal();
+      }
+      if (e.key === 'Escape') {
+        closeCreateUserModal();
+        closeResetPasswordModal();
+        closePermissionsModal();
+      }
+    });
   </script>
 </body>
 </html>

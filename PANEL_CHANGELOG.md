@@ -113,7 +113,6 @@ Updated remaining pages that had hard-coded old purple/cyan rgba values to use `
 - src/web/ai-engagement-page.js
 - src/web/rate-limiter-page.js
 - src/web/history-page.js
-- src/web/consecutive-limiter-page.js
 - scripts/trace-message-counting.js
 - README.md
 

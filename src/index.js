@@ -91,12 +91,6 @@ const {
   getRateLimitConfig,
   setRateLimitConfig,
   getRateLimitStats,
-  // Consecutive tracking
-  checkConsecutiveLimit,
-  trackConsecutiveMessage,
-  getLastMessageAuthor,
-  resetConsecutiveCount,
-  cleanupOldConsecutiveRecords,
   // Strikes & Timeouts
   getViolationStrikes,
   getUserViolationData,
@@ -1184,18 +1178,6 @@ client.once("ready", async () => {
   // Start periodic cleanup tasks
   console.log("[Bot] Starting cleanup schedulers...");
   
-  // Cleanup old consecutive message tracking records (every hour)
-  setInterval(async () => {
-    try {
-      const deleted = await cleanupOldConsecutiveRecords(db);
-      if (deleted > 0) {
-        console.log(`[Cleanup] Removed ${deleted} old consecutive tracking records`);
-      }
-    } catch (err) {
-      console.error("[Cleanup] Error cleaning consecutive records:", err);
-    }
-  }, 60 * 60 * 1000); // Every hour
-
   // Auto-reset expired strikes (every hour)
   setInterval(async () => {
     try {
@@ -6005,11 +5987,6 @@ app.get(`${PANEL_BASE}/bot/:botKey/rate-limits`, requireAuth, async (req, res) =
   res.send(generateRateLimiterPage(bot, PANEL_BASE));
 });
 
-// Consecutive Limiter page (Redirect to merged page)
-app.get(`${PANEL_BASE}/bot/:botKey/consecutive-limits`, requireAuth, async (req, res) => {
-  res.redirect(`${PANEL_BASE}/bot/${req.params.botKey}/rate-limits`);
-});
-
 // Channel Whitelist page
 app.get(`${PANEL_BASE}/bot/:botKey/whitelist`, requireAuth, async (req, res) => {
   const bot = bots.find((b) => b.key === req.params.botKey);
@@ -6045,7 +6022,7 @@ app.get(`${PANEL_BASE}/bot/:botKey/samp-servers`, requireAuth, async (req, res) 
   res.send(generateSampServersPage(bot, PANEL_BASE));
 });
 
-// Rate/Consecutive Limits API - Channel specific (Frontend compatibility)
+// Rate Limits API - Channel specific (Frontend compatibility)
 const handleLimitConfigGet = async (req, res) => {
   const bot = bots.find((b) => b.key === req.params.botKey);
   if (!bot) return res.status(404).json({ error: "Bot not found" });
@@ -6090,8 +6067,6 @@ const handleLimitConfigSet = async (req, res) => {
   }
 };
 
-app.get(`${PANEL_BASE}/api/:botKey/consecutive-limits/:channelId`, requireAuth, apiLimiter, handleLimitConfigGet);
-app.post(`${PANEL_BASE}/api/:botKey/consecutive-limits/:channelId`, requireAuth, apiLimiter, handleLimitConfigSet);
 app.get(`${PANEL_BASE}/api/:botKey/rate-limits/:channelId`, requireAuth, apiLimiter, handleLimitConfigGet);
 app.post(`${PANEL_BASE}/api/:botKey/rate-limits/:channelId`, requireAuth, apiLimiter, handleLimitConfigSet);
 

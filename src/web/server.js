@@ -395,6 +395,47 @@ function createWebServer({ discordClient, statsDb }) {
     }
   });
 
+  // Update user permissions
+  app.post("/users/update-permissions", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const { username } = req.body;
+      
+      // Collect all permission fields
+      const permissions = {
+        view_dashboard: req.body.perm_view_dashboard === '1',
+        send_messages: req.body.perm_send_messages === '1',
+        view_analytics: req.body.perm_view_analytics === '1',
+        manage_bot: req.body.perm_manage_bot === '1',
+        edit_library: req.body.perm_edit_library === '1',
+        view_debug: req.body.perm_view_debug === '1',
+        schedule_messages: req.body.perm_schedule_messages === '1',
+        export_data: req.body.perm_export_data === '1'
+      };
+
+      // Store permissions as JSON in the database
+      await statsDb.updatePanelUserPermissions(username, JSON.stringify(permissions));
+
+      const users = await statsDb.getAllPanelUsers();
+      res.render("users", { 
+        users, 
+        username: req.session.user.username,
+        userRole: req.session.user.role,
+        message: `Permissions for "${username}" updated successfully`,
+        error: null
+      });
+    } catch (err) {
+      console.error("Error updating permissions:", err);
+      const users = await statsDb.getAllPanelUsers();
+      res.render("users", { 
+        users, 
+        username: req.session.user.username,
+        userRole: req.session.user.role,
+        message: null,
+        error: "Error updating permissions"
+      });
+    }
+  });
+
   // Password Change Routes (All authenticated users)
   app.get("/change-password", requireAuth, (req, res) => {
     res.render("change-password", { 

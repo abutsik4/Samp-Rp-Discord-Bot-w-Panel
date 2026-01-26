@@ -94,8 +94,7 @@ function generateAccuracyMonitorPage(bot, PANEL_BASE) {
         <button onclick="history.back()" class="btn" type="button" style="padding:8px 16px">← Back</button>
         <a href="${PANEL_BASE}/bot/${bot.key}">🏠 Panel</a>
         <a href="${PANEL_BASE}/bot/${bot.key}/stats">📊 Stats</a>
-        <a href="${PANEL_BASE}/bot/${bot.key}/rate-limits">🚦 Rate Limits</a>
-        <a href="${PANEL_BASE}/bot/${bot.key}/consecutive-limits">🚫 Consecutive</a>
+        <a href="${PANEL_BASE}/bot/${bot.key}/rate-limits">🛡️ Spam Limits</a>
         <a href="${PANEL_BASE}/bot/${bot.key}/messages">📨 Messages</a>
         <a href="${PANEL_BASE}/bot/${bot.key}/ai-engagement">🤖 AI</a>
         <a href="${PANEL_BASE}/bot/${bot.key}/commands">📚 Commands</a>

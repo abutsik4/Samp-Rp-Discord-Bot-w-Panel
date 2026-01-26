@@ -12,10 +12,6 @@ const { dbRun, dbGet, dbAll } = require("../utils/db-helpers");
 // -------------------------
 // guildId:channelId:userId -> { count, expiresAt }
 const recentActivityCache = new Map();
-// guildId:channelId -> userId
-const lastAuthorCache = new Map();
-// guildId:channelId -> { userId, count, lastTimestamp }
-const consecutiveRunCache = new Map();
 
 // -------------------------
 // DATABASE FUNCTIONS
@@ -38,9 +34,6 @@ async function ensureRateLimitTables(db) {
       role_limits TEXT DEFAULT '[]',
       warning_message TEXT DEFAULT 'You have exceeded the message limit for this channel.',
       action TEXT DEFAULT 'delete',
-      consecutive_enabled INTEGER DEFAULT 0,
-      consecutive_limit INTEGER DEFAULT 5,
-      consecutive_role_limits TEXT DEFAULT '[]',
       strike_reset_days INTEGER DEFAULT 7,
       strike_role_multipliers TEXT DEFAULT '[]',
       timeout_mappings TEXT DEFAULT '[]',
@@ -98,29 +91,6 @@ async function ensureRateLimitTables(db) {
   `
   );
 
-  // Consecutive message tracking table
-  await dbRun(
-    db,
-    `
-    CREATE TABLE IF NOT EXISTS consecutive_message_tracking (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id TEXT NOT NULL,
-      channel_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      message_id TEXT NOT NULL,
-      timestamp INTEGER NOT NULL
-    )
-  `
-  );
-
-  await dbRun(
-    db,
-    `
-    CREATE INDEX IF NOT EXISTS idx_consecutive_messages 
-    ON consecutive_message_tracking(guild_id, channel_id, timestamp)
-  `
-  );
-
   // Countdown configuration table
   await dbRun(
     db,
@@ -152,9 +122,6 @@ async function ensureRateLimitTables(db) {
 
   // Add new columns to rate_limit_config if they don't exist
   const newConfigColumns = [
-    'consecutive_enabled INTEGER DEFAULT 0',
-    'consecutive_limit INTEGER DEFAULT 5',
-    'consecutive_role_limits TEXT DEFAULT \'[]\'',
     'strike_reset_days INTEGER DEFAULT 7',
     'strike_role_multipliers TEXT DEFAULT \'[]\'',
     'timeout_mappings TEXT DEFAULT \'[]\'',
@@ -190,11 +157,9 @@ async function getRateLimitConfig(db, guildId, channelId) {
 
   // Parse JSON fields
   config.role_limits = JSON.parse(config.role_limits || "[]");
-  config.consecutive_role_limits = JSON.parse(config.consecutive_role_limits || "[]");
   config.strike_role_multipliers = JSON.parse(config.strike_role_multipliers || "[]");
   config.timeout_mappings = JSON.parse(config.timeout_mappings || "[]");
   config.enabled = Boolean(config.enabled);
-  config.consecutive_enabled = Boolean(config.consecutive_enabled);
   config.timeouts_enabled = config.timeouts_enabled !== undefined ? Boolean(config.timeouts_enabled) : true;
   config.ignore_admins = config.ignore_admins !== undefined ? Boolean(config.ignore_admins) : true;
 
@@ -240,9 +205,6 @@ async function setRateLimitConfig(db, guildId, channelId, config) {
   const warningMessage = val('warning_message', "You have exceeded the message limit for this channel.");
   const action = val('action', "delete");
   
-  const consecutiveEnabled = boolVal('consecutive_enabled', 'consecutive_enabled', false);
-  const consecutiveLimit = val('consecutive_limit', 5);
-  const consecutiveRoleLimits = jsonVal('consecutive_role_limits', 'consecutive_role_limits', []);
   const strikeResetDays = val('strike_reset_days', 7);
   const strikeRoleMultipliers = jsonVal('strike_role_multipliers', 'strike_role_multipliers', []);
   const timeoutMappings = jsonVal('timeout_mappings', 'timeout_mappings', []);
@@ -258,14 +220,12 @@ async function setRateLimitConfig(db, guildId, channelId, config) {
       UPDATE rate_limit_config
       SET enabled = ?, default_limit = ?, time_window_minutes = ?, 
           role_limits = ?, warning_message = ?, action = ?,
-          consecutive_enabled = ?, consecutive_limit = ?, consecutive_role_limits = ?,
           strike_reset_days = ?, strike_role_multipliers = ?, timeout_mappings = ?,
           timeouts_enabled = ?, timeout_duration_per_strike = ?, ignore_admins = ?,
           updated_at = strftime('%s', 'now')
       WHERE guild_id = ? AND channel_id = ?
     `,
       [enabled, defaultLimit, timeWindowMinutes, roleLimits, warningMessage, action,
-       consecutiveEnabled, consecutiveLimit, consecutiveRoleLimits,
        strikeResetDays, strikeRoleMultipliers, timeoutMappings,
        timeoutsEnabled, timeoutDurationPerStrike, ignoreAdmins,
        guildId, channelId]
@@ -277,13 +237,11 @@ async function setRateLimitConfig(db, guildId, channelId, config) {
       `
       INSERT INTO rate_limit_config 
       (guild_id, channel_id, enabled, default_limit, time_window_minutes, role_limits, warning_message, action,
-       consecutive_enabled, consecutive_limit, consecutive_role_limits,
        strike_reset_days, strike_role_multipliers, timeout_mappings,
        timeouts_enabled, timeout_duration_per_strike, ignore_admins)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
       [guildId, channelId, enabled, defaultLimit, timeWindowMinutes, roleLimits, warningMessage, action,
-       consecutiveEnabled, consecutiveLimit, consecutiveRoleLimits,
        strikeResetDays, strikeRoleMultipliers, timeoutMappings,
        timeoutsEnabled, timeoutDurationPerStrike, ignoreAdmins]
     );
@@ -527,188 +485,6 @@ async function getRateLimitStats(db, guildId, channelId = null) {
   }
 
   return stats;
-}
-
-// -------------------------
-// CONSECUTIVE MESSAGE TRACKING
-// -------------------------
-
-/**
- * Track a message in consecutive sequence
- */
-async function trackConsecutiveMessage(db, guildId, channelId, userId, messageId, timestamp) {
-  const cacheKey = `${guildId}:${channelId}`;
-  
-  // Update last author cache
-  lastAuthorCache.set(cacheKey, userId);
-
-  // Update consecutive run cache
-  const run = consecutiveRunCache.get(cacheKey);
-  if (run && run.userId === userId) {
-    run.count++;
-    run.lastTimestamp = timestamp;
-  } else {
-    consecutiveRunCache.set(cacheKey, { userId, count: 1, lastTimestamp: timestamp });
-  }
-
-  await dbRun(
-    db,
-    `
-    INSERT INTO consecutive_message_tracking (guild_id, channel_id, user_id, message_id, timestamp)
-    VALUES (?, ?, ?, ?, ?)
-  `,
-    [guildId, channelId, userId, messageId, timestamp]
-  );
-}
-
-/**
- * Get the last message author in a channel
- */
-async function getLastMessageAuthor(db, guildId, channelId) {
-  const cacheKey = `${guildId}:${channelId}`;
-  if (lastAuthorCache.has(cacheKey)) {
-    return lastAuthorCache.get(cacheKey);
-  }
-
-  const result = await dbGet(
-    db,
-    `
-    SELECT user_id FROM consecutive_message_tracking
-    WHERE guild_id = ? AND channel_id = ?
-    ORDER BY timestamp DESC
-    LIMIT 1
-  `,
-    [guildId, channelId]
-  );
-
-  const userId = result?.user_id || null;
-  if (userId) lastAuthorCache.set(cacheKey, userId);
-  return userId;
-}
-
-/**
- * Get user's current consecutive message count
- */
-async function getConsecutiveCount(db, guildId, channelId, userId) {
-  const cacheKey = `${guildId}:${channelId}`;
-  const run = consecutiveRunCache.get(cacheKey);
-  const now = Math.floor(Date.now() / 1000);
-
-  // Check cache first
-  if (run && run.userId === userId) {
-    const maxGapSeconds = 90;
-    if (now - run.lastTimestamp <= maxGapSeconds) {
-      return run.count;
-    }
-  }
-
-  // Fallback to DB if cache missing or author changed (should be handled by reset logic but safety first)
-  const messages = await dbAll(
-    db,
-    `
-    SELECT user_id, timestamp FROM consecutive_message_tracking
-    WHERE guild_id = ? AND channel_id = ?
-    ORDER BY timestamp DESC
-    LIMIT 50
-  `,
-    [guildId, channelId]
-  );
-
-  const maxGapSeconds = 90;
-  const maxChainAgeSeconds = 180;
-
-  let count = 0;
-  let prevTimestamp = null;
-  for (const msg of messages) {
-    if (now - msg.timestamp > maxChainAgeSeconds) break;
-    if (prevTimestamp !== null && prevTimestamp - msg.timestamp > maxGapSeconds) break;
-    prevTimestamp = msg.timestamp;
-
-    if (msg.user_id === userId) {
-      count++;
-    } else {
-      break;
-    }
-  }
-
-  // Populate cache
-  if (count > 0) {
-    consecutiveRunCache.set(cacheKey, { userId, count, lastTimestamp: messages[0].timestamp });
-  }
-
-  return count;
-}
-
-/**
- * Reset consecutive count for a user (when interrupted)
- */
-async function resetConsecutiveCount(db, guildId, channelId, userId) {
-  const cacheKey = `${guildId}:${channelId}`;
-  
-  // Clear caches for this channel
-  if (lastAuthorCache.get(cacheKey) === userId) {
-    lastAuthorCache.delete(cacheKey);
-  }
-  if (consecutiveRunCache.get(cacheKey)?.userId === userId) {
-    consecutiveRunCache.delete(cacheKey);
-  }
-  // But we can clean up old records here
-  const cutoff = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
-  await dbRun(
-    db,
-    `
-    DELETE FROM consecutive_message_tracking
-    WHERE guild_id = ? AND channel_id = ? AND timestamp < ?
-  `,
-    [guildId, channelId, cutoff]
-  );
-}
-
-/**
- * Check if user has exceeded consecutive message limit
- */
-async function checkConsecutiveLimit(db, guildId, channelId, userId, userRoles = []) {
-  const config = await getRateLimitConfig(db, guildId, channelId);
-
-  // If consecutive limiting not enabled or no config, allow
-  if (!config || !config.consecutive_enabled) {
-    return { allowed: true, limit: null, current: 0, config: null };
-  }
-
-  // Determine user's consecutive limit based on roles
-  let userLimit = config.consecutive_limit;
-
-  // Check role-based consecutive limits (highest limit wins)
-  for (const roleLimit of config.consecutive_role_limits) {
-    if (userRoles.includes(roleLimit.role_id)) {
-      if (roleLimit.limit > userLimit) {
-        userLimit = roleLimit.limit;
-      }
-    }
-  }
-
-  // Get current consecutive count
-  const currentCount = await getConsecutiveCount(db, guildId, channelId, userId);
-
-  // Check if limit exceeded
-  const allowed = currentCount < userLimit;
-
-  return {
-    allowed,
-    limit: userLimit,
-    current: currentCount,
-    remaining: Math.max(0, userLimit - currentCount),
-    config,
-  };
-}
-
-/**
- * Clean up old consecutive message records
- */
-async function cleanupOldConsecutiveRecords(db) {
-  const cutoff = Math.floor(Date.now() / 1000) - 24 * 60 * 60;
-  const result = await dbRun(db, `DELETE FROM consecutive_message_tracking WHERE timestamp < ?`, [cutoff]);
-  return result?.changes || 0;
 }
 
 // -------------------------
@@ -984,14 +760,6 @@ module.exports = {
   recordViolation,
   cleanupOldRecords,
   getRateLimitStats,
-  
-  // Consecutive tracking
-  trackConsecutiveMessage,
-  getLastMessageAuthor,
-  getConsecutiveCount,
-  resetConsecutiveCount,
-  checkConsecutiveLimit,
-  cleanupOldConsecutiveRecords,
   
   // Strikes & timeouts
   getViolationStrikes,

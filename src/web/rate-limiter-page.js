@@ -72,7 +72,7 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
           <div class="page-content-wrapper">
           <div class="section-header" data-scroll data-scroll-class="is-inview">
             <h1 class="section-title"><span>🛡️</span> Spam Prevention</h1>
-            <p class="section-subtitle">Manage rate limits and consecutive message limits</p>
+            <p class="section-subtitle">Manage rate limits for this channel</p>
           </div>
 
           <div id="alertContainer"></div>
@@ -148,35 +148,8 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
               </div>
             </div>
 
-            <!-- Consecutive Limits Column -->
+            <!-- Punishments Column -->
             <div class="content-card">
-              <div class="subsection-title">🚫 Consecutive Limits (Turn-Taking)</div>
-
-              <div class="toggle-container">
-                <div>
-                  <div style="font-weight:500">Enable Consecutive Limits</div>
-                  <small style="color:var(--text-muted)">Limit messages in a row</small>
-                </div>
-                <label class="toggle-switch">
-                  <input type="checkbox" id="consecEnabled">
-                  <span class="toggle-slider"></span>
-                </label>
-              </div>
-
-              <div class="form-group">
-                <label>Max Consecutive Messages</label>
-                <input type="number" id="consecLimit" min="1" max="50" value="5">
-              </div>
-              
-              <div class="toggle-container">
-                <span style="font-weight:400">Ignore Admins</span>
-                <label class="toggle-switch">
-                  <input type="checkbox" id="ignoreAdmins" checked>
-                  <span class="toggle-slider"></span>
-                </label>
-              </div>
-
-              <div class="divider"></div>
               <div class="subsection-title">⚖️ Punishments</div>
 
               <div class="toggle-container">
@@ -196,8 +169,21 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
                 <label>Strike Reset (days)</label>
                 <input type="number" id="strikeResetDays" min="1" max="365" value="7">
               </div>
+              
+              <div class="toggle-container">
+                <span style="font-weight:400">Ignore Admins</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="ignoreAdmins" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
 
               <div class="divider"></div>
+              <div class="alert alert-info" style="margin-bottom:0">
+                Strikes are recorded when a user exceeds the rate limit. Timeouts are automatically applied if enabled.
+              </div>
+            </div>
+          </div>
               <div class="subsection-title">👥 Role Limits (Consecutive)</div>
               <div id="consecRoleLimitsList"></div>
               <div class="role-limit-input">
@@ -248,7 +234,6 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
 
     // State for role limits (arrays of objects)
     let rateRoleLimits = [];
-    let consecRoleLimits = [];
 
     function showAlert(msg, type) {
       const c = document.getElementById('alertContainer');
@@ -293,7 +278,6 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
           });
         };
         populate('rateRoleSelector');
-        populate('consecRoleSelector');
       } catch(e) { console.error(e); }
     }
 
@@ -316,17 +300,10 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
         rateRoleLimits = config.role_limits || [];
         renderRoleLimits('rateRoleLimitsList', rateRoleLimits, 'rateRoleLimits');
 
-        // Consecutive Limits
-        document.getElementById('consecEnabled').checked = !!config.consecutive_enabled;
-        document.getElementById('consecLimit').value = config.consecutive_limit || 5;
-        document.getElementById('ignoreAdmins').checked = config.ignore_admins !== false;
-        
         document.getElementById('timeoutsEnabled').checked = config.timeouts_enabled !== false;
         document.getElementById('timeoutPerStrike').value = config.timeout_duration_per_strike || config.timeout_per_strike || 1;
         document.getElementById('strikeResetDays').value = config.strike_reset_days || 7;
-
-        consecRoleLimits = config.consecutive_role_limits || [];
-        renderRoleLimits('consecRoleLimitsList', consecRoleLimits, 'consecRoleLimits');
+        document.getElementById('ignoreAdmins').checked = config.ignore_admins !== false;
 
         // Stats
         if(config.stats) {
@@ -425,15 +402,12 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
       if (arrayName === 'rateRoleLimits') {
         rateRoleLimits.splice(idx, 1);
         renderRoleLimits('rateRoleLimitsList', rateRoleLimits, 'rateRoleLimits');
-      } else {
-        consecRoleLimits.splice(idx, 1);
-        renderRoleLimits('consecRoleLimitsList', consecRoleLimits, 'consecRoleLimits');
       }
     };
 
     function addRoleLimit(type) {
-      const selId = type === 'rate' ? 'rateRoleSelector' : 'consecRoleSelector';
-      const inpId = type === 'rate' ? 'newRateRoleLimit' : 'newConsecRoleLimit';
+      const selId = 'rateRoleSelector';
+      const inpId = 'newRateRoleLimit';
       const roleId = document.getElementById(selId).value;
       const limit = parseInt(document.getElementById(inpId).value);
       
@@ -442,16 +416,10 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
 
       const obj = { role_id: roleId, limit: limit, role_name: rolesCache.find(r => r.id === roleId)?.name || roleId };
       
-      if (type === 'rate') {
-        // Remove existing for this role if any
-        rateRoleLimits = rateRoleLimits.filter(r => r.role_id !== roleId);
-        rateRoleLimits.push(obj);
-        renderRoleLimits('rateRoleLimitsList', rateRoleLimits, 'rateRoleLimits');
-      } else {
-        consecRoleLimits = consecRoleLimits.filter(r => r.role_id !== roleId);
-        consecRoleLimits.push(obj);
-        renderRoleLimits('consecRoleLimitsList', consecRoleLimits, 'consecRoleLimits');
-      }
+      // Remove existing for this role if any
+      rateRoleLimits = rateRoleLimits.filter(r => r.role_id !== roleId);
+      rateRoleLimits.push(obj);
+      renderRoleLimits('rateRoleLimitsList', rateRoleLimits, 'rateRoleLimits');
     }
 
     async function saveConfig() {
@@ -466,11 +434,6 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
         action: document.getElementById('actionSelect').value,
         role_limits: rateRoleLimits,
 
-        // Consecutive
-        consecutive_enabled: document.getElementById('consecEnabled').checked,
-        consecutive_limit: parseInt(document.getElementById('consecLimit').value),
-        consecutive_role_limits: consecRoleLimits,
-        
         // Common/Punishments
         ignore_admins: document.getElementById('ignoreAdmins').checked,
         timeouts_enabled: document.getElementById('timeoutsEnabled').checked,
@@ -497,7 +460,6 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
     });
 
     document.getElementById('addRateRoleBtn').addEventListener('click', () => addRoleLimit('rate'));
-    document.getElementById('addConsecRoleBtn').addEventListener('click', () => addRoleLimit('consecutive'));
     document.getElementById('saveBtn').addEventListener('click', saveConfig);
     document.getElementById('refreshStrikesBtn').addEventListener('click', () => {
       // Find guildId from rolesCache or current config fetch (we'll re-load config to be safe)

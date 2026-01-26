@@ -1,51 +1,63 @@
 /* JepsenCloud Unified Design System */
 /* Consistent styling across all web pages */
+/* Updated: New Pastel Color Palette for optimal readability */
 
 :root {
-  /* Requested Color Palette (exact hex) */
-  --midnight-violet: #160f29ff;
-  --stormy-teal: #246a73ff;
-  --dark-cyan: #368f8bff;
-  --champagne-mist: #f3dfc1ff;
-  --desert-sand: #ddbea8ff;
+  /* ====== NEW COLOR PALETTE ====== */
+  /* Primary Palette Colors */
+  --lavender-blush: #f6e8eaff;
+  --bubblegum-pink: #ef626cff;
+  --coffee-bean: #22181cff;
+  --graphite: #312f2fff;
+  --pearl-aqua: #84dccfff;
+  
+  /* Extended Palette for UI Elements */
+  --soft-coral: #f08080;
+  --mint-cream: #9be5d5;
+  --warm-white: #faf5f6;
+  --deep-charcoal: #1a1517;
+  --muted-rose: #d4a5a9;
 
   /* Color Palette (mapped to existing design tokens) */
-  --bg-main: var(--midnight-violet);
-  --bg-card: var(--midnight-violet);
-  --bg-card-hover: var(--midnight-violet);
-  --border: var(--stormy-teal);
-  --border-hover: var(--dark-cyan);
+  --bg-main: var(--coffee-bean);
+  --bg-card: var(--graphite);
+  --bg-card-hover: color-mix(in srgb, var(--graphite) 85%, var(--pearl-aqua));
+  --border: color-mix(in srgb, var(--pearl-aqua) 40%, var(--graphite));
+  --border-hover: var(--pearl-aqua);
   
-  /* Text Colors */
-  --text: var(--champagne-mist);
-  --text-muted: var(--desert-sand);
-  --text-bright: var(--champagne-mist);
+  /* Text Colors - Optimized for Readability */
+  --text: var(--lavender-blush);
+  --text-muted: var(--muted-rose);
+  --text-bright: var(--warm-white);
   
   /* Accent Colors */
-  --accent-purple: var(--stormy-teal);
-  --accent-cyan: var(--dark-cyan);
-  --accent-emerald: var(--champagne-mist);
-  --accent-rose: var(--desert-sand);
-  --accent-amber: var(--champagne-mist);
+  --accent-purple: var(--pearl-aqua);
+  --accent-cyan: var(--pearl-aqua);
+  --accent-emerald: var(--mint-cream);
+  --accent-rose: var(--bubblegum-pink);
+  --accent-amber: #f5c77e;
+  --accent-green: var(--pearl-aqua);
   
   /* Gradients */
-  --gradient-primary: linear-gradient(135deg, var(--stormy-teal), var(--dark-cyan));
-  --gradient-secondary: linear-gradient(135deg, var(--dark-cyan), var(--champagne-mist));
-  --gradient-card: linear-gradient(135deg, color-mix(in srgb, var(--stormy-teal) 18%, transparent), color-mix(in srgb, var(--midnight-violet) 30%, transparent));
-  --gradient-glass: linear-gradient(135deg, color-mix(in srgb, var(--stormy-teal) 14%, transparent), color-mix(in srgb, var(--dark-cyan) 10%, transparent));
-  --gradient-overlay: linear-gradient(180deg, transparent, color-mix(in srgb, var(--midnight-violet) 55%, black));
+  --gradient-primary: linear-gradient(135deg, var(--bubblegum-pink), var(--pearl-aqua));
+  --gradient-secondary: linear-gradient(135deg, var(--pearl-aqua), var(--mint-cream));
+  --gradient-card: linear-gradient(135deg, color-mix(in srgb, var(--pearl-aqua) 8%, var(--graphite)), color-mix(in srgb, var(--bubblegum-pink) 5%, var(--graphite)));
+  --gradient-glass: linear-gradient(135deg, color-mix(in srgb, var(--pearl-aqua) 12%, transparent), color-mix(in srgb, var(--bubblegum-pink) 8%, transparent));
+  --gradient-overlay: linear-gradient(180deg, transparent, color-mix(in srgb, var(--coffee-bean) 75%, black));
+  --gradient-hover: linear-gradient(135deg, var(--pearl-aqua), var(--bubblegum-pink));
   
   /* Input Backgrounds */
-  --input-bg: color-mix(in srgb, var(--midnight-violet) 85%, black);
-  --input-bg-focus: color-mix(in srgb, var(--midnight-violet) 75%, black);
+  --input-bg: color-mix(in srgb, var(--coffee-bean) 90%, var(--graphite));
+  --input-bg-focus: color-mix(in srgb, var(--graphite) 95%, var(--pearl-aqua));
   
-  /* Shadows */
-  --shadow-sm: 0 2px 8px color-mix(in srgb, black 30%, transparent);
-  --shadow-md: 0 4px 16px color-mix(in srgb, black 40%, transparent);
-  --shadow-lg: 0 10px 40px color-mix(in srgb, black 55%, transparent);
-  --shadow-glow: 0 0 20px color-mix(in srgb, var(--stormy-teal) 22%, transparent);
-  --shadow-glow-cyan: 0 0 20px color-mix(in srgb, var(--dark-cyan) 22%, transparent);
-  --shadow-inset: inset 0 2px 4px color-mix(in srgb, black 18%, transparent);
+  /* Shadows - Soft and Modern */
+  --shadow-sm: 0 2px 8px rgba(34, 24, 28, 0.25);
+  --shadow-md: 0 4px 16px rgba(34, 24, 28, 0.35);
+  --shadow-lg: 0 10px 40px rgba(34, 24, 28, 0.45);
+  --shadow-glow: 0 0 24px color-mix(in srgb, var(--pearl-aqua) 30%, transparent);
+  --shadow-glow-pink: 0 0 24px color-mix(in srgb, var(--bubblegum-pink) 25%, transparent);
+  --shadow-glow-cyan: 0 0 20px color-mix(in srgb, var(--pearl-aqua) 28%, transparent);
+  --shadow-inset: inset 0 2px 4px rgba(34, 24, 28, 0.2);
   
   /* Spacing */
   --space-xs: 4px;

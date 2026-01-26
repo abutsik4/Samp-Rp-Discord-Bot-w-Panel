@@ -28,8 +28,7 @@ function generateSidebarHTML(options = {}) {
     {
       title: 'Management',
       links: [
-        { href: `${PANEL_BASE}/bot/${botKey}/rate-limits`, icon: '🚦', label: 'Rate Limits', id: 'rate-limits' },
-        { href: `${PANEL_BASE}/bot/${botKey}/consecutive-limits`, icon: '🚫', label: 'Consecutive', id: 'consecutive-limits' },
+        { href: `${PANEL_BASE}/bot/${botKey}/rate-limits`, icon: '🛡️', label: 'Spam Limits', id: 'rate-limits' },
         { href: `${PANEL_BASE}/bot/${botKey}/whitelist`, icon: '📋', label: 'Whitelist', id: 'whitelist' },
         { href: `${PANEL_BASE}/bot/${botKey}/automod`, icon: '🛡️', label: 'Automod', id: 'automod' },
       ]
@@ -716,6 +715,200 @@ function generateSidebarScripts() {
             setTimeout(() => toggle(), 250);
           }
         } catch (_) {}
+      })();
+    </script>
+    
+    <!-- Global Error Handler & Debug Logger -->
+    <script>
+      (function() {
+        // Global error log for debugging
+        window.__panelErrorLog = [];
+        const MAX_ERROR_LOG = 50;
+        
+        function getPanelBase() {
+          const p = location.pathname || '';
+          const m = p.match(/^\\/panel(\\/|$)/);
+          return m ? '/panel' : '/panel';
+        }
+        
+        function logError(error, context = {}) {
+          const entry = {
+            time: new Date().toISOString(),
+            message: error?.message || String(error),
+            stack: error?.stack || null,
+            context,
+            url: location.href,
+            userAgent: navigator.userAgent
+          };
+          
+          window.__panelErrorLog.unshift(entry);
+          if (window.__panelErrorLog.length > MAX_ERROR_LOG) {
+            window.__panelErrorLog.pop();
+          }
+          
+          console.error('[Panel Error]', entry);
+          return entry;
+        }
+        
+        // Expose global error logger
+        window.panelLogError = logError;
+        
+        // Global unhandled error handler
+        window.addEventListener('error', (event) => {
+          logError(event.error || event.message, {
+            type: 'uncaught',
+            filename: event.filename,
+            lineno: event.lineno,
+            colno: event.colno
+          });
+        });
+        
+        // Unhandled promise rejection handler
+        window.addEventListener('unhandledrejection', (event) => {
+          logError(event.reason, { type: 'unhandledrejection' });
+        });
+        
+        // API wrapper with automatic error reporting
+        window.panelApi = async function(path, opts = {}) {
+          const startTime = Date.now();
+          try {
+            const res = await fetch(path, {
+              headers: { 'Content-Type': 'application/json' },
+              ...opts
+            });
+            const txt = await res.text();
+            let json;
+            try { json = JSON.parse(txt); } catch { json = null; }
+            
+            if (!res.ok) {
+              const errorMsg = (json && (json.error || json.message)) || txt || ('HTTP ' + res.status);
+              const error = new Error(errorMsg);
+              error.status = res.status;
+              error.response = json;
+              logError(error, {
+                type: 'api_error',
+                path,
+                status: res.status,
+                duration: Date.now() - startTime
+              });
+              throw error;
+            }
+            
+            return json;
+          } catch (e) {
+            if (!e.status) {
+              logError(e, {
+                type: 'network_error',
+                path,
+                duration: Date.now() - startTime
+              });
+            }
+            throw e;
+          }
+        };
+        
+        // Toast notification system
+        window.showPanelToast = function(message, type = 'info', duration = 4000) {
+          let container = document.getElementById('panelToastContainer');
+          if (!container) {
+            container = document.createElement('div');
+            container.id = 'panelToastContainer';
+            container.style.cssText = 'position:fixed;top:20px;right:20px;z-index:25000;display:flex;flex-direction:column;gap:10px;max-width:380px;pointer-events:none;';
+            document.body.appendChild(container);
+          }
+          
+          const colors = {
+            success: { bg: 'color-mix(in srgb, var(--pearl-aqua) 20%, var(--bg-card))', border: 'var(--pearl-aqua)', icon: '✅' },
+            error: { bg: 'color-mix(in srgb, var(--bubblegum-pink) 20%, var(--bg-card))', border: 'var(--bubblegum-pink)', icon: '❌' },
+            warning: { bg: 'color-mix(in srgb, #f5c77e 20%, var(--bg-card))', border: '#f5c77e', icon: '⚠️' },
+            info: { bg: 'color-mix(in srgb, var(--pearl-aqua) 10%, var(--bg-card))', border: 'var(--border)', icon: '💡' }
+          };
+          
+          const style = colors[type] || colors.info;
+          
+          const toast = document.createElement('div');
+          toast.style.cssText = 'background:' + style.bg + ';border:1px solid ' + style.border + ';border-radius:12px;padding:14px 18px;color:var(--text);font-size:14px;display:flex;align-items:center;gap:10px;box-shadow:0 8px 32px rgba(0,0,0,0.3);backdrop-filter:blur(8px);pointer-events:auto;animation:slideIn 0.3s ease;';
+          toast.innerHTML = '<span style="font-size:18px;">' + style.icon + '</span><span style="flex:1;">' + message + '</span><button style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;padding:0;" onclick="this.parentElement.remove()">×</button>';
+          
+          container.appendChild(toast);
+          
+          // Add animation keyframes if not present
+          if (!document.getElementById('toastAnimStyles')) {
+            const styleEl = document.createElement('style');
+            styleEl.id = 'toastAnimStyles';
+            styleEl.textContent = '@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}@keyframes slideOut{from{transform:translateX(0);opacity:1}to{transform:translateX(100%);opacity:0}}';
+            document.head.appendChild(styleEl);
+          }
+          
+          setTimeout(() => {
+            toast.style.animation = 'slideOut 0.3s ease forwards';
+            setTimeout(() => toast.remove(), 300);
+          }, duration);
+        };
+        
+        // Auto-report critical errors to server (rate limited)
+        let lastAutoReport = 0;
+        window.autoReportError = function(error, context = {}) {
+          const now = Date.now();
+          if (now - lastAutoReport < 10000) return; // Rate limit: 1 per 10s
+          lastAutoReport = now;
+          
+          const entry = logError(error, context);
+          
+          fetch(getPanelBase() + '/api/debug/report', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              report: {
+                type: 'auto_error_report',
+                error: entry,
+                errorLog: window.__panelErrorLog.slice(0, 5),
+                time: new Date().toISOString(),
+                url: location.href,
+                userAgent: navigator.userAgent
+              }
+            })
+          }).catch(() => {}); // Silent fail for auto-reports
+        };
+        
+        // Debug console (Ctrl+Shift+D) - simpler inline version
+        let debugConsoleVisible = false;
+        window.toggleDebugConsole = function() {
+          let console = document.getElementById('globalDebugConsole');
+          if (!console) {
+            console = document.createElement('div');
+            console.id = 'globalDebugConsole';
+            console.style.cssText = 'position:fixed;bottom:20px;left:300px;right:20px;height:200px;background:color-mix(in srgb, var(--bg-card) 95%, black);border:1px solid var(--border);border-radius:12px;z-index:24000;display:none;flex-direction:column;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,0.4);';
+            console.innerHTML = '<div style="padding:10px 14px;background:var(--bg-card);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;"><span style="font-weight:600;color:var(--text);">🐛 Debug Console</span><div><button onclick="document.getElementById(\\'globalDebugConsoleBody\\').innerHTML=\\'\\'" style="background:none;border:none;color:var(--text-muted);cursor:pointer;margin-right:10px;">Clear</button><button onclick="toggleDebugConsole()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;">✕</button></div></div><div id="globalDebugConsoleBody" style="flex:1;overflow:auto;padding:10px;font-family:monospace;font-size:12px;line-height:1.6;"></div>';
+            document.body.appendChild(console);
+          }
+          
+          debugConsoleVisible = !debugConsoleVisible;
+          console.style.display = debugConsoleVisible ? 'flex' : 'none';
+        };
+        
+        window.debugLog = function(message, type = 'info') {
+          const body = document.getElementById('globalDebugConsoleBody');
+          if (!body) return;
+          
+          const colors = { info: 'var(--text)', success: 'var(--pearl-aqua)', error: 'var(--bubblegum-pink)', warning: '#f5c77e' };
+          const icons = { info: '💡', success: '✅', error: '❌', warning: '⚠️' };
+          
+          const time = new Date().toLocaleTimeString();
+          const entry = document.createElement('div');
+          entry.style.color = colors[type] || colors.info;
+          entry.innerHTML = '<span style="color:var(--text-muted);">[' + time + ']</span> ' + (icons[type] || '') + ' ' + message;
+          body.appendChild(entry);
+          body.scrollTop = body.scrollHeight;
+        };
+        
+        // Keyboard shortcut: Ctrl+Shift+D for debug console
+        document.addEventListener('keydown', (e) => {
+          if (e.ctrlKey && e.shiftKey && (e.key === 'd' || e.key === 'D')) {
+            e.preventDefault();
+            toggleDebugConsole();
+          }
+        });
       })();
     </script>
   `;
