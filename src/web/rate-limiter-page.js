@@ -102,7 +102,7 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
           <div class="grid" data-scroll data-scroll-class="is-inview">
             <!-- Rate Limits Column -->
             <div class="content-card">
-              <div class="subsection-title">🚦 Rate Limits (Frequency)</div>
+              <div class="subsection-title">🚦 Rate Limits</div>
               
               <div class="toggle-container">
                 <div>
@@ -139,7 +139,7 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
               </div>
 
               <div class="divider"></div>
-              <div class="subsection-title">👥 Role Limits (Frequency)</div>
+              <div class="subsection-title">👥 Role Limits</div>
               <div id="rateRoleLimitsList"></div>
               <div class="role-limit-input">
                 <select id="rateRoleSelector" style="flex:2"><option value="">Select role...</option></select>
@@ -147,10 +147,11 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
                 <button class="btn btn-sm" id="addRateRoleBtn">Add</button>
               </div>
             </div>
+          </div>
 
-            <!-- Punishments Column -->
-            <div class="content-card">
-              <div class="subsection-title">⚖️ Punishments</div>
+          <!-- Punishments Column -->
+          <div class="content-card">
+            <div class="subsection-title">⚖️ Punishments</div>
 
               <div class="toggle-container">
                 <span style="font-weight:400">Apply Timeouts</span>
@@ -184,19 +185,10 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
               </div>
             </div>
           </div>
-              <div class="subsection-title">👥 Role Limits (Consecutive)</div>
-              <div id="consecRoleLimitsList"></div>
-              <div class="role-limit-input">
-                <select id="consecRoleSelector" style="flex:2"><option value="">Select role...</option></select>
-                <input type="number" id="newConsecRoleLimit" placeholder="Limit" value="10" style="flex:1">
-                <button class="btn btn-sm" id="addConsecRoleBtn">Add</button>
-              </div>
-            </div>
-          </div>
 
           <!-- Strikes Viewer Section -->
           <div class="content-card" data-scroll data-scroll-class="is-inview">
-            <div class="subsection-title">⚠️ User Strikes (Consecutive Violations)</div>
+            <div class="subsection-title">⚠️ User Strikes</div>
             <p style="color:var(--text-muted); font-size: 13px; margin-bottom: 16px;">Users who have accumulated strikes across the entire guild. Strikes result in progressive timeouts.</p>
             <div id="strikesContainer">
               <div style="color:var(--text-muted); font-style:italic; padding: 20px; text-align: center;">Select a channel to view strikes</div>
@@ -213,8 +205,6 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
              <p style="color:var(--text-muted); font-size: 14px; line-height: 1.6;">
                <strong>Rate Limits</strong> control how many messages a user can send within a specific time window (e.g. 10 messages per hour).
                <br>
-                <strong>Consecutive Limits</strong> control how many messages a user can send <em>in a row</em> without anyone else speaking.
-                <br>
                 If <strong>Timeouts</strong> are enabled, violations will accumulate "strikes" which result in temporary timeouts.
               </p>
            </div>
