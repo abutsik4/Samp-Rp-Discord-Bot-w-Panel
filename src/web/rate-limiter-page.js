@@ -14,8 +14,8 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
   <style>
     ${generateSidebarStyles()}
     
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; align-items: start; }
-    @media(max-width: 1400px) { .grid { grid-template-columns: 1fr; } }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-bottom: 24px; align-items: start; }
+    @media(max-width: 1300px) { .grid { grid-template-columns: 1fr; } }
     
     .toggle-container { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; min-height: 48px; }
     .toggle-switch { position: relative; display: inline-block; width: 50px; height: 26px; flex-shrink: 0; }
@@ -46,9 +46,11 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
     .strikes-table th { background: rgba(167, 139, 250, 0.05); color: var(--accent-blue); font-weight: 600; }
     .strikes-table tr:hover { background: rgba(255, 255, 255, 0.02); }
     .user-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; background: rgba(34, 211, 238, 0.1); border-radius: 12px; color: var(--accent-cyan); font-weight: 500; font-size: 12px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .role-limit-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: calc(100% - 40px); }
+    .role-limit-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; font-size: 13px; gap: 10px; overflow: hidden; }
+    .role-limit-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
     .table-container { width: 100%; overflow-x: auto; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
     .content-card { max-width: 100%; overflow: hidden; }
+    .page-content-wrapper { max-width: 1400px; margin: 0 left; }
   </style>
 </head>
 <body>
@@ -67,6 +69,7 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
 
       <div data-scroll-container id="scrollContainer">
         <section class="panel-section" data-scroll-section>
+          <div class="page-content-wrapper">
           <div class="section-header" data-scroll data-scroll-class="is-inview">
             <h1 class="section-title"><span>🛡️</span> Spam Prevention</h1>
             <p class="section-subtitle">Manage rate limits and consecutive message limits</p>
@@ -202,7 +205,6 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
                 <input type="number" id="newConsecRoleLimit" placeholder="Limit" value="10" style="flex:1">
                 <button class="btn btn-sm" id="addConsecRoleBtn">Add</button>
               </div>
-              </div>
             </div>
           </div>
 
@@ -225,11 +227,12 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
              <p style="color:var(--text-muted); font-size: 14px; line-height: 1.6;">
                <strong>Rate Limits</strong> control how many messages a user can send within a specific time window (e.g. 10 messages per hour).
                <br>
-               <strong>Consecutive Limits</strong> control how many messages a user can send <em>in a row</em> without anyone else speaking.
-               <br>
-               If <strong>Timeouts</strong> are enabled, violations will accumulate "strikes" which result in temporary timeouts.
-             </p>
-          </div>
+                <strong>Consecutive Limits</strong> control how many messages a user can send <em>in a row</em> without anyone else speaking.
+                <br>
+                If <strong>Timeouts</strong> are enabled, violations will accumulate "strikes" which result in temporary timeouts.
+              </p>
+           </div>
+           </div>
         </section>
       </div>
     </main>
