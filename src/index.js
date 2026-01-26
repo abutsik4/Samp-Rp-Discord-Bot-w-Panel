@@ -33,7 +33,6 @@ const { generateStatsPage } = require("./web/stats-page");
 const { generateAIEngagementPage } = require("./web/ai-engagement-page");
 const { generateAnalyticsPage } = require("./web/analytics-page");
 const { generateRateLimiterPage } = require("./web/rate-limiter-page");
-const { generateConsecutiveLimiterPage } = require("./web/consecutive-limiter-page");
 const { generateCommandsPage } = require("./web/commands-page");
 const { generateAccuracyMonitorPage } = require("./web/accuracy-monitor-page");
 const { generateWhitelistPage } = require("./web/whitelist-page");
@@ -112,6 +111,8 @@ const {
   setCountdownConfig,
   updateCountdownLastPosted,
 } = require("./features/rate-limiter");
+
+const { runSecurityPipeline } = require("./features/security-pipeline");
 
 // -------------------------
 // CONFIG / ENV
@@ -1503,153 +1504,18 @@ client.on("messageCreate", async (message) => {
     const userId = message.author.id;
     const channelId = message.channel.id;
 
-    // ========================================
-    // CONSECUTIVE MESSAGE LIMITING
-    // ========================================
-    // Ensure we have member data so role-based limits apply
+    // Ensure we have member data for role-based logic
     let member = message.member;
     if (!member) {
-      try {
-        member = await message.guild.members.fetch(userId);
-      } catch {
-        // If fetch fails, continue with empty roles
-      }
+      try { member = await message.guild.members.fetch(userId); } catch {}
     }
     const userRoles = member?.roles?.cache?.map(r => r.id) || [];
-    
-    // Check if different user sent last message (to reset consecutive count)
-    const lastAuthor = await getLastMessageAuthor(db, guildId, channelId);
-    if (lastAuthor && lastAuthor !== userId) {
-      await resetConsecutiveCount(db, guildId, channelId, lastAuthor);
-    }
-
-    // Check consecutive message limit
-    const consecutiveCheck = await checkConsecutiveLimit(db, guildId, channelId, userId, userRoles);
-    
-    if (!consecutiveCheck.allowed) {
-      // Check if admins should be ignored
-      if (consecutiveCheck.config?.ignore_admins !== false) {
-        const member = message.member;
-        if (member && (member.permissions.has('Administrator') || member.permissions.has('ManageGuild'))) {
-          // Admin is exempt - allow message
-          await trackConsecutiveMessage(db, guildId, channelId, userId, message.id, Math.floor(Date.now() / 1000));
-          return;
-        }
-      }
-      
-      console.log(`[Consecutive Limit] User ${userId} exceeded consecutive limit in ${channelId}: ${consecutiveCheck.current + 1}/${consecutiveCheck.limit}`);
-      
-      try {
-        // Delete message
-        await message.delete();
-      } catch (err) {
-        console.warn(`[Consecutive Limit] Could not delete message:`, err.message);
-      }
-
-      try {
-        // DM warning to user
-        await message.author.send(`⚠️ Не флудите! Вы отправили ${consecutiveCheck.current + 1} сообщений подряд. Лимит: ${consecutiveCheck.limit}. Подождите, пока другие пользователи ответят.`);
-      } catch (err) {
-        console.warn(`[Consecutive Limit] Could not DM user ${userId}:`, err.message);
-      }
-
-      // Record violation with strikes
-      await recordViolationWithStrikes(db, guildId, channelId, userId, userRoles, consecutiveCheck.config);
-
-      // Check total strikes and apply progressive timeout
-      const totalStrikes = await getViolationStrikes(db, guildId, userId);
-      
-      if (consecutiveCheck.config?.timeouts_enabled !== false && totalStrikes >= 5) {
-        const timeoutDurationPerStrike = consecutiveCheck.config?.timeout_duration_per_strike || 1;
-        const timeoutMinutes = calculateTimeoutDuration(totalStrikes, consecutiveCheck.config || {});
-        const customTimeoutMinutes = totalStrikes * timeoutDurationPerStrike;
-        const cappedMinutes = Math.min(customTimeoutMinutes, 120); // Cap at 2 hours
-        const timeoutMs = cappedMinutes * 60 * 1000;
-        
-        try {
-          await message.member.timeout(timeoutMs, `Rate limit violation: ${totalStrikes} strikes`);
-          const formattedTime = formatTimeoutDuration(cappedMinutes);
-          await message.author.send(`⏱️ Вы получили тайм-аут на ${formattedTime} за ${totalStrikes} нарушений лимита сообщений.`);
-          console.log(`[Timeout] Applied ${cappedMinutes} min timeout to user ${userId} (${totalStrikes} strikes)`);
-        } catch (err) {
-          console.warn(`[Timeout] Could not timeout user ${userId}:`, err.message);
-        }
-      }
-
-      return; // Stop processing this message
-    }
-
-    // Track this message in consecutive sequence
-    await trackConsecutiveMessage(db, guildId, channelId, userId, message.id, Math.floor(Date.now() / 1000));
 
     // ========================================
-    // TIME-WINDOW RATE LIMITING
+    // SECURITY PIPELINE (Rate Limits, Consecutive, AutoMod)
     // ========================================
-    const rateLimitCheck = await checkRateLimit(db, guildId, channelId, userId, userRoles);
-    
-    if (!rateLimitCheck.allowed) {
-      console.log(`[Rate Limit] User ${userId} exceeded limit in ${channelId}`);
-      
-      // Get config to determine action
-      const config = rateLimitCheck.config;
-      
-      try {
-        // DM warning to user
-        const warningMsg = config.warning_message || "You have exceeded the message limit for this channel.";
-        await message.author.send(`⚠️ ${warningMsg}\n\nLimit: ${rateLimitCheck.limit} messages per ${config.time_window_minutes} minutes.\nYour count: ${rateLimitCheck.current + 1}`);
-      } catch (err) {
-        console.warn(`[Rate Limit] Could not DM user ${userId}:`, err.message);
-      }
-
-      // Delete message if action is 'delete'
-      if (config.action === 'delete') {
-        try {
-          await message.delete();
-        } catch (err) {
-          console.warn(`[Rate Limit] Could not delete message:`, err.message);
-        }
-      }
-
-      // Record violation
-      await recordViolation(db, guildId, channelId, userId);
-      return; // Stop processing this message
-    }
-
-    // Track message for rate limiting
-    if (rateLimitCheck.config) {
-      await trackMessage(db, guildId, channelId, userId, message.id);
-    }
-
-    // ========================================
-    // AUTOMOD - BANNED WORDS CHECK
-    // ========================================
-    const bannedWords = await dbAll(
-      `SELECT word, case_sensitive FROM banned_words WHERE guild_id = ?`,
-      [guildId]
-    );
-    
-    if (bannedWords && bannedWords.length > 0 && message.content) {
-      const messageContent = message.content;
-      
-      for (const { word, case_sensitive } of bannedWords) {
-        const pattern = case_sensitive 
-          ? new RegExp(`\\b${word}\\b`, 'g')
-          : new RegExp(`\\b${word}\\b`, 'gi');
-        
-        if (pattern.test(messageContent)) {
-          console.log(`[AutoMod] Banned word detected: "${word}" in message from ${userId}`);
-          
-          try {
-            await message.delete();
-            await message.author.send(`⚠️ Your message was deleted because it contained a banned word: "${word}"`);
-          } catch (err) {
-            console.warn(`[AutoMod] Could not delete message or DM user:`, err.message);
-          }
-          
-          return; // Stop processing this message
-        }
-      }
-    }
+    const securityResult = await runSecurityPipeline(db, message, userRoles);
+    if (securityResult.stop) return;
 
     // ========================================
     // CHANNEL WHITELIST CHECK
@@ -5255,8 +5121,7 @@ app.get(`${PANEL_BASE}/verification-dashboard`, requireAuth, async (req, res) =>
         <button onclick="history.back()" class="btn" type="button" style="padding:8px 16px">← Back</button>
         <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}">🏠 Panel</a>
         <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/stats">📊 Stats</a>
-        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/rate-limits">🚦 Rate Limits</a>
-        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/consecutive-limits">🚫 Consecutive</a>
+        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/rate-limits">🛡️ Spam Limits</a>
         <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/messages">📨 Messages</a>
         <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/ai-engagement">🤖 AI</a>
         <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/commands">📚 Commands</a>
@@ -5531,8 +5396,7 @@ app.get(`${PANEL_BASE}/bot/:botKey/holidays`, requireAuth, async (req, res) => {
         <button onclick="history.back()" class="btn" type="button" style="padding:8px 14px">← Back</button>
         <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}" style="color:#93c5fd">🏠 Panel</a>
         <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/stats" style="color:#93c5fd">📊 Stats</a>
-        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/rate-limits" style="color:#93c5fd">🚦 Rate Limits</a>
-        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/consecutive-limits" style="color:#93c5fd">🚫 Consecutive</a>
+        <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/rate-limits" style="color:#93c5fd">🛡️ Spam Limits</a>
         <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/messages" style="color:#93c5fd">📨 Messages</a>
         <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/ai-engagement" style="color:#93c5fd">🤖 AI</a>
         <a href="${PANEL_BASE}/bot/${encodeURIComponent(bot.key)}/commands" style="color:#93c5fd">📚 Commands</a>
@@ -6141,11 +6005,9 @@ app.get(`${PANEL_BASE}/bot/:botKey/rate-limits`, requireAuth, async (req, res) =
   res.send(generateRateLimiterPage(bot, PANEL_BASE));
 });
 
-// Consecutive Limiter page
+// Consecutive Limiter page (Redirect to merged page)
 app.get(`${PANEL_BASE}/bot/:botKey/consecutive-limits`, requireAuth, async (req, res) => {
-  const bot = bots.find((b) => b.key === req.params.botKey);
-  if (!bot) return res.status(404).send("Bot not found");
-  res.send(generateConsecutiveLimiterPage(bot, PANEL_BASE));
+  res.redirect(`${PANEL_BASE}/bot/${req.params.botKey}/rate-limits`);
 });
 
 // Channel Whitelist page
@@ -6182,6 +6044,56 @@ app.get(`${PANEL_BASE}/bot/:botKey/samp-servers`, requireAuth, async (req, res) 
   if (!bot) return res.status(404).send("Bot not found");
   res.send(generateSampServersPage(bot, PANEL_BASE));
 });
+
+// Rate/Consecutive Limits API - Channel specific (Frontend compatibility)
+const handleLimitConfigGet = async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  const channelId = req.params.channelId;
+  let guildId;
+  try {
+     const ch = await bot.client.channels.fetch(channelId);
+     guildId = ch.guild.id;
+  } catch (e) {
+     return res.status(404).json({ error: "Channel not found or not accessible" });
+  }
+
+  try {
+    const config = await getRateLimitConfig(db, guildId, channelId);
+    return res.json(config || {});
+  } catch (e) {
+    console.error("Config get error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to get config" });
+  }
+};
+
+const handleLimitConfigSet = async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  const channelId = req.params.channelId;
+  let guildId;
+  try {
+     const ch = await bot.client.channels.fetch(channelId);
+     guildId = ch.guild.id;
+  } catch (e) {
+     return res.status(404).json({ error: "Channel not found or not accessible" });
+  }
+
+  try {
+    await setRateLimitConfig(db, guildId, channelId, req.body);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("Config update error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to update config" });
+  }
+};
+
+app.get(`${PANEL_BASE}/api/:botKey/consecutive-limits/:channelId`, requireAuth, apiLimiter, handleLimitConfigGet);
+app.post(`${PANEL_BASE}/api/:botKey/consecutive-limits/:channelId`, requireAuth, apiLimiter, handleLimitConfigSet);
+app.get(`${PANEL_BASE}/api/:botKey/rate-limits/:channelId`, requireAuth, apiLimiter, handleLimitConfigGet);
+app.post(`${PANEL_BASE}/api/:botKey/rate-limits/:channelId`, requireAuth, apiLimiter, handleLimitConfigSet);
 
 // Rate Limiter API - Get configuration
 app.get(`${PANEL_BASE}/api/:botKey/rate-limits/config`, requireAuth, apiLimiter, async (req, res) => {

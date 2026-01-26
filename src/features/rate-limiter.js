@@ -8,6 +8,16 @@ const { dbRun, dbGet, dbAll } = require("../utils/db-helpers");
  */
 
 // -------------------------
+// IN-MEMORY CACHE (Safety & Performance)
+// -------------------------
+// guildId:channelId:userId -> { count, expiresAt }
+const recentActivityCache = new Map();
+// guildId:channelId -> userId
+const lastAuthorCache = new Map();
+// guildId:channelId -> { userId, count, lastTimestamp }
+const consecutiveRunCache = new Map();
+
+// -------------------------
 // DATABASE FUNCTIONS
 // -------------------------
 
@@ -194,25 +204,51 @@ async function getRateLimitConfig(db, guildId, channelId) {
 /**
  * Set rate limit configuration for a channel
  */
+
 async function setRateLimitConfig(db, guildId, channelId, config) {
+  // Normalize frontend keys to DB keys
+  if (config.time_window !== undefined && config.time_window_minutes === undefined) config.time_window_minutes = config.time_window;
+  if (config.timeout_per_strike !== undefined && config.timeout_duration_per_strike === undefined) config.timeout_duration_per_strike = config.timeout_per_strike;
+
   const existing = await getRateLimitConfig(db, guildId, channelId);
 
-  const enabled = config.enabled !== undefined ? (config.enabled ? 1 : 0) : 1;
-  const defaultLimit = config.default_limit || 10;
-  const timeWindowMinutes = config.time_window_minutes || 60;
-  const roleLimits = JSON.stringify(config.role_limits || []);
-  const warningMessage = config.warning_message || "You have exceeded the message limit for this channel.";
-  const action = config.action || "delete";
+  // Helper to fallback to existing value or default
+  const val = (key, def) => {
+    if (config[key] !== undefined) return config[key];
+    if (existing && existing[key] !== undefined) return existing[key];
+    return def;
+  };
   
-  const consecutiveEnabled = config.consecutive_enabled !== undefined ? (config.consecutive_enabled ? 1 : 0) : 0;
-  const consecutiveLimit = config.consecutive_limit || 5;
-  const consecutiveRoleLimits = JSON.stringify(config.consecutive_role_limits || []);
-  const strikeResetDays = config.strike_reset_days || 7;
-  const strikeRoleMultipliers = JSON.stringify(config.strike_role_multipliers || []);
-  const timeoutMappings = JSON.stringify(config.timeout_mappings || []);
-  const timeoutsEnabled = config.timeouts_enabled !== undefined ? (config.timeouts_enabled ? 1 : 0) : 1;
-  const timeoutDurationPerStrike = config.timeout_duration_per_strike || 1;
-  const ignoreAdmins = config.ignore_admins !== undefined ? (config.ignore_admins ? 1 : 0) : 1;
+  // Helper for boolean fields (handling DB 0/1 vs JS boolean)
+  const boolVal = (key, existingKey, defVal) => {
+    if (config[key] !== undefined) return config[key] ? 1 : 0;
+    if (existing && existing[existingKey] !== undefined) return existing[existingKey] ? 1 : 0;
+    return defVal ? 1 : 0;
+  };
+
+  // Helper for JSON fields
+  const jsonVal = (key, existingKey, defVal) => {
+    if (config[key] !== undefined) return JSON.stringify(config[key]);
+    if (existing && existing[existingKey] !== undefined) return JSON.stringify(existing[existingKey]);
+    return JSON.stringify(defVal);
+  };
+
+  const enabled = boolVal('enabled', 'enabled', true);
+  const defaultLimit = val('default_limit', 10);
+  const timeWindowMinutes = val('time_window_minutes', 60);
+  const roleLimits = jsonVal('role_limits', 'role_limits', []);
+  const warningMessage = val('warning_message', "You have exceeded the message limit for this channel.");
+  const action = val('action', "delete");
+  
+  const consecutiveEnabled = boolVal('consecutive_enabled', 'consecutive_enabled', false);
+  const consecutiveLimit = val('consecutive_limit', 5);
+  const consecutiveRoleLimits = jsonVal('consecutive_role_limits', 'consecutive_role_limits', []);
+  const strikeResetDays = val('strike_reset_days', 7);
+  const strikeRoleMultipliers = jsonVal('strike_role_multipliers', 'strike_role_multipliers', []);
+  const timeoutMappings = jsonVal('timeout_mappings', 'timeout_mappings', []);
+  const timeoutsEnabled = boolVal('timeouts_enabled', 'timeouts_enabled', true);
+  const timeoutDurationPerStrike = val('timeout_duration_per_strike', 1);
+  const ignoreAdmins = boolVal('ignore_admins', 'ignore_admins', true);
 
   if (existing) {
     // Update existing
@@ -303,7 +339,23 @@ async function checkRateLimit(db, guildId, channelId, userId, userRoles = []) {
     }
   }
 
-  // Get user's message count in the time window
+  // 1. FAST PATH: Check in-memory cache for burst protection
+  const cacheKey = `${guildId}:${channelId}:${userId}`;
+  const now = Date.now();
+  const cached = recentActivityCache.get(cacheKey);
+  
+  if (cached && cached.expiresAt > now && cached.count >= userLimit) {
+    return {
+      allowed: false,
+      limit: userLimit,
+      current: cached.count,
+      remaining: 0,
+      config,
+      fromCache: true
+    };
+  }
+
+  // 2. SLOW PATH: Query database for accurate window count
   const windowStart = Math.floor(Date.now() / 1000) - config.time_window_minutes * 60;
 
   const result = await dbGet(
@@ -316,7 +368,16 @@ async function checkRateLimit(db, guildId, channelId, userId, userRoles = []) {
     [guildId, channelId, userId, windowStart]
   );
 
-  const currentCount = result?.count || 0;
+  let currentCount = result?.count || 0;
+  
+  // Sync cache with DB if DB has higher count
+  if (cached && cached.expiresAt > now) {
+    if (currentCount > cached.count) cached.count = currentCount;
+    else currentCount = cached.count; // Use cache if it's ahead (uncommitted messages)
+  } else {
+    // Populate/Refresh cache
+    recentActivityCache.set(cacheKey, { count: currentCount, expiresAt: now + 5000 });
+  }
 
   // Check if limit exceeded
   const allowed = currentCount < userLimit;
@@ -336,6 +397,20 @@ async function checkRateLimit(db, guildId, channelId, userId, userRoles = []) {
 async function trackMessage(db, guildId, channelId, userId, messageId) {
   const timestamp = Math.floor(Date.now() / 1000);
 
+  // Update in-memory cache for immediate race-condition protection
+  const cacheKey = `${guildId}:${channelId}:${userId}`;
+  const now = Date.now();
+  const cached = recentActivityCache.get(cacheKey);
+  
+  if (cached && cached.expiresAt > now) {
+    cached.count++;
+  } else {
+    // Initial cache entry (we don't know the full count yet, so we'll 
+    // rely on the first DB hit to populate it if needed, or just let 
+    // it accumulate for the first window)
+    recentActivityCache.set(cacheKey, { count: 1, expiresAt: now + 5000 }); // Short 5s protective burst window
+  }
+
   await dbRun(
     db,
     `
@@ -350,13 +425,16 @@ async function trackMessage(db, guildId, channelId, userId, messageId) {
  * Record a rate limit violation
  */
 async function recordViolation(db, guildId, channelId, userId) {
+  // Fix: The table has UNIQUE(guild_id, user_id), so we must lookup by guild+user only.
+  // Including channel_id in the WHERE causes duplicate INSERT attempts if the user
+  // violated in a different channel previously.
   const existing = await dbGet(
     db,
     `
     SELECT * FROM rate_limit_violations 
-    WHERE guild_id = ? AND channel_id = ? AND user_id = ?
+    WHERE guild_id = ? AND user_id = ?
   `,
-    [guildId, channelId, userId]
+    [guildId, userId]
   );
 
   if (existing) {
@@ -366,10 +444,11 @@ async function recordViolation(db, guildId, channelId, userId) {
       UPDATE rate_limit_violations
       SET violation_count = violation_count + 1,
           total_violations = total_violations + 1,
-          last_violation = strftime('%s', 'now')
-      WHERE guild_id = ? AND channel_id = ? AND user_id = ?
+          last_violation = strftime('%s', 'now'),
+          channel_id = ?
+      WHERE guild_id = ? AND user_id = ?
     `,
-      [guildId, channelId, userId]
+      [channelId, guildId, userId]
     );
   } else {
     await dbRun(
@@ -458,6 +537,20 @@ async function getRateLimitStats(db, guildId, channelId = null) {
  * Track a message in consecutive sequence
  */
 async function trackConsecutiveMessage(db, guildId, channelId, userId, messageId, timestamp) {
+  const cacheKey = `${guildId}:${channelId}`;
+  
+  // Update last author cache
+  lastAuthorCache.set(cacheKey, userId);
+
+  // Update consecutive run cache
+  const run = consecutiveRunCache.get(cacheKey);
+  if (run && run.userId === userId) {
+    run.count++;
+    run.lastTimestamp = timestamp;
+  } else {
+    consecutiveRunCache.set(cacheKey, { userId, count: 1, lastTimestamp: timestamp });
+  }
+
   await dbRun(
     db,
     `
@@ -472,6 +565,11 @@ async function trackConsecutiveMessage(db, guildId, channelId, userId, messageId
  * Get the last message author in a channel
  */
 async function getLastMessageAuthor(db, guildId, channelId) {
+  const cacheKey = `${guildId}:${channelId}`;
+  if (lastAuthorCache.has(cacheKey)) {
+    return lastAuthorCache.get(cacheKey);
+  }
+
   const result = await dbGet(
     db,
     `
@@ -483,14 +581,28 @@ async function getLastMessageAuthor(db, guildId, channelId) {
     [guildId, channelId]
   );
 
-  return result?.user_id || null;
+  const userId = result?.user_id || null;
+  if (userId) lastAuthorCache.set(cacheKey, userId);
+  return userId;
 }
 
 /**
  * Get user's current consecutive message count
  */
 async function getConsecutiveCount(db, guildId, channelId, userId) {
-  // Get recent messages (reverse chronological)
+  const cacheKey = `${guildId}:${channelId}`;
+  const run = consecutiveRunCache.get(cacheKey);
+  const now = Math.floor(Date.now() / 1000);
+
+  // Check cache first
+  if (run && run.userId === userId) {
+    const maxGapSeconds = 90;
+    if (now - run.lastTimestamp <= maxGapSeconds) {
+      return run.count;
+    }
+  }
+
+  // Fallback to DB if cache missing or author changed (should be handled by reset logic but safety first)
   const messages = await dbAll(
     db,
     `
@@ -502,9 +614,8 @@ async function getConsecutiveCount(db, guildId, channelId, userId) {
     [guildId, channelId]
   );
 
-  const maxGapSeconds = 90; // break chain if gap between messages exceeds 90s
-  const maxChainAgeSeconds = 180; // break chain if any message is older than 3 minutes from now
-  const now = Math.floor(Date.now() / 1000);
+  const maxGapSeconds = 90;
+  const maxChainAgeSeconds = 180;
 
   let count = 0;
   let prevTimestamp = null;
@@ -516,8 +627,13 @@ async function getConsecutiveCount(db, guildId, channelId, userId) {
     if (msg.user_id === userId) {
       count++;
     } else {
-      break; // Different user, stop counting
+      break;
     }
+  }
+
+  // Populate cache
+  if (count > 0) {
+    consecutiveRunCache.set(cacheKey, { userId, count, lastTimestamp: messages[0].timestamp });
   }
 
   return count;
@@ -527,7 +643,15 @@ async function getConsecutiveCount(db, guildId, channelId, userId) {
  * Reset consecutive count for a user (when interrupted)
  */
 async function resetConsecutiveCount(db, guildId, channelId, userId) {
-  // We don't actually delete, just record new messages naturally resets via getConsecutiveCount logic
+  const cacheKey = `${guildId}:${channelId}`;
+  
+  // Clear caches for this channel
+  if (lastAuthorCache.get(cacheKey) === userId) {
+    lastAuthorCache.delete(cacheKey);
+  }
+  if (consecutiveRunCache.get(cacheKey)?.userId === userId) {
+    consecutiveRunCache.delete(cacheKey);
+  }
   // But we can clean up old records here
   const cutoff = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
   await dbRun(
