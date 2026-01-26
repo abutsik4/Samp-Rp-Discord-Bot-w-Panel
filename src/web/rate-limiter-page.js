@@ -14,7 +14,7 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
   <style>
     ${generateSidebarStyles()}
     
-    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-bottom: 24px; align-items: start; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-bottom: 24px; align-items: start; width: 100%; }
     @media(max-width: 1300px) { .grid { grid-template-columns: 1fr; } }
     
     .toggle-container { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; min-height: 48px; }
@@ -30,7 +30,8 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
     .alert-success { background: rgba(34,197,94,.1); color: #22c55e; border: 1px solid rgba(34,197,94,.2); }
     .alert-warning { background: rgba(251,191,36,.1); color: #f59e0b; border: 1px solid rgba(251,191,36,.2); }
     
-    .role-limit-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; background: var(--bg-tertiary); border-radius: 8px; margin-bottom: 8px; font-size: 13px; }
+    .role-limit-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; font-size: 13px; gap: 10px; overflow: hidden; width: 100%; }
+    .role-limit-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
     .role-limit-input { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
     
     .subsection-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; color: var(--text); }
@@ -46,11 +47,10 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
     .strikes-table th { background: rgba(167, 139, 250, 0.05); color: var(--accent-blue); font-weight: 600; }
     .strikes-table tr:hover { background: rgba(255, 255, 255, 0.02); }
     .user-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; background: rgba(34, 211, 238, 0.1); border-radius: 12px; color: var(--accent-cyan); font-weight: 500; font-size: 12px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .role-limit-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; font-size: 13px; gap: 10px; overflow: hidden; }
-    .role-limit-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+
     .table-container { width: 100%; overflow-x: auto; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
-    .content-card { max-width: 100%; overflow: hidden; }
-    .page-content-wrapper { max-width: 1400px; margin: 0 left; }
+    .content-card { max-width: 100%; overflow: hidden; width: 100%; min-width: 0; }
+    .page-content-wrapper { max-width: 1400px; margin: 0; width: 100%; }
   </style>
 </head>
 <body>
@@ -333,8 +333,6 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
            document.getElementById('statsContainer').style.display = 'grid';
         } else {
            document.getElementById('statsContainer').style.display = 'none';
-        }
-
         }
 
         // Load Strikes
