@@ -41,11 +41,14 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
     .stat-value { font-size: 24px; font-weight: 700; color: var(--accent-blue); }
     .stat-label { font-size: 11px; color: var(--text-muted); margin-top: 4px; text-transform: uppercase; }
 
-    .strikes-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    .strikes-table { width: 100%; border-collapse: collapse; margin-top: 10px; table-layout: auto; }
     .strikes-table th, .strikes-table td { padding: 10px; text-align: left; border-bottom: 1px solid var(--border); font-size: 13px; }
     .strikes-table th { background: rgba(167, 139, 250, 0.05); color: var(--accent-blue); font-weight: 600; }
     .strikes-table tr:hover { background: rgba(255, 255, 255, 0.02); }
-    .user-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; background: rgba(34, 211, 238, 0.1); border-radius: 12px; color: var(--accent-cyan); font-weight: 500; font-size: 12px; }
+    .user-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; background: rgba(34, 211, 238, 0.1); border-radius: 12px; color: var(--accent-cyan); font-weight: 500; font-size: 12px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .role-limit-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: calc(100% - 40px); }
+    .table-container { width: 100%; overflow-x: auto; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
+    .content-card { max-width: 100%; overflow: hidden; }
   </style>
 </head>
 <body>
@@ -332,7 +335,10 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
         }
 
         // Load Strikes
-        loadStrikes(config.guild_id);
+        await loadStrikes(config.guild_id);
+        
+        // Refresh Scroll Engine
+        if (window.requestLocoUpdate) window.requestLocoUpdate();
 
       } catch (err) { 
         console.error(err);
@@ -358,19 +364,20 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
         html += '<tbody>';
         
         users.forEach(u => {
-          const displayUser = u.username ? `<span class="user-pill">${u.username}</span>` : `<code style="font-size:11px">${u.user_id}</code>`;
+          const displayUser = u.username ? \`<span class="user-pill">\${u.username}</span>\` : \`<code style="font-size:11px">\${u.user_id}</code>\`;
           const lastDate = u.last_violation_timestamp ? new Date(u.last_violation_timestamp * 1000).toLocaleString() : 'Never';
           
-          html += `<tr>
-            <td>${displayUser}</td>
-            <td style="font-weight:700; color:var(--accent-rose)">${u.strikes}</td>
-            <td>${lastDate}</td>
-            <td><button class="btn btn-danger btn-sm" onclick="clearStrikes('${u.user_id}', '${guildId}')">Clear</button></td>
-          </tr>`;
+          html += \`<tr>
+            <td>\${displayUser}</td>
+            <td style="font-weight:700; color:var(--accent-rose)">\${u.strikes}</td>
+            <td>\${lastDate}</td>
+            <td><button class="btn btn-danger btn-sm" onclick="clearStrikes('\${u.user_id}', '\${guildId}')">Clear</button></td>
+          </tr>\`;
         });
         
         html += '</tbody></table></div>';
         container.innerHTML = html;
+        if (window.requestLocoUpdate) window.requestLocoUpdate();
       } catch (err) {
         console.error(err);
         container.innerHTML = '<div class="alert alert-warning">Failed to load strikes list</div>';
@@ -409,6 +416,7 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
         div.innerHTML = '<span><b>' + rName + '</b>: ' + l.limit + '</span> <button class="btn btn-danger btn-sm" onclick="removeRoleLimit(\\'' + arrayName + '\\', ' + idx + ')">×</button>';
         c.appendChild(div);
       });
+      if (window.requestLocoUpdate) window.requestLocoUpdate();
     }
 
     // Global exposed for onclick
