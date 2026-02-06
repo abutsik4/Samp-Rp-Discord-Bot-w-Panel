@@ -1,4 +1,4 @@
-// Unified Rate & Consecutive Limiter Management Page
+// Unified Spam Prevention Management Page
 
 const { generateSidebarHTML, generateSidebarStyles, generateSidebarScripts } = require('./shared-template');
 
@@ -8,8 +8,8 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>JepsenCloud Panel — Message Limits</title>
-  <link rel="stylesheet" href="/shared.css" />
+  <title>JepsenCloud Panel — Spam Prevention</title>
+  <link rel="stylesheet" href="/shared.css?v=${Date.now()}" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.css">
   <style>
     ${generateSidebarStyles()}
@@ -17,13 +17,74 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-bottom: 24px; align-items: start; width: 100%; }
     @media(max-width: 1300px) { .grid { grid-template-columns: 1fr; } }
     
-    .toggle-container { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; min-height: 48px; }
-    .toggle-switch { position: relative; display: inline-block; width: 50px; height: 26px; flex-shrink: 0; }
+    .toggle-container { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; min-height: 48px; gap: 14px; }
+    .toggle-switch { position: relative; display: inline-block; width: 64px; height: 28px; flex-shrink: 0; }
     .toggle-switch input { opacity: 0; width: 0; height: 0; }
-    .toggle-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: var(--border); border-radius: 26px; transition: .4s; }
-    .toggle-slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 4px; bottom: 4px; background: #fff; border-radius: 50%; transition: .4s; }
-    .toggle-switch input:checked + .toggle-slider { background: var(--accent-blue); }
-    .toggle-switch input:checked + .toggle-slider:before { transform: translateX(24px); }
+
+    /* Make switch state visually obvious (track + ON/OFF label) */
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 999px;
+      transition: background .2s ease, border-color .2s ease;
+    }
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 20px;
+      width: 20px;
+      left: 4px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: #ffffff;
+      border-radius: 999px;
+      transition: transform .2s ease;
+      box-shadow: 0 2px 8px rgba(0,0,0,.25);
+    }
+    .toggle-slider:after {
+      content: "OFF";
+      position: absolute;
+      right: 9px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .06em;
+      color: rgba(255, 255, 255, 0.70);
+      transition: color .2s ease;
+      pointer-events: none;
+    }
+    .toggle-switch input:checked + .toggle-slider {
+      background: rgba(59, 130, 246, 0.75);
+      border-color: rgba(59, 130, 246, 0.9);
+    }
+    .toggle-switch input:checked + .toggle-slider:before {
+      transform: translate(36px, -50%);
+    }
+    .toggle-switch input:checked + .toggle-slider:after {
+      content: "ON";
+      left: 10px;
+      right: auto;
+      color: rgba(255, 255, 255, 0.92);
+    }
+
+    .toggle-switch input:focus + .toggle-slider {
+      outline: 2px solid rgba(59, 130, 246, 0.55);
+      outline-offset: 2px;
+    }
+
+    .toggle-state {
+      margin-top: 6px;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .02em;
+    }
+    .toggle-state.on { color: rgba(34, 197, 94, .95); }
+    .toggle-state.off { color: rgba(248, 113, 113, .95); }
+    .toggle-state span { color: var(--text-muted); font-weight: 700; margin-right: 6px; }
     
     .alert { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
     .alert-info { background: rgba(59,130,246,.1); color: #3b82f6; border: 1px solid rgba(59,130,246,.2); }
@@ -49,7 +110,7 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
     .user-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; background: rgba(34, 211, 238, 0.1); border-radius: 12px; color: var(--accent-cyan); font-weight: 500; font-size: 12px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     .table-container { width: 100%; overflow-x: auto; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
-    .content-card { max-width: 100%; overflow: hidden; width: 100%; min-width: 0; }
+    .content-card { max-width: 100%; overflow: hidden; width: 100%; min-width: 0; height: 100%; }
     .page-content-wrapper { max-width: 1400px; margin: 0; width: 100%; }
   </style>
 </head>
@@ -57,7 +118,7 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
   <div class="dashboard-wrapper">
     ${generateSidebarHTML({
       title: bot.name,
-      subtitle: 'Message Limits',
+      subtitle: 'Spam Prevention',
       icon: '🛡️',
       botKey: bot.key,
       PANEL_BASE,
@@ -72,7 +133,7 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
           <div class="page-content-wrapper">
           <div class="section-header" data-scroll data-scroll-class="is-inview">
             <h1 class="section-title"><span>🛡️</span> Spam Prevention</h1>
-            <p class="section-subtitle">Manage rate limits for this channel</p>
+            <p class="section-subtitle">Manage message frequency and user strikes</p>
           </div>
 
           <div id="alertContainer"></div>
@@ -100,14 +161,15 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
           </div>
 
           <div class="grid" data-scroll data-scroll-class="is-inview">
-            <!-- Rate Limits Column -->
+            <!-- Frequency Limits Column -->
             <div class="content-card">
-              <div class="subsection-title">🚦 Rate Limits</div>
+              <div class="subsection-title">🚦 Frequency Limits</div>
               
               <div class="toggle-container">
                 <div>
-                  <div style="font-weight:500">Enable Rate Limiting</div>
-                  <small style="color:var(--text-muted)">Limit messages per X minutes</small>
+                  <div style="font-weight:500">Enable Turn-Taking Limit</div>
+                  <small style="color:var(--text-muted)">Limit consecutive messages; resets when someone else speaks</small>
+                  <div class="toggle-state off" id="rateEnabledState"><span>Currently:</span>OFF</div>
                 </div>
                 <label class="toggle-switch">
                   <input type="checkbox" id="rateEnabled">
@@ -115,22 +177,17 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
                 </label>
               </div>
 
-              <div class="form-group">
-                <label>Max Messages</label>
+              <div class="form-group" style="margin-bottom: 16px;">
+                <label>Max Consecutive Messages</label>
                 <input type="number" id="rateLimit" min="1" max="1000" value="10">
               </div>
 
-              <div class="form-group">
-                <label>Time Window (minutes)</label>
-                <input type="number" id="rateTimeWindow" min="1" max="1440" value="60">
-              </div>
-
-              <div class="form-group">
+              <div class="form-group" style="margin-bottom: 16px;">
                 <label>Warning Message</label>
                 <textarea id="warningMessage" rows="2">You have exceeded the message limit for this channel.</textarea>
               </div>
               
-              <div class="form-group">
+              <div class="form-group" style="margin-bottom: 16px;">
                 <label>Action</label>
                 <select id="actionSelect">
                   <option value="delete">Delete Message</option>
@@ -139,40 +196,48 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
               </div>
 
               <div class="divider"></div>
-              <div class="subsection-title">👥 Role Limits</div>
+              <div class="subsection-title">👥 Role Overrides</div>
+              <p style="color:var(--text-muted); font-size: 13px; margin-bottom: 10px;">Users with these roles can send more consecutive messages before being limited.</p>
               <div id="rateRoleLimitsList"></div>
               <div class="role-limit-input">
                 <select id="rateRoleSelector" style="flex:2"><option value="">Select role...</option></select>
                 <input type="number" id="newRateRoleLimit" placeholder="Limit" value="20" style="flex:1">
-                <button class="btn btn-sm" id="addRateRoleBtn">Add</button>
+                <button class="btn btn-sm" id="addRateRoleBtn" style="padding: 8px 16px;">Add</button>
               </div>
             </div>
-          </div>
 
-          <!-- Punishments Column -->
-          <div class="content-card">
-            <div class="subsection-title">⚖️ Punishments</div>
+            <!-- Punishments Column -->
+            <div class="content-card">
+              <div class="subsection-title">⚖️ Punishments (Strikes)</div>
 
               <div class="toggle-container">
-                <span style="font-weight:400">Apply Timeouts</span>
+                <div>
+                  <div style="font-weight:500">Apply Timeouts</div>
+                  <small style="color:var(--text-muted)">Mute users automatically after strikes</small>
+                  <div class="toggle-state on" id="timeoutsEnabledState"><span>Currently:</span>ON</div>
+                </div>
                 <label class="toggle-switch">
                   <input type="checkbox" id="timeoutsEnabled" checked>
                   <span class="toggle-slider"></span>
                 </label>
               </div>
 
-              <div class="form-group">
+              <div class="form-group" style="margin-bottom: 16px;">
                 <label>Timeout per Strike (minutes)</label>
                 <input type="number" id="timeoutPerStrike" min="1" max="60" value="1">
               </div>
 
-              <div class="form-group">
+              <div class="form-group" style="margin-bottom: 16px;">
                 <label>Strike Reset (days)</label>
                 <input type="number" id="strikeResetDays" min="1" max="365" value="7">
               </div>
               
               <div class="toggle-container">
-                <span style="font-weight:400">Ignore Admins</span>
+                <div>
+                  <div style="font-weight:500">Ignore Admins</div>
+                  <small style="color:var(--text-muted)">Safety: never limit administrators</small>
+                  <div class="toggle-state on" id="ignoreAdminsState"><span>Currently:</span>ON</div>
+                </div>
                 <label class="toggle-switch">
                   <input type="checkbox" id="ignoreAdmins" checked>
                   <span class="toggle-slider"></span>
@@ -181,34 +246,36 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
 
               <div class="divider"></div>
               <div class="alert alert-info" style="margin-bottom:0">
-                Strikes are recorded when a user exceeds the rate limit. Timeouts are automatically applied if enabled.
+                Strikes are recorded when a user exceeds the frequency limit. If timeouts are enabled, users will be temporarily restricted from typing.
               </div>
             </div>
           </div>
 
-          <!-- Strikes Viewer Section -->
           <div class="content-card" data-scroll data-scroll-class="is-inview">
-            <div class="subsection-title">⚠️ User Strikes</div>
-            <p style="color:var(--text-muted); font-size: 13px; margin-bottom: 16px;">Users who have accumulated strikes across the entire guild. Strikes result in progressive timeouts.</p>
+            <button class="btn btn-primary" id="saveBtn" style="width:100%; height: 50px; font-size: 16px; font-weight: 700;">💾 Save Configuration</button>
+          </div>
+
+          <!-- Strikes Viewer Section -->
+          <div class="content-card" data-scroll data-scroll-class="is-inview" style="margin-top: 24px;">
+            <div class="subsection-title">⚠️ Active User Strikes</div>
+            <p style="color:var(--text-muted); font-size: 13px; margin-bottom: 16px;">List of users who have recently violated spam rules across your server.</p>
             <div id="strikesContainer">
               <div style="color:var(--text-muted); font-style:italic; padding: 20px; text-align: center;">Select a channel to view strikes</div>
             </div>
             <button class="btn btn-secondary btn-sm" id="refreshStrikesBtn" style="margin-top: 16px; width: 100%;">🔄 Refresh Strikes List</button>
           </div>
 
-          <div class="content-card" data-scroll data-scroll-class="is-inview">
-            <button class="btn btn-primary" id="saveBtn" style="width:100%; height: 50px; font-size: 16px;">💾 Save All Changes</button>
-          </div>
-
           <div class="content-card" data-scroll data-scroll-class="is-inview" style="margin-top:20px">
              <div class="card-title">ℹ️ Information</div>
              <p style="color:var(--text-muted); font-size: 14px; line-height: 1.6;">
-               <strong>Rate Limits</strong> control how many messages a user can send within a specific time window (e.g. 10 messages per hour).
-               <br>
-                If <strong>Timeouts</strong> are enabled, violations will accumulate "strikes" which result in temporary timeouts.
-              </p>
+               <strong>How it works:</strong> The Spam Prevention system monitors how many <strong>consecutive</strong> messages a user sends.
+               If a user exceeds the <strong>Max Consecutive Messages</strong>, their next message is deleted (or they are warned).
+               When someone else speaks, the counter resets.
+               <br><br>
+               <strong>Strikes:</strong> Each violation adds a strike to the user. After several strikes, the user may be automatically timed out if enabled.
+             </p>
            </div>
-           </div>
+          </div>
         </section>
       </div>
     </main>
@@ -221,8 +288,6 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
     const apiBase = '${PANEL_BASE}';
     let currentChannelId = null;
     let rolesCache = [];
-
-    // State for role limits (arrays of objects)
     let rateRoleLimits = [];
 
     function showAlert(msg, type) {
@@ -231,7 +296,7 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
       d.className = 'alert alert-' + type;
       d.textContent = msg;
       c.appendChild(d);
-      setTimeout(() => d.remove(), 3000);
+      setTimeout(() => d.remove(), 4000);
     }
 
     async function loadChannels() {
@@ -256,9 +321,9 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
         const data = await res.json();
         rolesCache = data.roles || [];
         
-        // Populate both selectors
         const populate = (selId) => {
           const s = document.getElementById(selId);
+          if (!s) return;
           s.innerHTML = '<option value="">Select role...</option>';
           rolesCache.forEach(r => {
              const opt = document.createElement('option');
@@ -268,6 +333,9 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
           });
         };
         populate('rateRoleSelector');
+
+        // Re-render overrides so role IDs resolve to names once roles are loaded.
+        try { renderRoleLimits('rateRoleLimitsList', rateRoleLimits, 'rateRoleLimits'); } catch (_) {}
       } catch(e) { console.error(e); }
     }
 
@@ -280,10 +348,10 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
         
         if (config.guild_id) loadRoles(config.guild_id);
 
-        // Rate Limits
         document.getElementById('rateEnabled').checked = !!config.enabled;
+        updateToggleState('rateEnabled', 'rateEnabledState');
         document.getElementById('rateLimit').value = config.default_limit || 10;
-        document.getElementById('rateTimeWindow').value = config.time_window || config.time_window_minutes || 60;
+        // Turn-taking mode: time window is not used.
         document.getElementById('warningMessage').value = config.warning_message || '';
         document.getElementById('actionSelect').value = config.action || 'delete';
         
@@ -291,27 +359,36 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
         renderRoleLimits('rateRoleLimitsList', rateRoleLimits, 'rateRoleLimits');
 
         document.getElementById('timeoutsEnabled').checked = config.timeouts_enabled !== false;
+        updateToggleState('timeoutsEnabled', 'timeoutsEnabledState');
         document.getElementById('timeoutPerStrike').value = config.timeout_duration_per_strike || config.timeout_per_strike || 1;
         document.getElementById('strikeResetDays').value = config.strike_reset_days || 7;
         document.getElementById('ignoreAdmins').checked = config.ignore_admins !== false;
+        updateToggleState('ignoreAdmins', 'ignoreAdminsState');
 
-        // Stats
         if(config.stats) {
            document.getElementById('statsContainer').style.display = 'grid';
+           document.getElementById('statTotal').textContent = config.stats.total || 0;
+           document.getElementById('statViolations').textContent = config.stats.violations || 0;
+           document.getElementById('statViolators').textContent = config.stats.unique_violators || 0;
         } else {
            document.getElementById('statsContainer').style.display = 'none';
         }
 
-        // Load Strikes
         await loadStrikes(config.guild_id);
-        
-        // Refresh Scroll Engine
-        if (window.requestLocoUpdate) window.requestLocoUpdate();
-
       } catch (err) { 
         console.error(err);
         showAlert('Failed to load config', 'warning'); 
       }
+    }
+
+    function updateToggleState(checkboxId, labelId) {
+      const cb = document.getElementById(checkboxId);
+      const label = document.getElementById(labelId);
+      if (!cb || !label) return;
+      const on = !!cb.checked;
+      label.classList.toggle('on', on);
+      label.classList.toggle('off', !on);
+      label.innerHTML = '<span>Currently:</span>' + (on ? 'ON' : 'OFF');
     }
 
     async function loadStrikes(guildId) {
@@ -327,25 +404,73 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
           return;
         }
 
-        let html = '<div class="table-container"><table class="strikes-table">';
-        html += '<thead><tr><th>User</th><th>Strikes</th><th>Last Violation</th><th>Actions</th></tr></thead>';
-        html += '<tbody>';
-        
-        users.forEach(u => {
-          const displayUser = u.username ? \`<span class="user-pill">\${u.username}</span>\` : \`<code style="font-size:11px">\${u.user_id}</code>\`;
-          const lastDate = u.last_violation_timestamp ? new Date(u.last_violation_timestamp * 1000).toLocaleString() : 'Never';
-          
-          html += \`<tr>
-            <td>\${displayUser}</td>
-            <td style="font-weight:700; color:var(--accent-rose)">\${u.strikes}</td>
-            <td>\${lastDate}</td>
-            <td><button class="btn btn-danger btn-sm" onclick="clearStrikes('\${u.user_id}', '\${guildId}')">Clear</button></td>
-          </tr>\`;
+        container.innerHTML = '';
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'table-container';
+
+        const table = document.createElement('table');
+        table.className = 'strikes-table';
+
+        const thead = document.createElement('thead');
+        const headRow = document.createElement('tr');
+        ['User', 'Strikes', 'Last Violation', 'Actions'].forEach(label => {
+          const th = document.createElement('th');
+          th.textContent = label;
+          headRow.appendChild(th);
         });
-        
-        html += '</tbody></table></div>';
-        container.innerHTML = html;
-        if (window.requestLocoUpdate) window.requestLocoUpdate();
+        thead.appendChild(headRow);
+
+        const tbody = document.createElement('tbody');
+
+        users.forEach(u => {
+          const tr = document.createElement('tr');
+
+          const tdUser = document.createElement('td');
+          if (u.username) {
+            const pill = document.createElement('span');
+            pill.className = 'user-pill';
+            pill.textContent = u.username;
+            tdUser.appendChild(pill);
+          } else {
+            const code = document.createElement('code');
+            code.style.fontSize = '11px';
+            code.textContent = u.user_id;
+            tdUser.appendChild(code);
+          }
+
+          const tdStrikes = document.createElement('td');
+          tdStrikes.style.fontWeight = '700';
+          tdStrikes.style.color = 'var(--accent-rose)';
+          const strikesVal = (u && (u.strikes ?? u.total_violations)) ?? 0;
+          tdStrikes.textContent = String(strikesVal);
+
+          const tdLast = document.createElement('td');
+          const lastTs = (u && (u.last_violation_timestamp ?? u.last_violation)) ?? null;
+          const lastDate = lastTs
+            ? new Date(Number(lastTs) * 1000).toLocaleString()
+            : 'Never';
+          tdLast.textContent = lastDate;
+
+          const tdActions = document.createElement('td');
+          const btn = document.createElement('button');
+          btn.className = 'btn btn-danger btn-sm';
+          btn.textContent = 'Clear';
+          btn.addEventListener('click', () => clearStrikes(u.user_id, guildId));
+          tdActions.appendChild(btn);
+
+          tr.appendChild(tdUser);
+          tr.appendChild(tdStrikes);
+          tr.appendChild(tdLast);
+          tr.appendChild(tdActions);
+
+          tbody.appendChild(tr);
+        });
+
+        table.appendChild(thead);
+        table.appendChild(tbody);
+        wrapper.appendChild(table);
+        container.appendChild(wrapper);
       } catch (err) {
         console.error(err);
         container.innerHTML = '<div class="alert alert-warning">Failed to load strikes list</div>';
@@ -355,11 +480,11 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
     window.clearStrikes = async function(userId, guildId) {
       if (!confirm('Are you sure you want to clear strikes for this user?')) return;
       try {
-        const res = await fetch(apiBase + '/api/' + botKey + '/rate-limits/strikes/clear', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId, guildId })
-        });
+        const res = await fetch(
+          apiBase + '/api/' + botKey + '/rate-limits/strikes/' + encodeURIComponent(userId) +
+          '?guildId=' + encodeURIComponent(guildId),
+          { method: 'DELETE' }
+        );
         if (res.ok) {
           showAlert('Strikes cleared', 'success');
           loadStrikes(guildId);
@@ -371,23 +496,39 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
 
     function renderRoleLimits(containerId, limits, arrayName) {
       const c = document.getElementById(containerId);
+      if (!c) return;
       c.innerHTML = '';
       if (!limits || !limits.length) {
-        c.innerHTML = '<div style="color:var(--text-muted);font-style:italic">No role limits</div>';
+        c.innerHTML = '<div style="color:var(--text-muted);font-style:italic">No overrides set</div>';
         return;
       }
       limits.forEach((l, idx) => {
-        const div = document.createElement('div');
-        div.className = 'role-limit-item';
-        // Try to find role name
-        const rName = rolesCache.find(r => r.id === l.role_id)?.name || l.role_id;
-        div.innerHTML = '<span><b>' + rName + '</b>: ' + l.limit + '</span> <button class="btn btn-danger btn-sm" onclick="removeRoleLimit(\\'' + arrayName + '\\', ' + idx + ')">×</button>';
-        c.appendChild(div);
+        const row = document.createElement('div');
+        row.className = 'role-limit-item';
+
+        const left = document.createElement('span');
+
+        const roleName =
+          (l && l.role_name) ||
+          (rolesCache.find(r => r.id === l.role_id)?.name) ||
+          l.role_id;
+
+        const b = document.createElement('b');
+        b.textContent = roleName;
+        left.appendChild(b);
+        left.appendChild(document.createTextNode(': ' + l.limit + ' consecutive'));
+
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-danger btn-sm';
+        btn.textContent = '×';
+        btn.addEventListener('click', () => removeRoleLimit(arrayName, idx));
+
+        row.appendChild(left);
+        row.appendChild(btn);
+        c.appendChild(row);
       });
-      if (window.requestLocoUpdate) window.requestLocoUpdate();
     }
 
-    // Global exposed for onclick
     window.removeRoleLimit = function(arrayName, idx) {
       if (arrayName === 'rateRoleLimits') {
         rateRoleLimits.splice(idx, 1);
@@ -395,18 +536,14 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
       }
     };
 
-    function addRoleLimit(type) {
-      const selId = 'rateRoleSelector';
-      const inpId = 'newRateRoleLimit';
-      const roleId = document.getElementById(selId).value;
-      const limit = parseInt(document.getElementById(inpId).value);
+    function addRoleLimit() {
+      const roleId = document.getElementById('rateRoleSelector').value;
+      const limit = parseInt(document.getElementById('newRateRoleLimit').value);
       
-      if (!roleId) return;
-      if (isNaN(limit) || limit < 1) return;
+      if (!roleId) return showAlert('Select a role', 'warning');
+      if (isNaN(limit) || limit < 1) return showAlert('Enter a valid limit', 'warning');
 
       const obj = { role_id: roleId, limit: limit, role_name: rolesCache.find(r => r.id === roleId)?.name || roleId };
-      
-      // Remove existing for this role if any
       rateRoleLimits = rateRoleLimits.filter(r => r.role_id !== roleId);
       rateRoleLimits.push(obj);
       renderRoleLimits('rateRoleLimitsList', rateRoleLimits, 'rateRoleLimits');
@@ -414,17 +551,27 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
 
     async function saveConfig() {
       if (!currentChannelId) return showAlert('Select a channel first', 'warning');
+
+      // UX guard: if a role is selected but not added, prompt to add it so it doesn't get lost.
+      const pendingRoleId = document.getElementById('rateRoleSelector')?.value;
+      const pendingLimitRaw = document.getElementById('newRateRoleLimit')?.value;
+      const pendingLimit = pendingLimitRaw != null ? parseInt(pendingLimitRaw) : NaN;
+      if (pendingRoleId && !Number.isNaN(pendingLimit) && pendingLimit > 0) {
+        const already = rateRoleLimits.some(r => r.role_id === pendingRoleId);
+        if (!already) {
+          const ok = confirm('You selected a role override but did not click Add. Add it now before saving?');
+          if (ok) {
+            try { addRoleLimit(); } catch (_) {}
+          }
+        }
+      }
       
       const payload = {
-        // Rate
         enabled: document.getElementById('rateEnabled').checked,
         default_limit: parseInt(document.getElementById('rateLimit').value),
-        time_window: parseInt(document.getElementById('rateTimeWindow').value),
         warning_message: document.getElementById('warningMessage').value,
         action: document.getElementById('actionSelect').value,
         role_limits: rateRoleLimits,
-
-        // Common/Punishments
         ignore_admins: document.getElementById('ignoreAdmins').checked,
         timeouts_enabled: document.getElementById('timeoutsEnabled').checked,
         timeout_per_strike: parseInt(document.getElementById('timeoutPerStrike').value),
@@ -437,27 +584,31 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        if (res.ok) showAlert('Configuration saved!', 'success');
-        else showAlert('Failed to save', 'warning');
+        if (res.ok) showAlert('Settings successfully saved! (Role overrides: ' + (rateRoleLimits?.length || 0) + ')', 'success');
+        else showAlert('Failed to save settings', 'warning');
       } catch (err) { showAlert('Error saving config', 'warning'); }
     }
 
     document.getElementById('channelSelect').addEventListener('change', (e) => {
       currentChannelId = e.target.value;
-      if (currentChannelId) {
-         loadConfig();
-      }
+      if (currentChannelId) loadConfig();
     });
 
-    document.getElementById('addRateRoleBtn').addEventListener('click', () => addRoleLimit('rate'));
+    document.getElementById('addRateRoleBtn').addEventListener('click', addRoleLimit);
     document.getElementById('saveBtn').addEventListener('click', saveConfig);
     document.getElementById('refreshStrikesBtn').addEventListener('click', () => {
-      // Find guildId from rolesCache or current config fetch (we'll re-load config to be safe)
-      loadConfig();
+      if(currentChannelId) loadConfig();
     });
+
+    document.getElementById('rateEnabled').addEventListener('change', () => updateToggleState('rateEnabled', 'rateEnabledState'));
+    document.getElementById('timeoutsEnabled').addEventListener('change', () => updateToggleState('timeoutsEnabled', 'timeoutsEnabledState'));
+    document.getElementById('ignoreAdmins').addEventListener('change', () => updateToggleState('ignoreAdmins', 'ignoreAdminsState'));
 
     document.addEventListener('DOMContentLoaded', async () => {
        await loadChannels();
+       updateToggleState('rateEnabled', 'rateEnabledState');
+       updateToggleState('timeoutsEnabled', 'timeoutsEnabledState');
+       updateToggleState('ignoreAdmins', 'ignoreAdminsState');
     });
   </script>
 </body>

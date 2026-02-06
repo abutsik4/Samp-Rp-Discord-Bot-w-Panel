@@ -40,6 +40,7 @@ const { generateAutoModPage } = require("./web/automod-page");
 const { generateHistoryPage } = require("./web/history-page");
 const { generateDebugReportsPage } = require("./web/debug-reports-page");
 const { generateSampServersPage } = require("./web/samp-servers-page");
+const { generateChannelsPage } = require("./web/channels-page");
 const { SAMPStatusTracker } = require("./features/samp-status");
 require("dotenv").config();
 
@@ -91,6 +92,7 @@ const {
   getRateLimitConfig,
   setRateLimitConfig,
   getRateLimitStats,
+  pruneConsecutiveState,
   // Strikes & Timeouts
   getViolationStrikes,
   getUserViolationData,
@@ -1190,6 +1192,11 @@ client.once("ready", async () => {
     }
   }, 60 * 60 * 1000); // Every hour
 
+  // Spam limits maintenance (turn-taking state is in-memory)
+  setInterval(() => {
+    try { pruneConsecutiveState(Date.now()); } catch (_) {}
+  }, 5 * 60 * 1000); // Every 5 minutes
+
   // ===== ROBUST COUNTING MAINTENANCE =====
   
   // Process error queue (every 5 minutes)
@@ -1494,7 +1501,7 @@ client.on("messageCreate", async (message) => {
     const userRoles = member?.roles?.cache?.map(r => r.id) || [];
 
     // ========================================
-    // SECURITY PIPELINE (Rate Limits, Consecutive, AutoMod)
+    // SECURITY PIPELINE (Spam Prevention, AutoMod)
     // ========================================
     const securityResult = await runSecurityPipeline(db, message, userRoles);
     if (securityResult.stop) return;
@@ -5961,30 +5968,16 @@ app.get(`${PANEL_BASE}/api/:botKey/ai-engagement/model-stats`, requireAuth, apiL
   }
 });
 
-// AI Engagement Clear History
-app.delete(`${PANEL_BASE}/api/:botKey/ai-engagement/history`, requireAuth, apiLimiter, async (req, res) => {
-  const bot = bots.find((b) => b.key === req.params.botKey);
-  if (!bot) return res.status(404).json({ error: "Bot not found" });
-
-  const guildId = String(req.body?.guildId || bot.guild_id || bot.client?.guilds?.cache?.first()?.id || "");
-  if (!guildId) return res.status(400).json({ error: "guildId required" });
-
-  try {
-    await dbRun(db, `DELETE FROM ai_engagement_history WHERE guild_id = ?`, [guildId]);
-    return res.json({ ok: true });
-  } catch (e) {
-    console.error("AI engagement clear history error:", e);
-    return res.status(500).json({ error: e?.message || "Failed to clear history" });
-  }
-});
-
-
-
 // Rate Limiter page
 app.get(`${PANEL_BASE}/bot/:botKey/rate-limits`, requireAuth, async (req, res) => {
   const bot = bots.find((b) => b.key === req.params.botKey);
   if (!bot) return res.status(404).send("Bot not found");
   res.send(generateRateLimiterPage(bot, PANEL_BASE));
+});
+
+// Redirect old consecutive limits route to unified spam prevention
+app.get(`${PANEL_BASE}/bot/:botKey/consecutive-limits`, requireAuth, (req, res) => {
+  res.redirect(`${PANEL_BASE}/bot/${req.params.botKey}/rate-limits`);
 });
 
 // Channel Whitelist page
@@ -6020,6 +6013,13 @@ app.get(`${PANEL_BASE}/bot/:botKey/samp-servers`, requireAuth, async (req, res) 
   const bot = bots.find((b) => b.key === req.params.botKey);
   if (!bot) return res.status(404).send("Bot not found");
   res.send(generateSampServersPage(bot, PANEL_BASE));
+});
+
+// Channel Manager page
+app.get(`${PANEL_BASE}/bot/:botKey/channels`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).send("Bot not found");
+  res.send(generateChannelsPage(bot, PANEL_BASE));
 });
 
 // Rate Limits API - Channel specific (Frontend compatibility)
@@ -6150,7 +6150,15 @@ app.get(`${PANEL_BASE}/api/:botKey/rate-limits/strikes`, requireAuth, apiLimiter
   if (!guildId) return res.status(400).json({ error: "guildId required" });
 
   try {
-    const users = await getUsersWithStrikes(db, guildId);
+    const rows = await getUsersWithStrikes(db, guildId);
+    const users = (rows || []).map((r) => ({
+      user_id: r.user_id,
+      strikes: r.total_violations,
+      total_violations: r.total_violations,
+      last_violation_timestamp: r.last_violation,
+      last_violation: r.last_violation,
+      will_reset_at: r.will_reset_at,
+    }));
     
     // Fetch usernames from Discord
     const guild = client.guilds.cache.get(guildId);
@@ -6169,6 +6177,26 @@ app.get(`${PANEL_BASE}/api/:botKey/rate-limits/strikes`, requireAuth, apiLimiter
   } catch (e) {
     console.error("Get strikes error:", e);
     return res.status(500).json({ error: e?.message || "Failed to get strikes" });
+  }
+});
+
+// Clear strikes for a user (compat endpoint)
+app.post(`${PANEL_BASE}/api/:botKey/rate-limits/strikes/clear`, requireAuth, apiLimiter, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  const guildId = String(req.body?.guildId || "");
+  const userId = String(req.body?.userId || "");
+
+  if (!guildId) return res.status(400).json({ error: "guildId required" });
+  if (!userId) return res.status(400).json({ error: "userId required" });
+
+  try {
+    await clearUserStrikes(db, guildId, userId);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("Clear strikes error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to clear strikes" });
   }
 });
 
@@ -6510,14 +6538,66 @@ app.get(`${PANEL_BASE}/api/bot/:botKey/channels`, requireAuth, async (req, res) 
       .map(ch => ({ 
         id: ch.id, 
         name: ch.name, 
-        type: ch.type // 0 = text, 2 = voice, 4 = category, etc.
+        type: ch.type, // 0 = text, 2 = voice, 4 = category, etc.
+        parentId: ch.parentId || null,
+        position: ch.position || 0
       }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => a.position - b.position);
     
     return res.json({ channels });
   } catch (e) {
     console.error("Get channels error:", e);
     return res.status(500).json({ error: e?.message || "Failed to get channels" });
+  }
+});
+
+// Bulk delete Discord channels
+app.post(`${PANEL_BASE}/api/bot/:botKey/channels/bulk-delete`, requireAuth, async (req, res) => {
+  const bot = bots.find((b) => b.key === req.params.botKey);
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  const { channelIds } = req.body;
+  if (!Array.isArray(channelIds) || channelIds.length === 0) {
+    return res.status(400).json({ error: "channelIds array is required" });
+  }
+
+  // Limit to prevent abuse
+  if (channelIds.length > 100) {
+    return res.status(400).json({ error: "Maximum 100 channels can be deleted at once" });
+  }
+
+  try {
+    const guild = client.guilds.cache.get(bot.guild_id);
+    if (!guild) return res.status(404).json({ error: "Guild not found" });
+
+    let deleted = 0;
+    let failed = 0;
+    const errors = [];
+
+    for (const channelId of channelIds) {
+      try {
+        const channel = await guild.channels.fetch(channelId);
+        if (channel) {
+          await channel.delete(`Bulk delete via panel by ${req.session?.user?.username || 'unknown'}`);
+          deleted++;
+        } else {
+          failed++;
+          errors.push({ id: channelId, error: "Channel not found" });
+        }
+      } catch (e) {
+        failed++;
+        errors.push({ id: channelId, error: e.message });
+      }
+      // Small delay to avoid rate limits
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    console.log(`Bulk delete channels: ${deleted} deleted, ${failed} failed by ${req.session?.user?.username}`);
+    
+    return res.json({ ok: true, deleted, failed, errors: errors.slice(0, 10) });
+  } catch (e) {
+    console.error("Bulk delete channels error:", e);
+    return res.status(500).json({ error: e?.message || "Failed to delete channels" });
   }
 });
 

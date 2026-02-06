@@ -4,14 +4,40 @@ const { dbRun, dbGet, dbAll } = require("../utils/db-helpers");
 
 /**
  * Message Rate Limiting Module
- * Enforces per-channel, per-user message limits with role-based overrides
+ * Spam Limits Module
+ * Turn-taking / consecutive limiting: other user speaks -> counter resets.
  */
 
 // -------------------------
-// IN-MEMORY CACHE (Safety & Performance)
+// IN-MEMORY STATE (Turn-taking)
 // -------------------------
-// guildId:channelId:userId -> { count, expiresAt }
-const recentActivityCache = new Map();
+// guildId:channelId -> { lastUserId: string, count: number, updatedAt: number }
+const consecutiveState = new Map();
+const CONSECUTIVE_STATE_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+function pruneConsecutiveState(nowMs = Date.now()) {
+  let removed = 0;
+  for (const [key, value] of consecutiveState.entries()) {
+    if (!value || typeof value.updatedAt !== "number" || nowMs - value.updatedAt > CONSECUTIVE_STATE_TTL_MS) {
+      consecutiveState.delete(key);
+      removed++;
+    }
+  }
+  return removed;
+}
+
+function noteConsecutiveMessage(guildId, channelId, userId, nowMs = Date.now()) {
+  const key = `${guildId}:${channelId}`;
+  const prev = consecutiveState.get(key);
+  let nextCount = 1;
+
+  if (prev && typeof prev.updatedAt === "number" && nowMs - prev.updatedAt <= CONSECUTIVE_STATE_TTL_MS) {
+    nextCount = prev.lastUserId === userId ? (prev.count + 1) : 1;
+  }
+
+  consecutiveState.set(key, { lastUserId: userId, count: nextCount, updatedAt: nowMs });
+  return { current: nextCount };
+}
 
 // -------------------------
 // DATABASE FUNCTIONS
@@ -44,27 +70,14 @@ async function ensureRateLimitTables(db) {
   `
   );
 
-  await dbRun(
-    db,
-    `
-    CREATE TABLE IF NOT EXISTS rate_limit_messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id TEXT NOT NULL,
-      channel_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      message_id TEXT NOT NULL,
-      timestamp INTEGER NOT NULL
-    )
-  `
-  );
+  // Legacy: frequency-based limiter stored per-message rows in rate_limit_messages.
+  // Turn-taking/consecutive limiting doesn't need this table; drop it to save DB space.
+  try { await dbRun(db, `DROP INDEX IF EXISTS idx_rate_messages`); } catch (_) {}
+  try { await dbRun(db, `DROP TABLE IF EXISTS rate_limit_messages`); } catch (_) {}
 
-  await dbRun(
-    db,
-    `
-    CREATE INDEX IF NOT EXISTS idx_rate_messages 
-    ON rate_limit_messages(guild_id, channel_id, user_id, timestamp)
-  `
-  );
+  // Legacy field: time_window_minutes is no longer used.
+  // Keep the column for backwards compatibility, but clear stored values.
+  try { await dbRun(db, `UPDATE rate_limit_config SET time_window_minutes = NULL WHERE time_window_minutes IS NOT NULL`); } catch (_) {}
 
   await dbRun(
     db,
@@ -172,7 +185,6 @@ async function getRateLimitConfig(db, guildId, channelId) {
 
 async function setRateLimitConfig(db, guildId, channelId, config) {
   // Normalize frontend keys to DB keys
-  if (config.time_window !== undefined && config.time_window_minutes === undefined) config.time_window_minutes = config.time_window;
   if (config.timeout_per_strike !== undefined && config.timeout_duration_per_strike === undefined) config.timeout_duration_per_strike = config.timeout_per_strike;
 
   const existing = await getRateLimitConfig(db, guildId, channelId);
@@ -200,7 +212,8 @@ async function setRateLimitConfig(db, guildId, channelId, config) {
 
   const enabled = boolVal('enabled', 'enabled', true);
   const defaultLimit = val('default_limit', 10);
-  const timeWindowMinutes = val('time_window_minutes', 60);
+  // Turn-taking: time window is unused; store NULL.
+  const timeWindowMinutes = null;
   const roleLimits = jsonVal('role_limits', 'role_limits', []);
   const warningMessage = val('warning_message', "You have exceeded the message limit for this channel.");
   const action = val('action', "delete");
@@ -239,7 +252,7 @@ async function setRateLimitConfig(db, guildId, channelId, config) {
       (guild_id, channel_id, enabled, default_limit, time_window_minutes, role_limits, warning_message, action,
        strike_reset_days, strike_role_multipliers, timeout_mappings,
        timeouts_enabled, timeout_duration_per_strike, ignore_admins)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
       [guildId, channelId, enabled, defaultLimit, timeWindowMinutes, roleLimits, warningMessage, action,
        strikeResetDays, strikeRoleMultipliers, timeoutMappings,
@@ -269,16 +282,17 @@ async function getAllRateLimitConfigs(db, guildId) {
 }
 
 // -------------------------
-// RATE LIMITING LOGIC
+// SPAM LIMITING LOGIC (Turn-taking / Consecutive)
 // -------------------------
 
 /**
- * Check if user can send a message (rate limit check)
+ * Check if user can send a message (turn-taking / consecutive limit check)
+ * Other user speaks -> counter resets.
  * Returns: { allowed: boolean, limit: number, current: number, config: object }
  */
-async function checkRateLimit(db, guildId, channelId, userId, userRoles = []) {
-  // Get configuration
-  const config = await getRateLimitConfig(db, guildId, channelId);
+async function checkRateLimit(db, guildId, channelId, userId, userRoles = [], configOverride = undefined) {
+  // Get configuration (optionally preloaded by caller)
+  const config = configOverride === undefined ? await getRateLimitConfig(db, guildId, channelId) : configOverride;
 
   // If no config or disabled, allow
   if (!config || !config.enabled) {
@@ -297,54 +311,17 @@ async function checkRateLimit(db, guildId, channelId, userId, userRoles = []) {
     }
   }
 
-  // 1. FAST PATH: Check in-memory cache for burst protection
-  const cacheKey = `${guildId}:${channelId}:${userId}`;
-  const now = Date.now();
-  const cached = recentActivityCache.get(cacheKey);
-  
-  if (cached && cached.expiresAt > now && cached.count >= userLimit) {
-    return {
-      allowed: false,
-      limit: userLimit,
-      current: cached.count,
-      remaining: 0,
-      config,
-      fromCache: true
-    };
-  }
-
-  // 2. SLOW PATH: Query database for accurate window count
-  const windowStart = Math.floor(Date.now() / 1000) - config.time_window_minutes * 60;
-
-  const result = await dbGet(
-    db,
-    `
-    SELECT COUNT(*) as count 
-    FROM rate_limit_messages 
-    WHERE guild_id = ? AND channel_id = ? AND user_id = ? AND timestamp > ?
-  `,
-    [guildId, channelId, userId, windowStart]
-  );
-
-  let currentCount = result?.count || 0;
-  
-  // Sync cache with DB if DB has higher count
-  if (cached && cached.expiresAt > now) {
-    if (currentCount > cached.count) cached.count = currentCount;
-    else currentCount = cached.count; // Use cache if it's ahead (uncommitted messages)
-  } else {
-    // Populate/Refresh cache
-    recentActivityCache.set(cacheKey, { count: currentCount, expiresAt: now + 5000 });
-  }
+  const nowMs = Date.now();
+  const { current } = noteConsecutiveMessage(guildId, channelId, userId, nowMs);
 
   // Check if limit exceeded
-  const allowed = currentCount < userLimit;
+  const allowed = current <= userLimit;
 
   return {
     allowed,
     limit: userLimit,
-    current: currentCount,
-    remaining: Math.max(0, userLimit - currentCount),
+    current,
+    remaining: Math.max(0, userLimit - current),
     config,
   };
 }
@@ -353,30 +330,14 @@ async function checkRateLimit(db, guildId, channelId, userId, userRoles = []) {
  * Track a message for rate limiting
  */
 async function trackMessage(db, guildId, channelId, userId, messageId) {
-  const timestamp = Math.floor(Date.now() / 1000);
-
-  // Update in-memory cache for immediate race-condition protection
-  const cacheKey = `${guildId}:${channelId}:${userId}`;
-  const now = Date.now();
-  const cached = recentActivityCache.get(cacheKey);
-  
-  if (cached && cached.expiresAt > now) {
-    cached.count++;
-  } else {
-    // Initial cache entry (we don't know the full count yet, so we'll 
-    // rely on the first DB hit to populate it if needed, or just let 
-    // it accumulate for the first window)
-    recentActivityCache.set(cacheKey, { count: 1, expiresAt: now + 5000 }); // Short 5s protective burst window
-  }
-
-  await dbRun(
-    db,
-    `
-    INSERT INTO rate_limit_messages (guild_id, channel_id, user_id, message_id, timestamp)
-    VALUES (?, ?, ?, ?, ?)
-  `,
-    [guildId, channelId, userId, messageId, timestamp]
-  );
+  // Legacy no-op.
+  // Previously: wrote into rate_limit_messages to enforce rolling-window frequency limits.
+  // Current behavior: turn-taking/consecutive limiting uses in-memory state only.
+  void db;
+  void guildId;
+  void channelId;
+  void userId;
+  void messageId;
 }
 
 /**
@@ -424,12 +385,10 @@ async function recordViolation(db, guildId, channelId, userId) {
  * Clean up old message records (older than max window)
  */
 async function cleanupOldRecords(db) {
-  // Keep records for maximum 24 hours
-  const cutoff = Math.floor(Date.now() / 1000) - 24 * 60 * 60;
-
-  const result = await dbRun(db, `DELETE FROM rate_limit_messages WHERE timestamp < ?`, [cutoff]);
-
-  return result?.changes || 0;
+  // Legacy no-op.
+  // Previously cleaned old rows from rate_limit_messages (frequency mode).
+  void db;
+  return 0;
 }
 
 /**
@@ -438,11 +397,16 @@ async function cleanupOldRecords(db) {
 async function getRateLimitStats(db, guildId, channelId = null) {
   const stats = {};
 
-  if (channelId) {
-    // Stats for specific channel
-    const total = await dbGet(db, `SELECT COUNT(*) as count FROM rate_limit_messages WHERE guild_id = ? AND channel_id = ?`, [guildId, channelId]);
+  // Turn-taking mode doesn't track total message counts.
+  // We report violations/unique violators based on rate_limit_violations.
+  stats.totalMessages = null;
 
-    const violations = await dbGet(db, `SELECT COUNT(*) as count, SUM(total_violations) as total FROM rate_limit_violations WHERE guild_id = ? AND channel_id = ?`, [guildId, channelId]);
+  if (channelId) {
+    const violations = await dbGet(
+      db,
+      `SELECT COUNT(*) as count, COALESCE(SUM(total_violations), 0) as total FROM rate_limit_violations WHERE guild_id = ? AND channel_id = ?`,
+      [guildId, channelId]
+    );
 
     const topViolators = await dbAll(
       db,
@@ -456,29 +420,30 @@ async function getRateLimitStats(db, guildId, channelId = null) {
       [guildId, channelId]
     );
 
-    stats.totalMessages = total?.count || 0;
     stats.uniqueViolators = violations?.count || 0;
     stats.totalViolations = violations?.total || 0;
     stats.topViolators = topViolators || [];
   } else {
-    // Guild-wide stats
-    const total = await dbGet(db, `SELECT COUNT(*) as count FROM rate_limit_messages WHERE guild_id = ?`, [guildId]);
-
-    const violations = await dbGet(db, `SELECT COUNT(*) as count, SUM(total_violations) as total FROM rate_limit_violations WHERE guild_id = ?`, [guildId]);
+    const violations = await dbGet(
+      db,
+      `SELECT COUNT(*) as count, COALESCE(SUM(total_violations), 0) as total FROM rate_limit_violations WHERE guild_id = ?`,
+      [guildId]
+    );
 
     const channels = await dbAll(
       db,
       `
-      SELECT channel_id, COUNT(*) as message_count
-      FROM rate_limit_messages
+      SELECT channel_id,
+             COUNT(*) as unique_violators,
+             COALESCE(SUM(total_violations), 0) as total_violations
+      FROM rate_limit_violations
       WHERE guild_id = ?
       GROUP BY channel_id
-      ORDER BY message_count DESC
+      ORDER BY total_violations DESC
     `,
       [guildId]
     );
 
-    stats.totalMessages = total?.count || 0;
     stats.uniqueViolators = violations?.count || 0;
     stats.totalViolations = violations?.total || 0;
     stats.channelBreakdown = channels || [];
@@ -539,9 +504,9 @@ async function getUserViolationData(db, guildId, userId) {
  */
 function calculateTimeoutDuration(strikes, config) {
   // Check if custom timeout mappings exist
-  if (config.timeout_mappings &&config.timeout_mappings.length > 0) {
+  if (config.timeout_mappings && config.timeout_mappings.length > 0) {
     // Find the highest matching threshold
-    let timeoutMinutes = strikes; // Default: 1 strike = 1 minute
+    let timeoutMinutes = strikes * (config.timeout_duration_per_strike || 1);
     
     for (const mapping of config.timeout_mappings) {
       if (strikes >= mapping.strikes) {
@@ -552,8 +517,8 @@ function calculateTimeoutDuration(strikes, config) {
     return timeoutMinutes;
   }
 
-  // Default: strikes × 1 minute
-  return strikes;
+  // Default: strikes × timeout_duration_per_strike (minutes)
+  return strikes * (config.timeout_duration_per_strike || 1);
 }
 
 /**
@@ -758,6 +723,8 @@ module.exports = {
   checkRateLimit,
   trackMessage,
   recordViolation,
+  noteConsecutiveMessage,
+  pruneConsecutiveState,
   cleanupOldRecords,
   getRateLimitStats,
   

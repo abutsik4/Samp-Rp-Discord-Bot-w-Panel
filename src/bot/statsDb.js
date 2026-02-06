@@ -2,7 +2,7 @@ const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
 
 function initStatsDb() {
-    const dbPath = path.join(__dirname, "../../stats.db");
+    const dbPath = path.join(__dirname, "../data/stats.db");
     const db = new sqlite3.Database(dbPath);
 
     db.run(
@@ -31,7 +31,7 @@ function initStatsDb() {
       permissions TEXT DEFAULT '{}',
       created_at INTEGER NOT NULL,
       last_login INTEGER,
-      CONSTRAINT check_role CHECK (role IN ('admin', 'user', 'moderator'))
+      CONSTRAINT check_role CHECK (role IN ('admin', 'user'))
     )
     `,
         (err) => {

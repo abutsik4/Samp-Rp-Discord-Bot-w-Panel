@@ -31,6 +31,7 @@ function generateSidebarHTML(options = {}) {
         { href: `${PANEL_BASE}/bot/${botKey}/rate-limits`, icon: '🛡️', label: 'Spam Limits', id: 'rate-limits' },
         { href: `${PANEL_BASE}/bot/${botKey}/whitelist`, icon: '📋', label: 'Whitelist', id: 'whitelist' },
         { href: `${PANEL_BASE}/bot/${botKey}/automod`, icon: '🛡️', label: 'Automod', id: 'automod' },
+        { href: `${PANEL_BASE}/bot/${botKey}/channels`, icon: '🗑️', label: 'Channels', id: 'channels' },
       ]
     },
     {
@@ -472,7 +473,7 @@ function generateSidebarScripts() {
           // Current deployments use /panel as the base.
           // Keep this resilient in case the app is mounted elsewhere later.
           const p = location.pathname || '';
-          const m = p.match(/^\/panel(\/|$)/);
+          const m = p.match(/^\\/panel(\\/|$)/);
           return m ? '/panel' : '/panel';
         }
 

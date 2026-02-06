@@ -63,6 +63,7 @@ A comprehensive Discord bot with an advanced web-based administration panel, fea
 - **Message Management** - Create and send embed messages
 - **AI Configuration** - Control engagement settings
 - **Rate Limit Management** - Configure per-channel and per-role limits
+- **Channel Manager** - Bulk delete Discord channels by category
 - **Accuracy Monitor** - Track message counting accuracy
 - **Glassmorphic UI** - Modern dark theme with glassmorphism design
 
@@ -316,6 +317,14 @@ All users can change their own password at `/change-password`:
 - Configure role-based limits
 - Set time windows
 - View active limits
+
+#### Channel Manager
+- View all channels organized by category
+- Drill into categories to see child channels
+- Bulk select channels within a category
+- Delete multiple channels at once with confirmation
+- Search and filter channels
+- Safety confirmation requiring "DELETE" to proceed
 
 #### Accuracy Monitor
 - View message counting accuracy
