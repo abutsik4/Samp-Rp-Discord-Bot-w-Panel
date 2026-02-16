@@ -11,6 +11,7 @@ const { processStarDecay } = require("../features/wanted-stars");
 const { processErrorQueue, cleanupEventLog } = require("../features/robust-message-counting");
 const { reconcileAllGuilds, selfHealingReconcile } = require("../features/reconciliation");
 const { cleanupOldMessageIndex } = require("../features/message-index-cleanup");
+const { syncMissingMessages, getWatermark, initializeWatermark } = require("../features/incremental-sync");
 const { SAMPStatusTracker } = require("../features/samp-status");
 
 /**
@@ -188,6 +189,53 @@ async function startSchedulers(ctx) {
   scheduleIndexCleanup();
 
   console.log("[Bot] Robust counting schedulers started ✓");
+
+  // ── Startup catch-up sync (recover messages missed during downtime) ──
+  // Runs async so it doesn't block other startup tasks.
+  // Uses the existing watermark to fetch only new messages, and the
+  // message_index INSERT OR IGNORE gate prevents any double-counting.
+  (async () => {
+    try {
+      // Small delay to let Discord cache populate
+      await new Promise(r => setTimeout(r, 5_000));
+
+      for (const guild of client.guilds.cache.values()) {
+        const watermark = await getWatermark(db, guild.id);
+
+        if (!watermark || !watermark.last_message_id) {
+          // No watermark → initialize one from current state so future syncs work
+          console.log(`[Startup Sync] No watermark for ${guild.name} — initializing…`);
+          const init = await initializeWatermark(client, db, guild.id);
+          if (init.success) {
+            console.log(`[Startup Sync] ✅ Watermark initialized for ${guild.name}: ${init.messageId}`);
+          } else {
+            console.warn(`[Startup Sync] ⚠️ Could not initialize watermark for ${guild.name}: ${init.error}`);
+          }
+          continue;
+        }
+
+        console.log(`[Startup Sync] Syncing missed messages for ${guild.name}…`);
+        const result = await syncMissingMessages(client, db, guild.id);
+
+        if (result.success) {
+          if (result.synced > 0) {
+            const channelSummary = Object.entries(result.channelStats || {})
+              .map(([name, count]) => `${name}: +${count}`)
+              .slice(0, 10)
+              .join(", ");
+            console.log(`[Startup Sync] ✅ ${guild.name}: recovered ${result.synced} missed messages (${channelSummary})`);
+          } else {
+            console.log(`[Startup Sync] ✅ ${guild.name}: no missed messages, counts are up to date`);
+          }
+        } else {
+          console.error(`[Startup Sync] ❌ ${guild.name}: ${result.error}`);
+        }
+      }
+      console.log("[Startup Sync] Catch-up complete ✓");
+    } catch (err) {
+      console.error("[Startup Sync] Fatal error:", err);
+    }
+  })();
 
   // ── Holidays scheduler ──────────────────────────────────────────
   const holidaysScheduler = startDailyHolidayPosts({

@@ -10,6 +10,7 @@ const { awardMessageXP } = require("../../features/levels");
 const { checkAndAwardBadges } = require("../../features/badges");
 const { getUserReactionStats, incrementReactionsGiven, incrementReactionsReceived } = require("../../features/reactions");
 const { getEngagementSettings, tryEngageWithMessage } = require("../../features/ai-engagement");
+const { updateWatermark } = require("../../features/incremental-sync");
 
 /**
  * Register all Discord event handlers on the client.
@@ -75,6 +76,9 @@ function registerEventHandlers(ctx) {
 
       // Core stats tracking - robust version with transaction + retry
       await incrementMessageCountRobust(db, guildId, userId, message.id, message.channelId, message.createdAt.toISOString());
+
+      // Advance watermark so startup catch-up sync knows where to resume
+      updateWatermark(db, guildId, message.id, 0).catch(() => {});
 
       // Streak + weekly
       await updateStreak(db, guildId, userId);
