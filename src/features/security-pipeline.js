@@ -8,6 +8,7 @@ const {
   getViolationStrikes,
   calculateTimeoutDuration
 } = require("./rate-limiter");
+const { addWantedStar } = require("./wanted-stars");
 const { dbAll } = require("../utils/db-helpers");
 
 // guildId -> { expiresAt: number, words: Array<{word: string, case_sensitive: number|boolean}> }
@@ -87,6 +88,9 @@ async function runSecurityPipeline(db, message, userRoles) {
     try {
       await recordViolationWithStrikes(db, guildId, channelId, userId, userRoles, config);
       const strikes = await getViolationStrikes(db, guildId, userId);
+
+      // D-track: add GTA-style wanted star for each spam violation
+      try { await addWantedStar(db, guildId, userId); } catch (_) {}
 
       if (config?.timeouts_enabled !== false && message.member && typeof message.member.timeout === 'function') {
         const timeoutMinutes = calculateTimeoutDuration(strikes, config);

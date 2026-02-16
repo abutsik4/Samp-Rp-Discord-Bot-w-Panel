@@ -1,27 +1,27 @@
-/**
- * Stats API routes.
- * Handles user statistics, channel stats, adjustments, and recalculations.
- */
+const { Router } = require("express");
 
-const express = require('express');
-const { findBot, getDbRun, getDbGet, getDbAll, getDb } = require('../context');
+function createStatsRouter(ctx) {
+  const router = Router();
+  const {
+    PANEL_BASE, requireAuth, apiLimiter, bots,
+    db, dbRun, dbGet, dbAll,
+    recordOperation, client, getUserMessageCount,
+    panelHttpLogger,
+  } = ctx;
 
-function createStatsRouter({ requireAuth, apiLimiter }) {
-  const router = express.Router();
-  const dbRun = getDbRun();
-  const dbGet = getDbGet();
-  const dbAll = getDbAll();
-  const db = getDb();
+  // ========================
+  // STATS API ENDPOINTS
+  // ========================
 
-  // Get user statistics with Discord usernames
-  router.get('/api/:botKey/stats/users', requireAuth, apiLimiter, async (req, res) => {
-    const bot = findBot(req.params.botKey);
+  // Get user statistics with Discord usernames instead of just IDs
+  router.get(`${PANEL_BASE}/api/:botKey/stats/users`, requireAuth, apiLimiter, async (req, res) => {
+    const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
     try {
       const guildId = req.query.guildId || '';
-      const sortBy = req.query.sortBy || 'count';
-      const limit = Math.min(parseInt(req.query.limit || 100), 500);
+      const sortBy = req.query.sortBy || 'count'; // 'count', 'username', 'recent'
+      const limit = Math.min(parseInt(req.query.limit || 100), 500); // Max 500, default 100
       const offset = parseInt(req.query.offset || 0);
       const search = (req.query.search || '').trim().toLowerCase();
 
@@ -43,6 +43,7 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
         orderParams.push(new Date().toISOString());
       }
 
+      // Join with user_cache (prefer guild-specific, else latest seen globally)
       let query = `
         SELECT 
           us.user_id,
@@ -66,6 +67,7 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
       params.push(new Date().toISOString());
       params.push(...whereParams);
 
+      // Apply search filter if provided
       if (search) {
         query += whereClause ? ` AND` : ` WHERE`;
         query += ` (LOWER(COALESCE(uc_guild.username, uc_any.username, us.user_id)) LIKE ? OR us.user_id LIKE ?)`;
@@ -76,9 +78,12 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
       params.push(...orderParams);
       params.push(limit, offset);
 
+      console.log('Stats query:', query);
+      console.log('Stats params:', params);
       const users = await dbAll(query, params);
+      console.log('Stats users returned:', users?.length);
 
-      // On-demand hydration: fetch Discord usernames for entries still showing raw IDs
+      // On-demand hydration: fetch Discord usernames for entries still showing raw IDs (limit 5 per request)
       if (users?.length) {
         const missing = users.filter((u) => u.username === u.user_id).slice(0, 5);
         for (const entry of missing) {
@@ -88,14 +93,16 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
               const nowIso = new Date().toISOString();
               await dbRun(
                 `INSERT OR REPLACE INTO user_cache (guild_id, user_id, username, avatar_url, updated_at)
-                 VALUES (?, ?, ?, ?, ?)`,
+                 VALUES (?, ?, ?, ?, ?)` ,
                 [guildId || null, entry.user_id, fetched.username, fetched.avatarURL() || null, nowIso]
               );
               entry.username = fetched.username;
               entry.avatar_url = fetched.avatarURL() || null;
               entry.updated_at = nowIso;
             }
-          } catch (_) { /* ignore fetch failures */ }
+          } catch (_) {
+            // ignore fetch failures (user missing or rate limited)
+          }
         }
       }
 
@@ -115,16 +122,20 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
       const countResult = await dbGet(countQuery, countParams);
       const total = countResult?.total || 0;
 
-      return res.json({ ok: true, users, pagination: { offset, limit, total } });
+      return res.json({
+        ok: true,
+        users,
+        pagination: { offset, limit, total }
+      });
     } catch (e) {
       console.error('GET /stats/users error:', e);
       return res.status(500).json({ error: e.message || "Failed to fetch user statistics" });
     }
   });
 
-  // Channel breakdown per user
-  router.get('/api/:botKey/stats/user-channels', requireAuth, apiLimiter, async (req, res) => {
-    const bot = findBot(req.params.botKey);
+  // Channel breakdown per user (best-effort; requires channel_id in message_index)
+  router.get(`${PANEL_BASE}/api/:botKey/stats/user-channels`, requireAuth, apiLimiter, async (req, res) => {
+    const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
     try {
@@ -148,9 +159,9 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
     }
   });
 
-  // Adjust a user's message count
-  router.post('/api/:botKey/stats/adjust', requireAuth, apiLimiter, async (req, res) => {
-    const bot = findBot(req.params.botKey);
+  // Adjust a user's message count (admin tool)
+  router.post(`${PANEL_BASE}/api/:botKey/stats/adjust`, requireAuth, apiLimiter, async (req, res) => {
+    const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
     try {
@@ -171,6 +182,7 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
 
       const deltaApplied = newCount - currentCount;
 
+      // Persist adjustment delta for backfill/reconciliation safety
       await dbRun(
         `INSERT INTO user_adjustments (guild_id, user_id, adjustment, updated_at)
          VALUES (?, ?, ?, ?)
@@ -180,6 +192,7 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
         [guildId, userId, deltaApplied, new Date().toISOString()]
       );
 
+      // Update visible stats
       await dbRun(
         `INSERT INTO user_stats (guild_id, user_id, message_count)
          VALUES (?, ?, ?)
@@ -195,9 +208,9 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
     }
   });
 
-  // List channels by activity
-  router.get('/api/:botKey/stats/channels', requireAuth, apiLimiter, async (req, res) => {
-    const bot = findBot(req.params.botKey);
+  // List channels by activity (for channel-centric stats management)
+  router.get(`${PANEL_BASE}/api/:botKey/stats/channels`, requireAuth, apiLimiter, async (req, res) => {
+    const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
     try {
@@ -205,7 +218,9 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
       if (!guildId) return res.status(400).json({ error: "guildId is required" });
 
       let rows = await dbAll(
-        `SELECT channel_id, SUM(count) as base_count
+        `SELECT
+          channel_id,
+          SUM(count) as base_count
          FROM daily_channel_stats
          WHERE guild_id = ?
          GROUP BY channel_id
@@ -214,10 +229,12 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
         [guildId]
       );
 
-      // Fallback to message_index if daily_channel_stats isn't populated
+      // Fallback: if daily_channel_stats isn't populated yet, derive from message_index
       if (!rows || rows.length === 0) {
         rows = await dbAll(
-          `SELECT channel_id, COUNT(*) as base_count
+          `SELECT
+            channel_id,
+            COUNT(*) as base_count
            FROM message_index
            WHERE guild_id = ? AND channel_id IS NOT NULL
            GROUP BY channel_id
@@ -247,7 +264,7 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
         };
       });
 
-      // Best-effort name hydration
+      // Best-effort name hydration (cache-based)
       const guild = bot.client?.guilds?.cache?.get(String(guildId)) || null;
       if (guild) {
         for (const item of out) {
@@ -263,9 +280,9 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
     }
   });
 
-  // Channel-centric: users for a channel
-  router.get('/api/:botKey/stats/channel-users', requireAuth, apiLimiter, async (req, res) => {
-    const bot = findBot(req.params.botKey);
+  // Channel-centric: users for a channel (base from daily_channel_stats + adjustments)
+  router.get(`${PANEL_BASE}/api/:botKey/stats/channel-users`, requireAuth, apiLimiter, async (req, res) => {
+    const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
     try {
@@ -274,7 +291,7 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
       const limit = Math.min(parseInt(req.query.limit || 100, 10), 500);
       const offset = Math.max(parseInt(req.query.offset || 0, 10), 0);
       const search = String(req.query.search || '').trim().toLowerCase();
-      const sortBy = String(req.query.sortBy || 'count');
+      const sortBy = String(req.query.sortBy || 'count'); // count|username
 
       if (!guildId || !channelId) return res.status(400).json({ error: "guildId and channelId are required" });
 
@@ -335,7 +352,7 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
 
       const users = await dbAll(query, params);
 
-      // Total count
+      // total count
       let countQuery = `
         WITH totals AS (
           SELECT user_id
@@ -384,9 +401,9 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
     }
   });
 
-  // Apply a per-channel adjustment for a user
-  router.post('/api/:botKey/stats/channel-adjust', requireAuth, apiLimiter, async (req, res) => {
-    const bot = findBot(req.params.botKey);
+  // Apply a per-channel adjustment for a user (delta or setTo, persists via channel_user_adjustments)
+  router.post(`${PANEL_BASE}/api/:botKey/stats/channel-adjust`, requireAuth, apiLimiter, async (req, res) => {
+    const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
     try {
@@ -418,6 +435,7 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
         return res.status(400).json({ error: "Provide either a non-negative setTo or a non-zero delta" });
       }
 
+      // Clamp so effective never goes below 0
       const newEffective = Math.max(0, currentEffective + appliedDelta);
       const clampedApplied = newEffective - currentEffective;
       const newAdj = currentAdj + clampedApplied;
@@ -435,7 +453,7 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
         [guildId, channelId, userId, newAdj, updatedBy, String(reason || '').slice(0, 500) || null, new Date().toISOString()]
       );
 
-      // Update overall user_stats
+      // Update overall user_stats so the leaderboard immediately reflects the change
       const userRow = await dbGet(`SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`, [guildId, userId]);
       const userCurrent = userRow?.message_count || 0;
       const userNew = Math.max(0, userCurrent + clampedApplied);
@@ -463,9 +481,9 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
     }
   });
 
-  // Recalculate daily_channel_stats and user_stats from message_index
-  router.post('/api/:botKey/stats/recalculate', requireAuth, apiLimiter, async (req, res) => {
-    const bot = findBot(req.params.botKey);
+  // Recalculate daily_channel_stats and user_stats from message_index (DB-only rebuild)
+  router.post(`${PANEL_BASE}/api/:botKey/stats/recalculate`, requireAuth, apiLimiter, async (req, res) => {
+    const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
     try {
@@ -474,8 +492,10 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
 
       const start = Date.now();
 
-      await dbRun(`DELETE FROM daily_channel_stats WHERE guild_id = ?`, [guildId]);
+      // Rebuild daily_channel_stats (derived from message_index)
+      await dbRun(db, `DELETE FROM daily_channel_stats WHERE guild_id = ?`, [guildId]);
       await dbRun(
+        db,
         `INSERT INTO daily_channel_stats (guild_id, user_id, channel_id, message_date, count)
          SELECT
            guild_id,
@@ -489,15 +509,18 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
         [guildId]
       );
 
+      // Rebuild user_stats (derived from message_index + user_adjustments + channel_user_adjustments)
       const actualCounts = await dbAll(
+        db,
         `SELECT user_id, COUNT(*) as actual_count
          FROM message_index
          WHERE guild_id = ?
          GROUP BY user_id`,
         [guildId]
       );
-      const userAdjRows = await dbAll(`SELECT user_id, adjustment FROM user_adjustments WHERE guild_id = ?`, [guildId]);
+      const userAdjRows = await dbAll(db, `SELECT user_id, adjustment FROM user_adjustments WHERE guild_id = ?`, [guildId]);
       const chAdjRows = await dbAll(
+        db,
         `SELECT user_id, SUM(adjustment) as adjustment
          FROM channel_user_adjustments
          WHERE guild_id = ?
@@ -519,6 +542,7 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
         const actual = actualMap.get(userId) || 0;
         const expected = Math.max(0, actual + (userAdj.get(userId) || 0) + (chAdj.get(userId) || 0));
         await dbRun(
+          db,
           `INSERT INTO user_stats (guild_id, user_id, message_count)
            VALUES (?, ?, ?)
            ON CONFLICT(guild_id, user_id)
@@ -536,16 +560,16 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
     }
   });
 
-  // Backfill a single channel from Discord history
-  router.post('/api/:botKey/stats/backfill-channel', requireAuth, apiLimiter, async (req, res) => {
-    const bot = findBot(req.params.botKey);
+  // Backfill a single channel from Discord history into message_index (rate-limited)
+  router.post(`${PANEL_BASE}/api/:botKey/stats/backfill-channel`, requireAuth, apiLimiter, async (req, res) => {
+    const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
     try {
       const { guildId, channelId, maxMessages } = req.body || {};
       if (!guildId || !channelId) return res.status(400).json({ error: "guildId and channelId are required" });
 
-      const { incrementMessageCountRobust } = require('../features/robust-message-counting');
+      const { incrementMessageCountRobust } = require('../../features/robust-message-counting');
 
       const channel = await bot.client.channels.fetch(String(channelId));
       if (!channel || !channel.isTextBased || !channel.isTextBased()) {
@@ -574,6 +598,7 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
         }
 
         lastId = batch.last().id;
+        // gentle rate limit
         await new Promise((r) => setTimeout(r, 500));
       }
 
@@ -585,14 +610,15 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
     }
   });
 
-  // Live stats endpoint
-  router.get('/api/:botKey/stats/live', requireAuth, apiLimiter, async (req, res) => {
-    const bot = findBot(req.params.botKey);
+  // LIVE STATS ENDPOINT (for real-time web panel updates)
+  router.get(`${PANEL_BASE}/api/:botKey/stats/live`, requireAuth, apiLimiter, async (req, res) => {
+    const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
     try {
       const guildId = req.query.guildId || '';
 
+      // Get total messages
       let totalQuery = 'SELECT COUNT(*) as total FROM message_index';
       let totalParams = [];
       if (guildId) {
@@ -601,6 +627,7 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
       }
       const totalResult = await dbGet(totalQuery, totalParams);
 
+      // Get unique users and sum of message counts
       let usersQuery = 'SELECT COUNT(DISTINCT user_id) as unique_users, SUM(message_count) as total_messages FROM user_stats';
       let usersParams = [];
       if (guildId) {
@@ -609,6 +636,7 @@ function createStatsRouter({ requireAuth, apiLimiter }) {
       }
       const usersResult = await dbGet(usersQuery, usersParams);
 
+      // Get top users (limited) with best-effort username lookup
       let topUsersQuery = `
         SELECT 
           us.user_id, 

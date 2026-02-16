@@ -1,20 +1,13 @@
 // Message/Embed Management Page HTML Template
 // Enhanced with scheduling, instant send, labels, and modern UI
 
-const { generateSidebarHTML, generateSidebarStyles, generateSidebarScripts } = require('./shared-template');
+const { generate } = require('./shared-template');
 
 function generateMessagesPage(bot, PANEL_BASE) {
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>JepsenCloud Panel — Message Pool</title>
-  <link rel="stylesheet" href="/shared.css" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.css">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lucide-static@0.378.0/font/lucide.min.css">
-  <style>
-    ${generateSidebarStyles()}
+  const head = `
+    </style>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lucide-static@0.378.0/font/lucide.min.css">
+    <style>
     
     /* Enhanced Message Pool Styles */
     .message-pool-grid {
@@ -900,25 +893,9 @@ function generateMessagesPage(bot, PANEL_BASE) {
     .debug-entry.info {
       background: color-mix(in srgb, var(--lavender-blush) 10%, transparent);
     }
-  </style>
-</head>
-<body>
-  <div class="dashboard-wrapper">
-    ${generateSidebarHTML({
-      title: bot.name,
-      subtitle: 'Message Pool',
-      icon: '📨',
-      botKey: bot.key,
-      PANEL_BASE,
-      currentPage: 'messages'
-    })}
+  `;
 
-    <main class="main-scroll-container">
-      <div class="scroll-progress">
-        <div class="scroll-progress-bar" id="scrollProgressBar"></div>
-      </div>
-
-      <div data-scroll-container id="scrollContainer">
+  const body = `
         <section class="panel-section" data-scroll-section>
           <!-- Alerts Container (Fixed Position) -->
           <div class="alert-container" id="alertContainer"></div>
@@ -1217,10 +1194,9 @@ function generateMessagesPage(bot, PANEL_BASE) {
             </div>
           </div>
         </section>
-      </div>
-    </main>
-  </div>
-  
+  `;
+
+  const scripts = `
   <!-- Debug Console -->
   <div class="debug-console" id="debugConsole">
     <div class="debug-header">
@@ -1229,8 +1205,6 @@ function generateMessagesPage(bot, PANEL_BASE) {
     </div>
     <div class="debug-body" id="debugBody"></div>
   </div>
-
-  ${generateSidebarScripts()}
 
   <script>
     const botKey = ${JSON.stringify(bot.key)};
@@ -1945,8 +1919,17 @@ function generateMessagesPage(bot, PANEL_BASE) {
       else if (window.__locoScroll && window.__locoScroll.update) window.__locoScroll.update();
     });
   </script>
-</body>
-</html>`;
+  `;
+
+  return generate({
+    head,
+    body,
+    scripts,
+    botKey: bot.key,
+    botName: bot.name,
+    title: 'JepsenCloud Panel — Message Pool',
+    currentPage: 'messages'
+  });
 }
 
 module.exports = { generateMessagesPage };

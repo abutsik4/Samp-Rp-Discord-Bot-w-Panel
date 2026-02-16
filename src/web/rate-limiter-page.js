@@ -1,19 +1,9 @@
 // Unified Spam Prevention Management Page
 
-const { generateSidebarHTML, generateSidebarStyles, generateSidebarScripts } = require('./shared-template');
+const { generate } = require('./shared-template');
 
 function generateRateLimiterPage(bot, PANEL_BASE) {
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>JepsenCloud Panel — Spam Prevention</title>
-  <link rel="stylesheet" href="/shared.css?v=${Date.now()}" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.css">
-  <style>
-    ${generateSidebarStyles()}
-    
+  const head = `
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-bottom: 24px; align-items: start; width: 100%; }
     @media(max-width: 1300px) { .grid { grid-template-columns: 1fr; } }
     
@@ -112,23 +102,9 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
     .table-container { width: 100%; overflow-x: auto; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
     .content-card { max-width: 100%; overflow: hidden; width: 100%; min-width: 0; height: 100%; }
     .page-content-wrapper { max-width: 1400px; margin: 0; width: 100%; }
-  </style>
-</head>
-<body>
-  <div class="dashboard-wrapper">
-    ${generateSidebarHTML({
-      title: bot.name,
-      subtitle: 'Spam Prevention',
-      icon: '🛡️',
-      botKey: bot.key,
-      PANEL_BASE,
-      currentPage: 'rate-limits'
-    })}
+  `;
 
-    <main class="main-scroll-container">
-      <div class="scroll-progress"><div class="scroll-progress-bar" id="scrollProgressBar"></div></div>
-
-      <div data-scroll-container id="scrollContainer">
+  const body = `
         <section class="panel-section" data-scroll-section>
           <div class="page-content-wrapper">
           <div class="section-header" data-scroll data-scroll-class="is-inview">
@@ -277,12 +253,9 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
            </div>
           </div>
         </section>
-      </div>
-    </main>
-  </div>
+  `;
 
-  ${generateSidebarScripts()}
-
+  const scripts = `
   <script>
     const botKey = '${bot.key}';
     const apiBase = '${PANEL_BASE}';
@@ -611,8 +584,17 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
        updateToggleState('ignoreAdmins', 'ignoreAdminsState');
     });
   </script>
-</body>
-</html>`;
+  `;
+
+  return generate({
+    head,
+    body,
+    scripts,
+    botKey: bot.key,
+    botName: bot.name,
+    title: 'JepsenCloud Panel — Spam Prevention',
+    currentPage: 'rate-limits'
+  });
 }
 
 module.exports = { generateRateLimiterPage };

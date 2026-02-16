@@ -1,19 +1,9 @@
 // Channel Management Page - Bulk delete Discord channels
 
-const { generateSidebarHTML, generateSidebarStyles, generateSidebarScripts } = require('./shared-template');
+const { generate } = require('./shared-template');
 
 function generateChannelsPage(bot, PANEL_BASE) {
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>JepsenCloud Panel — Channel Manager</title>
-  <link rel="stylesheet" href="/shared.css" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.css">
-  <style>
-    ${generateSidebarStyles()}
-    
+  const head = `
     .alert{padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:14px}
     .alert-info{background:rgba(34,211,238,.1);border:1px solid rgba(34,211,238,.3);color:var(--accent-cyan)}
     .alert-success{background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.3);color:var(--accent-emerald)}
@@ -84,25 +74,9 @@ function generateChannelsPage(bot, PANEL_BASE) {
     
     .uncategorized-section{margin-top:24px;padding-top:20px;border-top:1px dashed var(--border)}
     .uncategorized-title{font-size:14px;color:var(--text-muted);margin-bottom:12px;display:flex;align-items:center;gap:8px}
-  </style>
-</head>
-<body>
-  <div class="dashboard-wrapper">
-    ${generateSidebarHTML({
-      title: bot.name,
-      subtitle: 'Channel Manager',
-      icon: '🗑️',
-      botKey: bot.key,
-      PANEL_BASE,
-      currentPage: 'channels'
-    })}
+  `;
 
-    <main class="main-scroll-container">
-      <div class="scroll-progress">
-        <div class="scroll-progress-bar" id="scrollProgressBar"></div>
-      </div>
-
-      <div data-scroll-container id="scrollContainer">
+  const body = `
         <section class="panel-section" data-scroll-section>
           <div class="section-header" data-scroll data-scroll-class="is-inview">
             <h1 class="section-title"><span>🗑️</span> Channel Manager</h1>
@@ -162,10 +136,9 @@ function generateChannelsPage(bot, PANEL_BASE) {
             <button class="btn btn-danger" id="deleteSelectedBtn" disabled>🗑️ Delete Selected Channels (0)</button>
           </div>
         </section>
-      </div>
-    </main>
-  </div>
+  `;
 
+  const scripts = `
   <!-- Confirmation Modal -->
   <div class="confirm-modal" id="confirmModal">
     <div class="confirm-modal-content">
@@ -186,8 +159,6 @@ function generateChannelsPage(bot, PANEL_BASE) {
       </div>
     </div>
   </div>
-
-  ${generateSidebarScripts()}
 
   <script>
     const botKey = '${bot.key}';
@@ -531,8 +502,17 @@ function generateChannelsPage(bot, PANEL_BASE) {
     // Initial load
     document.addEventListener('DOMContentLoaded', loadChannels);
   </script>
-</body>
-</html>`;
+  `;
+
+  return generate({
+    head,
+    body,
+    scripts,
+    botKey: bot.key,
+    botName: bot.name,
+    title: 'JepsenCloud Panel — Channel Manager',
+    currentPage: 'channels'
+  });
 }
 
 module.exports = { generateChannelsPage };

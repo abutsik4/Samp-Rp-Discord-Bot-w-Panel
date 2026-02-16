@@ -927,7 +927,7 @@ function generatePageHeader(title, botName = '', botKey = '', PANEL_BASE = '/pan
   });
 }
 
-function generate({ head = '', body = '', botKey = '', botName = '', title = 'JepsenCloud', currentPage = '' }) {
+function generate({ head = '', body = '', scripts = '', botKey = '', botName = '', title = 'JepsenCloud', currentPage = '' }) {
   const PANEL_BASE = '/panel';
   
   return `<!doctype html>
@@ -965,6 +965,7 @@ function generate({ head = '', body = '', botKey = '', botName = '', title = 'Je
     </main>
   </div>
   ${generateSidebarScripts()}
+  ${scripts}
 </body>
 </html>`;
 }

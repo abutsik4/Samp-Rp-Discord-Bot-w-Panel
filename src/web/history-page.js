@@ -1,19 +1,9 @@
 // Operation History Page
 
-const { generateSidebarHTML, generateSidebarStyles, generateSidebarScripts } = require('./shared-template');
+const { generate } = require('./shared-template');
 
 function generateHistoryPage(bot, PANEL_BASE) {
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>JepsenCloud Panel — Operation History</title>
-  <link rel="stylesheet" href="/shared.css" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.css">
-  <style>
-    ${generateSidebarStyles()}
-    
+  const head = `
     .alert{padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:14px}
     .alert-info{background:rgba(34,211,238,.1);border:1px solid rgba(34,211,238,.3);color:var(--accent-cyan)}
     .alert-success{background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.3);color:var(--accent-emerald)}
@@ -39,25 +29,9 @@ function generateHistoryPage(bot, PANEL_BASE) {
     .details-toggle{cursor:pointer;color:var(--accent-cyan);font-size:13px;margin-top:8px;display:inline-block}
     .details-toggle:hover{text-decoration:underline}
     .operation-details{margin-top:12px;padding:12px;background:rgba(0,0,0,.2);border-radius:6px;font-family:'Courier New',monospace;font-size:12px;max-height:200px;overflow-y:auto}
-  </style>
-</head>
-<body>
-  <div class="dashboard-wrapper">
-    ${generateSidebarHTML({
-      title: bot.name,
-      subtitle: 'History',
-      icon: '📜',
-      botKey: bot.key,
-      PANEL_BASE,
-      currentPage: 'history'
-    })}
+  `;
 
-    <main class="main-scroll-container">
-      <div class="scroll-progress">
-        <div class="scroll-progress-bar" id="scrollProgressBar"></div>
-      </div>
-
-      <div data-scroll-container id="scrollContainer">
+  const body = `
         <section class="panel-section" data-scroll-section>
           <div class="section-header" data-scroll data-scroll-class="is-inview">
             <h1 class="section-title"><span>📜</span> Operation History</h1>
@@ -95,12 +69,9 @@ function generateHistoryPage(bot, PANEL_BASE) {
             </ul>
           </div>
         </section>
-      </div>
-    </main>
-  </div>
+  `;
 
-  ${generateSidebarScripts()}
-
+  const scripts = `
   <script>
     const botKey = '${bot.key}';
     function showAlert(msg, type) {
@@ -172,8 +143,17 @@ function generateHistoryPage(bot, PANEL_BASE) {
 
     document.addEventListener('DOMContentLoaded', loadOperations);
   </script>
-</body>
-</html>`;
+  `;
+
+  return generate({
+    head,
+    body,
+    scripts,
+    botKey: bot.key,
+    botName: bot.name,
+    title: 'JepsenCloud Panel — Operation History',
+    currentPage: 'history'
+  });
 }
 
 module.exports = { generateHistoryPage };

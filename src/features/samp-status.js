@@ -5,6 +5,8 @@
  */
 
 const dgram = require("dgram");
+const dns = require("dns");
+const net = require("net");
 const { EmbedBuilder, AttachmentBuilder } = require("discord.js");
 
 class SAMPQuery {
@@ -12,14 +14,17 @@ class SAMPQuery {
     this.host = host;
     this.port = port;
     this.timeout = 5000; // 5 second timeout
+
+    this._resolvedIp = null;
+    this._resolvedAt = 0;
   }
 
   /**
    * Create SAMP query packet
    * @param {string} opcode - Query opcode (i, r, c, d, x, p)
    */
-  createPacket(opcode) {
-    const ip = this.host.split(".").map(Number);
+  createPacket(opcode, ipString) {
+    const ip = String(ipString || this.host).split(".").map(Number);
     const portLow = this.port & 0xFF;
     const portHigh = (this.port >> 8) & 0xFF;
 
@@ -36,13 +41,27 @@ class SAMPQuery {
     return packet;
   }
 
+  async resolveHostIp() {
+    const host = String(this.host || "").trim();
+    if (net.isIPv4(host)) return host;
+
+    const now = Date.now();
+    // Cache DNS lookup briefly to avoid repeated lookups in polling loops
+    if (this._resolvedIp && now - this._resolvedAt < 5 * 60 * 1000) return this._resolvedIp;
+
+    const { address } = await dns.promises.lookup(host, { family: 4 });
+    this._resolvedIp = address;
+    this._resolvedAt = now;
+    return address;
+  }
+
   /**
    * Send query and receive response
    */
   async query(opcode) {
     return new Promise((resolve, reject) => {
       const socket = dgram.createSocket("udp4");
-      const packet = this.createPacket(opcode);
+      let packet;
       let timeoutHandle;
 
       socket.on("message", (msg) => {
@@ -57,12 +76,23 @@ class SAMPQuery {
         reject(err);
       });
 
-      timeoutHandle = setTimeout(() => {
+      const onTimeout = () => {
         socket.close();
         reject(new Error("Query timeout"));
-      }, this.timeout);
+      };
+      timeoutHandle = setTimeout(onTimeout, this.timeout);
 
-      socket.send(packet, 0, packet.length, this.port, this.host);
+      (async () => {
+        try {
+          const ip = await this.resolveHostIp();
+          packet = this.createPacket(opcode, ip);
+          socket.send(packet, 0, packet.length, this.port, ip);
+        } catch (e) {
+          clearTimeout(timeoutHandle);
+          socket.close();
+          reject(e);
+        }
+      })();
     });
   }
 
@@ -70,6 +100,17 @@ class SAMPQuery {
    * Parse server info (opcode 'i')
    */
   parseInfo(buffer) {
+    // Validate minimum buffer length (header + basic info)
+    if (!buffer || buffer.length < 17) {
+      throw new Error(`Invalid response buffer length: ${buffer?.length || 0}`);
+    }
+
+    // Validate SAMP header
+    const header = buffer.toString('ascii', 0, 4);
+    if (header !== 'SAMP') {
+      throw new Error(`Invalid SAMP header: ${header}`);
+    }
+
     let offset = 11; // Skip header
 
     // Password protected (1 byte)
@@ -84,8 +125,20 @@ class SAMPQuery {
     const maxPlayers = buffer.readUInt16LE(offset);
     offset += 2;
 
+    // Validate player counts are reasonable (some servers exceed 1000)
+    if (players < 0 || players > 5000 || maxPlayers < 0 || maxPlayers > 5000) {
+      throw new Error(`Invalid player counts: ${players}/${maxPlayers}`);
+    }
+    if (players > maxPlayers) {
+      // Some servers report this incorrectly, cap it
+      console.warn(`[SAMP] Player count ${players} exceeds max ${maxPlayers}, capping`);
+    }
+
     // Hostname length (4 bytes, little endian)
     const hostnameLen = buffer.readUInt32LE(offset);
+    if (hostnameLen > 256 || offset + 4 + hostnameLen > buffer.length) {
+      throw new Error(`Invalid hostname length: ${hostnameLen}`);
+    }
     offset += 4;
 
     // Hostname
@@ -94,6 +147,9 @@ class SAMPQuery {
 
     // Gamemode length (4 bytes)
     const gamemodeLen = buffer.readUInt32LE(offset);
+    if (gamemodeLen > 256 || offset + 4 + gamemodeLen > buffer.length) {
+      throw new Error(`Invalid gamemode length: ${gamemodeLen}`);
+    }
     offset += 4;
 
     // Gamemode
@@ -102,6 +158,9 @@ class SAMPQuery {
 
     // Language length (4 bytes)
     const languageLen = buffer.readUInt32LE(offset);
+    if (languageLen > 256 || offset + 4 + languageLen > buffer.length) {
+      throw new Error(`Invalid language length: ${languageLen}`);
+    }
     offset += 4;
 
     // Language
@@ -109,7 +168,7 @@ class SAMPQuery {
 
     return {
       password,
-      players,
+      players: Math.min(players, maxPlayers),
       maxPlayers,
       hostname,
       gamemode,
@@ -212,7 +271,15 @@ class SAMPStatusTracker {
     this.config = config;
     this.updateInterval = null;
     this.isRunning = false;
-    this.lastUpdate = 0; // Track last update time for rate limiting
+    this.lastChannelUpdate = 0; // Track last Discord channel rename time for rate limiting
+    // Discord allows only a small number of channel renames per 10 minutes.
+    // Default to 5 minutes (2 renames / 10 min) to keep counts reasonably fresh.
+    this.minRenameIntervalMs = Math.max(60 * 1000, Number(config?.minRenameIntervalMs) || 5 * 60 * 1000);
+    this.nextAllowedRenameAt = 0;
+    this.lastSkipLogAt = 0;
+    this._updateInFlight = false;
+    this.consecutiveFailures = 0;
+    this.lastStatus = null; // Cache last status for comparison
   }
 
   /**
@@ -221,35 +288,49 @@ class SAMPStatusTracker {
   async updateChannelName() {
     if (!this.isRunning) return;
 
-    try {
-      // Discord rate limit: 2 name changes per 10 minutes per channel
-      // So we update every 5 minutes to be safe
-      const now = Date.now();
-      if (now - this.lastUpdate < 5 * 60 * 1000) {
-        return; // Too soon, skip this update
-      }
+    // Prevent overlapping updates from the same tracker instance.
+    if (this._updateInFlight) return;
+    this._updateInFlight = true;
 
+    const serverAddr = `${this.config.serverIp}:${this.config.serverPort || 7777}`;
+
+    try {
+      console.log(`[SAMP] Fetching channel ${this.config.channelId} for ${serverAddr}...`);
       const channel = await this.client.channels.fetch(this.config.channelId);
       if (!channel) {
-        console.error(`⚠️ [SAMP] Channel ${this.config.channelId} not found`);
+        console.error(`⚠️ [SAMP] Channel ${this.config.channelId} not found for ${serverAddr}`);
         return;
       }
+      console.log(`[SAMP] Channel fetched: "${channel.name}" for ${serverAddr}`);
 
       let playerCount = 0;
       let maxPlayers = 0;
       let isOnline = false;
 
-      // Query SAMP server
-      try {
-        const query = new SAMPQuery(this.config.serverIp, this.config.serverPort || 7777);
-        const status = await query.getInfo();
-        
-        playerCount = status.players;
-        maxPlayers = status.maxPlayers;
-        isOnline = true;
-      } catch (error) {
-        // Server offline
-        isOnline = false;
+      // Query SAMP server with retry
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const query = new SAMPQuery(this.config.serverIp, this.config.serverPort || 7777);
+          const status = await query.getInfo();
+          
+          playerCount = status.players;
+          maxPlayers = status.maxPlayers;
+          isOnline = true;
+          this.consecutiveFailures = 0;
+          break;
+        } catch (error) {
+          if (attempt === 2) {
+            this.consecutiveFailures++;
+            // Log failures but not too frequently
+            if (this.consecutiveFailures <= 3 || this.consecutiveFailures % 10 === 0) {
+              console.warn(`⚠️ [SAMP] Query failed for ${serverAddr}: ${error.message} (failures: ${this.consecutiveFailures})`);
+            }
+            isOnline = false;
+          } else {
+            // Wait 1 second before retry
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
       }
 
       // Generate channel name
@@ -263,18 +344,69 @@ class SAMPStatusTracker {
         newName = `${emoji} ${serverName} [OFFLINE]`;
       }
 
-      // Only update if name actually changed
-      if (channel.name !== newName) {
+      console.log(`[SAMP] ${serverAddr}: old="${channel.name}" new="${newName}" match=${channel.name === newName}`);
+
+      // Always keep lastStatus up to date (even if we skip rename)
+      const prev = this.lastStatus;
+      this.lastStatus = { isOnline, playerCount, maxPlayers };
+
+      // Only update Discord channel if name actually changed
+      if (channel.name === newName) return;
+
+      const now = Date.now();
+      const statusChanged = !prev || prev.isOnline !== isOnline;
+      const withinCooldown = this.lastChannelUpdate && (now - this.lastChannelUpdate) < this.minRenameIntervalMs;
+
+      // Respect a backoff window (e.g., after rate limiting)
+      if (now < this.nextAllowedRenameAt && !statusChanged) {
+        if (now - this.lastSkipLogAt > 10 * 60 * 1000) {
+          console.warn(`⚠️ [SAMP] Skipping rename for ${serverAddr} due to backoff until ${new Date(this.nextAllowedRenameAt).toISOString()}`);
+          this.lastSkipLogAt = now;
+        }
+        return;
+      }
+
+      // Discord channel renames are aggressively rate limited; avoid thrashing.
+      if (withinCooldown && !statusChanged) {
+        if (now - this.lastSkipLogAt > 10 * 60 * 1000) {
+          console.warn(`⚠️ [SAMP] Skipping rename for ${serverAddr} (cooldown ${Math.round(this.minRenameIntervalMs / 60000)}m)`);
+          this.lastSkipLogAt = now;
+        }
+        return;
+      }
+      
+      console.log(`[SAMP] Calling setName for ${serverAddr}...`);
+      try {
         await channel.setName(newName);
-        this.lastUpdate = now;
-        console.log(`[SAMP] Updated channel: ${newName}`);
+        this.lastChannelUpdate = Date.now();
+        this.nextAllowedRenameAt = this.lastChannelUpdate + this.minRenameIntervalMs;
+        console.log(`[SAMP] Updated channel for ${serverAddr}: ${newName}`);
+      } catch (setNameError) {
+        console.error(`[SAMP] setName error for ${serverAddr}:`, setNameError.code, setNameError.message);
+        // Handle Discord rate limit (error code 50013 or rate limit headers)
+        if (setNameError.code === 50013) {
+          console.warn(`⚠️ [SAMP] Missing permissions for channel ${this.config.channelId}`);
+        } else if (setNameError.status === 429 || setNameError.code === 429 || /rate\s*limit/i.test(setNameError.message || "")) {
+          // Back off to avoid repeatedly hitting the same route limit
+          this.nextAllowedRenameAt = Math.max(this.nextAllowedRenameAt, Date.now() + this.minRenameIntervalMs);
+          console.warn(`⚠️ [SAMP] Discord rate limit hit for ${serverAddr}, backing off for ${Math.round(this.minRenameIntervalMs / 60000)}m`);
+        } else {
+          throw setNameError; // Re-throw to outer catch
+        }
       }
 
     } catch (error) {
-      // Don't log rate limit errors too much
+      // Don't log permission errors too much (50013 = Missing Permissions, 50035 = Invalid Form Body)
       if (error.code !== 50013 && error.code !== 50035) {
-        console.error("❌ [SAMP] Error updating channel name:", error.message);
+        console.error(`❌ [SAMP] Error updating channel for ${serverAddr}:`, error.message);
+      } else if (error.code === 50013) {
+        // Log permission errors occasionally
+        if (this.consecutiveFailures % 10 === 0) {
+          console.error(`❌ [SAMP] Missing permissions to update channel ${this.config.channelId}`);
+        }
       }
+    } finally {
+      this._updateInFlight = false;
     }
   }
 
@@ -288,12 +420,16 @@ class SAMPStatusTracker {
     }
 
     this.isRunning = true;
-    console.log(`✅ [SAMP] Starting channel tracker for ${this.config.serverIp}:${this.config.serverPort || 7777}`);
+    const serverAddr = `${this.config.serverIp}:${this.config.serverPort || 7777}`;
+    console.log(`✅ [SAMP] Starting channel tracker for ${serverAddr}`);
 
-    // Initial update
-    await this.updateChannelName();
+    // Initial update in background (don't block startup)
+    this.updateChannelName().catch(error => {
+      console.error(`❌ [SAMP] Initial update failed for ${serverAddr}: ${error.message}`);
+    });
 
-    // Update every 2 minutes (Discord allows 2 changes per 10 minutes)
+    // Update every 2 minutes - Discord handles rate limiting internally
+    // If channel name hasn't changed, no API call is made anyway
     this.updateInterval = setInterval(() => {
       this.updateChannelName();
     }, 2 * 60 * 1000);
@@ -311,7 +447,53 @@ class SAMPStatusTracker {
       this.updateInterval = null;
     }
 
-    console.log("🛑 [SAMP] Status tracker stopped");
+    const serverAddr = `${this.config.serverIp}:${this.config.serverPort || 7777}`;
+    console.log(`🛑 [SAMP] Status tracker stopped for ${serverAddr}`);
+  }
+
+  /**
+   * Check if tracker is enabled/running
+   */
+  get enabled() {
+    return this.isRunning;
+  }
+
+  /**
+   * Force an immediate update, bypassing rate limit (use sparingly)
+   */
+  async forceUpdate() {
+    if (!this.isRunning) {
+      console.log("⚠️ [SAMP] Cannot force update - tracker not running");
+      return false;
+    }
+    
+    // Reset rate limit timer to allow immediate update
+    this.lastChannelUpdate = 0;
+    this.nextAllowedRenameAt = 0;
+    await this.updateChannelName();
+    return true;
+  }
+
+  /**
+   * Get current status without updating channel
+   */
+  async getStatus() {
+    const query = new SAMPQuery(this.config.serverIp, this.config.serverPort || 7777);
+    try {
+      const status = await query.getInfo();
+      return {
+        online: true,
+        players: status.players,
+        maxPlayers: status.maxPlayers,
+        hostname: status.hostname,
+        gamemode: status.gamemode,
+      };
+    } catch (error) {
+      return {
+        online: false,
+        error: error.message,
+      };
+    }
   }
 }
 

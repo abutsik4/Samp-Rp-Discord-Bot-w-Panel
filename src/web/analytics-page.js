@@ -1,20 +1,14 @@
 // Analytics Dashboard Page
 
-const { generateSidebarHTML, generateSidebarStyles, generateSidebarScripts } = require('./shared-template');
+const { generate } = require('./shared-template');
 
 function generateAnalyticsPage(bot, PANEL_BASE) {
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>JepsenCloud Panel — Analytics</title>
-  <link rel="stylesheet" href="/shared.css" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <style>
-    ${generateSidebarStyles()}
-    
+  return generate({
+    title: 'JepsenCloud Panel — Analytics',
+    botKey: bot.key,
+    botName: bot.name,
+    currentPage: 'analytics',
+    head: `
     .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:24px}
     .stat-card{background:linear-gradient(135deg,color-mix(in srgb, var(--accent-purple) 8%, transparent),color-mix(in srgb, var(--accent-cyan) 8%, transparent));border:1px solid var(--border);border-radius:12px;padding:20px;text-align:center;transition:all .3s}
     .stat-card:hover{transform:translateY(-3px);border-color:var(--accent-purple)}
@@ -43,25 +37,8 @@ function generateAnalyticsPage(bot, PANEL_BASE) {
     
     .alert{padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:14px}
     .alert-info{background:rgba(34,211,238,.1);border:1px solid rgba(34,211,238,.3);color:var(--accent-cyan)}
-  </style>
-</head>
-<body>
-  <div class="dashboard-wrapper">
-    ${generateSidebarHTML({
-      title: bot.name,
-      subtitle: 'Analytics',
-      icon: '📊',
-      botKey: bot.key,
-      PANEL_BASE,
-      currentPage: 'analytics'
-    })}
-
-    <main class="main-scroll-container">
-      <div class="scroll-progress">
-        <div class="scroll-progress-bar" id="scrollProgressBar"></div>
-      </div>
-
-      <div data-scroll-container id="scrollContainer">
+    `,
+    body: `
         <section class="panel-section" data-scroll-section>
           <div class="section-header" data-scroll data-scroll-class="is-inview">
             <h1 class="section-title"><span>📊</span> Analytics Dashboard</h1>
@@ -143,12 +120,9 @@ function generateAnalyticsPage(bot, PANEL_BASE) {
             </div>
           </div>
         </section>
-      </div>
-    </main>
-  </div>
-
-  ${generateSidebarScripts()}
-
+    `,
+    scripts: `
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
     const botKey = '${bot.key}';
     const apiBase = '${PANEL_BASE}';
@@ -259,8 +233,8 @@ function generateAnalyticsPage(bot, PANEL_BASE) {
       loadAnalytics(currentRange);
     });
   </script>
-</body>
-</html>`;
+    `
+  });
 }
 
 module.exports = { generateAnalyticsPage };

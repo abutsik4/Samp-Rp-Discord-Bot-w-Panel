@@ -1,20 +1,10 @@
 // User Statistics & Message Count Leaderboard Page
 // Displays all users' message counts with Discord usernames
 
-const { generateSidebarHTML, generateSidebarStyles, generateSidebarScripts } = require('./shared-template');
+const { generate } = require('./shared-template');
 
 function generateStatsPage(bot, PANEL_BASE) {
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>JepsenCloud Panel — Statistics</title>
-  <link rel="stylesheet" href="/shared.css" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.css">
-  <style>
-    ${generateSidebarStyles()}
-    
+  const head = `
     .user-cell{display:flex;align-items:center;gap:12px}
     .avatar{width:36px;height:36px;border-radius:50%;background:var(--gradient-glass);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;color:var(--accent-cyan)}
     .username{font-weight:500;color:var(--text)}
@@ -44,25 +34,9 @@ function generateStatsPage(bot, PANEL_BASE) {
     .channel-actions{display:flex;gap:10px;flex-wrap:wrap}
     .pill{display:inline-flex;gap:8px;align-items:center;border:1px solid var(--border);border-radius:999px;padding:6px 10px;background:color-mix(in srgb, var(--accent-purple) 6%, transparent);color:var(--text);font-size:12px}
     .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
-  </style>
-</head>
-<body>
-  <div class="dashboard-wrapper">
-    ${generateSidebarHTML({
-      title: bot.name,
-      subtitle: 'Statistics',
-      icon: '📊',
-      botKey: bot.key,
-      PANEL_BASE,
-      currentPage: 'stats'
-    })}
+  `;
 
-    <main class="main-scroll-container">
-      <div class="scroll-progress">
-        <div class="scroll-progress-bar" id="scrollProgressBar"></div>
-      </div>
-
-      <div data-scroll-container id="scrollContainer">
+  const body = `
         <section class="panel-section" id="stats" data-scroll-section>
           <div class="section-header" data-scroll data-scroll-class="is-inview">
             <h1 class="section-title"><span>📊</span> User Statistics</h1>
@@ -199,12 +173,9 @@ function generateStatsPage(bot, PANEL_BASE) {
             </div>
           </div>
         </section>
-      </div>
-    </main>
-  </div>
+  `;
 
-  ${generateSidebarScripts()}
-
+  const scripts = `
   <script>
     const PANEL_BASE = '${PANEL_BASE}';
     const BOT_KEY = '${bot.key}';
@@ -587,8 +558,17 @@ function generateStatsPage(bot, PANEL_BASE) {
       loadStats();
     });
   </script>
-</body>
-</html>`;
+  `;
+
+  return generate({
+    head,
+    body,
+    scripts,
+    botKey: bot.key,
+    botName: bot.name,
+    title: 'JepsenCloud Panel — Statistics',
+    currentPage: 'stats'
+  });
 }
 
 module.exports = { generateStatsPage };

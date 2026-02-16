@@ -2,7 +2,7 @@
 
 A comprehensive Discord bot with an advanced web-based administration panel, featuring statistics tracking, AI engagement, rate limiting, and extensive customization options.
 
-![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)
+![Node.js](https://img.shields.io/badge/Node.js-20+-green.svg)
 ![Discord.js](https://img.shields.io/badge/Discord.js-14+-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
@@ -54,6 +54,16 @@ A comprehensive Discord bot with an advanced web-based administration panel, fea
 - **Export Functionality** - Export server stats to CSV
 - **User Preferences** - Language settings and customization
 
+### Game & Economy (SA-MP RP)
+- **SA-MP Life** - Roleplay economy game (`/reg`, `/work`, `/rob`, `/car`, `/house`)
+- **Levels & XP** - Experience-based leveling system with role rewards
+- **Badges** - Collectible user badges with display formatting
+- **Wanted Stars** - GTA-style wanted star assignments and leaderboard
+- **Trivia** - Interactive trivia quiz game
+- **Radio Vote** - Radio song voting system
+- **Weekly Awards** - Automated weekly awards with leaderboard posts
+- **SA-MP Server Status** - Real-time SA-MP server monitoring via `/samp`
+
 ### Web Administration Panel
 - **Multi-User Authentication** - Database-backed user system with roles
 - **User Management** - Create, delete, and manage panel users (Admin)
@@ -69,66 +79,114 @@ A comprehensive Discord bot with an advanced web-based administration panel, fea
 
 ## 🏗 Architecture
 
+### Design Principles
+
+The codebase follows a **thin orchestrator** pattern: `src/index.js` (~480 lines) creates resources (DB, Discord client, Express app) and wires together self-contained modules. Each module imports its own feature dependencies directly — no pass-through imports.
+
 ### Project Structure
 
 ```
 /opt/jepsencloud-bot/
 ├── src/
-│   ├── index.js                 # Main entry point
+│   ├── index.js                 # Thin orchestrator (~480 lines)
 │   ├── runtime.js               # Runtime configuration
-│   ├── bot/
-│   │   ├── discordClient.js     # Discord client setup
-│   │   ├── slashCommands.js     # Command registration
-│   │   └── statsDb.js           # Database operations
-│   ├── features/
-│   │   ├── ai-engagement.js     # ML-based AI responses
-│   │   ├── analytics.js         # Advanced analytics
-│   │   ├── enhanced-backfill.js # Message history loader
-│   │   ├── holidays.js          # Holiday system
-│   │   ├── markov-generator.js  # Text generation
-│   │   ├── message-index-cleanup.js
-│   │   ├── milestones.js        # Achievement system
-│   │   ├── ml-engine.js         # Machine learning engine
-│   │   ├── rate-limiter.js      # Rate limiting
-│   │   ├── reactions.js         # Reaction tracking
-│   │   ├── reconciliation.js    # Count verification
-│   │   ├── robust-message-counting.js
-│   │   ├── streaks.js           # Daily streak tracking
-│   │   ├── user-preferences.js  # User settings
-│   │   └── weekly-stats.js      # Weekly leaderboards
+│   ├── panel-only.js            # Standalone panel entry point
+│   │
+│   ├── bot/                     # Discord bot layer
+│   │   ├── helpers.js           # Shared bot utilities (formatTimeOnServer, ruPlural, etc.)
+│   │   ├── schedulers.js        # All periodic tasks (ML retrain, reconciliation, cleanup, etc.)
+│   │   ├── discordClient.js     # Discord client factory
+│   │   ├── slashCommands.js     # Slash command registration
+│   │   ├── statsDb.js           # Legacy DB operations
+│   │   ├── commands/
+│   │   │   └── dispatcher.js    # Slash command dispatch (all /command handlers)
+│   │   └── events/
+│   │       └── handlers.js      # Discord event handlers (message, reaction, guild, etc.)
+│   │
+│   ├── features/                # Self-contained feature modules
+│   │   ├── ai-engagement.js     # ML-based AI responses & engagement settings
+│   │   ├── analytics.js         # Advanced analytics & daily stats
+│   │   ├── backfill.js          # Guild message backfill orchestration
+│   │   ├── badges.js            # User badge system
+│   │   ├── enhanced-backfill.js # Extended backfill with progress tracking
+│   │   ├── holidays.js          # Holiday system (calend.ru, manual, scheduling)
+│   │   ├── incremental-sync.js  # Incremental message synchronization
+│   │   ├── leaderboard-cache.js # Cached leaderboard queries
+│   │   ├── levels.js            # XP & leveling system
+│   │   ├── markov-generator.js  # Markov chain text generation
+│   │   ├── message-counting-debug.js # Debug tracing for message counts
+│   │   ├── message-index-cleanup.js  # Weekly old message index cleanup
+│   │   ├── milestones.js        # Achievement celebrations (100, 500, 1k, 5k+)
+│   │   ├── ml-engine.js         # Machine learning engine (training, inference)
+│   │   ├── radio-vote.js        # Radio song voting system
+│   │   ├── rate-limiter.js      # Per-channel/role rate limiting & strikes
+│   │   ├── reactions.js         # Reaction tracking & leaderboards
+│   │   ├── reconciliation.js    # Daily message count verification
+│   │   ├── robust-message-counting.js # Core message counting pipeline
+│   │   ├── samp-life.js         # SA-MP roleplay economy game
+│   │   ├── samp-status.js       # SA-MP server status tracker
+│   │   ├── security-pipeline.js # Message security checks
+│   │   ├── streaks.js           # Daily activity streak tracking
+│   │   ├── trivia.js            # Trivia quiz game
+│   │   ├── user-preferences.js  # User settings & preferences
+│   │   ├── wanted-stars.js      # GTA-style wanted star system
+│   │   ├── weekly-awards.js     # Automated weekly award posts
+│   │   └── weekly-stats.js      # Weekly leaderboard resets
+│   │
+│   ├── db/
+│   │   └── schema.js            # Database schema initialization
+│   │
 │   ├── utils/
-│   │   ├── db-helpers.js        # Database utilities
-│   │   └── i18n.js              # Internationalization
-│   ├── views/                   # EJS templates
-│   │   ├── accuracy-monitor.ejs
+│   │   ├── db-helpers.js        # Database utilities (dbRun, dbGet, dbAll, getKV, setKV)
+│   │   └── logger.js            # Structured logging (LOG_LEVEL, LOG_FORMAT)
+│   │
+│   ├── views/                   # EJS templates (login, users, change-password)
 │   │   ├── bot.ejs
 │   │   ├── home.ejs
 │   │   ├── login.ejs
-│   │   ├── users.ejs            # User management page
-│   │   └── change-password.ejs  # Password change page
+│   │   ├── users.ejs
+│   │   └── change-password.ejs
+│   │
 │   └── web/
-│       ├── server.js            # Express web server
-│       ├── auth.js              # Multi-user authentication
-│       ├── botsRegistry.js      # Bot configuration
-│       ├── commands-page.js     # Commands documentation
-│       ├── ai-engagement-page.js
-│       ├── rate-limiter-page.js
-│       ├── messages-page.js
-│       ├── stats-page.js
-│       ├── accuracy-monitor-page.js
-│       └── public/
-│           ├── app.css
-│           ├── bot.js
-│           └── snow.js
-├── public/
-│   ├── index.html              # Landing page
-│   ├── shared.css              # Shared styles
-│   ├── snow.css                # Snow effect
+│       ├── shared-template.js   # Unified HTML generator (generate()) for all panel pages
+│       ├── panel-helpers.js     # Panel utility functions
+│       ├── auth.js              # Multi-user authentication (bcrypt, sessions)
+│       ├── context.js           # Request context middleware
+│       ├── botsRegistry.js      # Multi-bot configuration registry
+│       ├── server.js            # Standalone Express server
+│       ├── *-page.js            # Page generators (13 files, one per panel page)
+│       ├── public/              # Panel client-side assets
+│       │   ├── app.css
+│       │   ├── bot.js
+│       │   └── snow.js
+│       └── routes/              # Express route modules (17 files)
+│           ├── bot-pages.js     # All panel page rendering routes
+│           ├── auth.js          # Login/logout/password routes
+│           ├── stats.js         # Statistics API
+│           ├── messages.js      # Embed message management
+│           ├── channels.js      # Channel management
+│           ├── holidays.js      # Holiday CRUD routes
+│           ├── ai-engagement.js # AI settings routes
+│           ├── rate-limits.js   # Rate limit config routes
+│           ├── countdown.js     # Countdown config routes
+│           ├── analytics.js     # Analytics API
+│           ├── accuracy.js      # Accuracy monitoring API
+│           ├── automod.js       # Automod config routes
+│           ├── commands.js      # Commands documentation
+│           ├── debug.js         # Debug & trace routes
+│           ├── history.js       # Message history routes
+│           ├── samp-servers.js  # SA-MP server status routes
+│           └── whitelist.js     # Whitelist management routes
+│
+├── public/                      # Static landing page
+│   ├── index.html
+│   ├── shared.css
+│   ├── snow.css
 │   └── snow.js
-├── scripts/                    # Utility scripts
-├── data/                       # SQLite database
-├── logs/                       # Application logs
-└── backups/                    # Database backups
+├── scripts/                     # Utility & maintenance scripts
+├── data/                        # SQLite database (stats.db)
+├── logs/                        # Application logs
+└── backups/                     # Database backups
 ```
 
 ### Database Schema
@@ -148,7 +206,7 @@ A comprehensive Discord bot with an advanced web-based administration panel, fea
 
 ### Prerequisites
 
-- **Node.js** 18.x or higher
+- **Node.js** 20.x or higher
 - **npm** or **yarn**
 - **PM2** (for process management)
 - **Discord Bot Token**
@@ -418,8 +476,9 @@ pm2 logs jepsencloud-panel
 ### Testing
 
 ```bash
-# Unit tests (fast, exits cleanly)
+# Unit tests — 26 tests across 3 suites (fast, exits cleanly)
 npm test
+# or: node --test src/features/*.test.js
 
 # Analytics integration checks (DB + endpoints)
 npm run test:integration
@@ -429,6 +488,8 @@ npm run test:all
 
 # Run a specific unit test file
 node --test src/features/robust-message-counting.test.js
+node --test src/features/samp-life.test.js
+node --test src/features/new-features.test.js
 ```
 
 ### Database Utilities

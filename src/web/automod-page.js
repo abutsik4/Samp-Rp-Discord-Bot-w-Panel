@@ -1,19 +1,9 @@
 // AutoMod Management Page
 
-const { generateSidebarHTML, generateSidebarStyles, generateSidebarScripts } = require('./shared-template');
+const { generate } = require('./shared-template');
 
 function generateAutoModPage(bot, PANEL_BASE) {
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>JepsenCloud Panel — AutoMod</title>
-  <link rel="stylesheet" href="/shared.css" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.css">
-  <style>
-    ${generateSidebarStyles()}
-    
+  const head = `
     .alert{padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:14px}
     .alert-warning{background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.3);color:var(--accent-amber)}
     .word-list{list-style:none}
@@ -29,25 +19,9 @@ function generateAutoModPage(bot, PANEL_BASE) {
     .stat-box{background:linear-gradient(135deg,rgba(244,63,94,.1),rgba(251,191,36,.1));border:1px solid var(--border);border-radius:10px;padding:20px;text-align:center;margin-bottom:20px}
     .stat-value{font-size:36px;font-weight:700;background:linear-gradient(135deg,var(--accent-rose),var(--accent-amber));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
     .stat-label{font-size:13px;color:var(--text-muted);margin-top:8px}
-  </style>
-</head>
-<body>
-  <div class="dashboard-wrapper">
-    ${generateSidebarHTML({
-      title: bot.name,
-      subtitle: 'AutoMod',
-      icon: '🛡️',
-      botKey: bot.key,
-      PANEL_BASE,
-      currentPage: 'automod'
-    })}
+  `;
 
-    <main class="main-scroll-container">
-      <div class="scroll-progress">
-        <div class="scroll-progress-bar" id="scrollProgressBar"></div>
-      </div>
-
-      <div data-scroll-container id="scrollContainer">
+  const body = `
         <section class="panel-section" data-scroll-section>
           <div class="section-header" data-scroll data-scroll-class="is-inview">
             <h1 class="section-title"><span>🛡️</span> AutoMod - Banned Words</h1>
@@ -93,12 +67,9 @@ function generateAutoModPage(bot, PANEL_BASE) {
             </ul>
           </div>
         </section>
-      </div>
-    </main>
-  </div>
+  `;
 
-  ${generateSidebarScripts()}
-
+  const scripts = `
   <script>
     const botKey = '${bot.key}';
     function escapeHtml(str) { return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -165,8 +136,17 @@ function generateAutoModPage(bot, PANEL_BASE) {
 
     document.addEventListener('DOMContentLoaded', loadBannedWords);
   </script>
-</body>
-</html>`;
+  `;
+
+  return generate({
+    head,
+    body,
+    scripts,
+    botKey: bot.key,
+    botName: bot.name,
+    title: 'JepsenCloud Panel — AutoMod',
+    currentPage: 'automod'
+  });
 }
 
 module.exports = { generateAutoModPage };

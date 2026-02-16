@@ -1,19 +1,9 @@
 // AI Engagement Management Page
 
-const { generateSidebarHTML, generateSidebarStyles, generateSidebarScripts } = require('./shared-template');
+const { generate } = require('./shared-template');
 
 function generateAIEngagementPage(bot, PANEL_BASE) {
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>JepsenCloud Panel — AI Engagement</title>
-  <link rel="stylesheet" href="/shared.css" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.css">
-  <style>
-    ${generateSidebarStyles()}
-    
+  const head = `
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px}
     @media(max-width:900px){.grid{grid-template-columns:1fr}}
     .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px}
@@ -47,25 +37,9 @@ function generateAIEngagementPage(bot, PANEL_BASE) {
     .history-item{padding:12px;margin-bottom:8px;background:var(--bg-card);border-radius:6px;border-left:3px solid var(--accent-cyan);font-size:13px}
     .history-item-header{display:flex;justify-content:space-between;margin-bottom:6px;font-size:12px;color:var(--text-muted)}
     .admin-actions{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
-  </style>
-</head>
-<body>
-  <div class="dashboard-wrapper">
-    ${generateSidebarHTML({
-      title: bot.name,
-      subtitle: 'AI Engagement',
-      icon: '🤖',
-      botKey: bot.key,
-      PANEL_BASE,
-      currentPage: 'ai-engagement'
-    })}
+  `;
 
-    <main class="main-scroll-container">
-      <div class="scroll-progress">
-        <div class="scroll-progress-bar" id="scrollProgressBar"></div>
-      </div>
-
-      <div data-scroll-container id="scrollContainer">
+  const body = `
         <section class="panel-section" data-scroll-section>
           <div class="section-header" data-scroll data-scroll-class="is-inview">
             <h1 class="section-title"><span>🤖</span> AI Chat Engagement</h1>
@@ -206,12 +180,9 @@ function generateAIEngagementPage(bot, PANEL_BASE) {
             </ul>
           </div>
         </section>
-      </div>
-    </main>
-  </div>
+  `;
 
-  ${generateSidebarScripts()}
-
+  const scripts = `
   <script>
     const botKey = '${bot.key}';
     const apiBase = '${PANEL_BASE}';
@@ -489,8 +460,17 @@ function generateAIEngagementPage(bot, PANEL_BASE) {
       await loadModelStats();
     });
   </script>
-</body>
-</html>`;
+  `;
+
+  return generate({
+    head,
+    body,
+    scripts,
+    botKey: bot.key,
+    botName: bot.name,
+    title: 'JepsenCloud Panel — AI Engagement',
+    currentPage: 'ai-engagement'
+  });
 }
 
 module.exports = { generateAIEngagementPage };

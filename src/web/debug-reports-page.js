@@ -1,20 +1,10 @@
 // Panel Debug Reports Viewer
 // Lists and inspects reports submitted from the Ctrl+Alt+D debug overlay
 
-const { generateSidebarHTML, generateSidebarStyles, generateSidebarScripts } = require('./shared-template');
+const { generate } = require('./shared-template');
 
 function generateDebugReportsPage(bot, PANEL_BASE) {
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>JepsenCloud Panel — Debug Reports</title>
-  <link rel="stylesheet" href="/shared.css" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.css">
-  <style>
-    ${generateSidebarStyles()}
-
+  const head = `
     .grid{display:grid;grid-template-columns:1fr;gap:16px}
     @media(min-width: 1100px){.grid{grid-template-columns: 420px 1fr}}
     .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
@@ -32,22 +22,9 @@ function generateDebugReportsPage(bot, PANEL_BASE) {
     .empty,.loading,.error{padding:18px;color:var(--text-muted)}
     .error{color:var(--accent-rose)}
     .pager{display:flex;gap:10px;align-items:center;justify-content:center;margin-top:12px;color:var(--text-muted);font-size:12px}
-  </style>
-</head>
-<body>
-  <div class="dashboard-wrapper">
-    ${generateSidebarHTML({
-      title: bot.name,
-      subtitle: 'Debug Reports',
-      icon: '🪲',
-      botKey: bot.key,
-      PANEL_BASE,
-      currentPage: 'debug-reports'
-    })}
+  `;
 
-    <main class="main-scroll-container">
-      <div class="scroll-progress"><div class="scroll-progress-bar" id="scrollProgressBar"></div></div>
-      <div data-scroll-container id="scrollContainer">
+  const body = `
         <section class="panel-section" data-scroll-section>
           <div class="section-header" data-scroll data-scroll-class="is-inview">
             <h1 class="section-title"><span>🪲</span> Debug Reports</h1>
@@ -99,12 +76,9 @@ function generateDebugReportsPage(bot, PANEL_BASE) {
             </div>
           </div>
         </section>
-      </div>
-    </main>
-  </div>
+  `;
 
-  ${generateSidebarScripts()}
-
+  const scripts = `
   <script>
     const PANEL_BASE = '${PANEL_BASE}';
     let selectedId = null;
@@ -264,8 +238,17 @@ function generateDebugReportsPage(bot, PANEL_BASE) {
 
     document.addEventListener('DOMContentLoaded', loadList);
   </script>
-</body>
-</html>`;
+  `;
+
+  return generate({
+    head,
+    body,
+    scripts,
+    botKey: bot.key,
+    botName: bot.name,
+    title: 'JepsenCloud Panel — Debug Reports',
+    currentPage: 'debug-reports'
+  });
 }
 
 module.exports = { generateDebugReportsPage };

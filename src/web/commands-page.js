@@ -1,6 +1,6 @@
 // Commands Documentation Page
 
-const { generateSidebarHTML, generateSidebarStyles, generateSidebarScripts } = require('./shared-template');
+const { generate } = require('./shared-template');
 
 function generateCommandsPage(bot, PANEL_BASE, disabledCommands = []) {
   const disabledSet = new Set(disabledCommands.map(d => d.command_name));
@@ -11,17 +11,7 @@ function generateCommandsPage(bot, PANEL_BASE, disabledCommands = []) {
     return '<div class="command-card ' + (isDisabled ? 'command-disabled' : '') + '" data-command="' + name + '"><div class="command-header"><div class="command-info"><div class="command-name">/' + name + ' ' + badgeHtml + '</div><div class="command-desc">' + desc + '</div>' + (usage ? '<div class="command-usage">Usage: ' + usage + '</div>' : '') + '</div><label class="toggle-switch"><input type="checkbox" ' + (isDisabled ? '' : 'checked') + ' data-command="' + name + '" onchange="toggleCommand(this)"><span class="toggle-slider"></span></label></div></div>';
   }
 
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>JepsenCloud Panel - Bot Commands</title>
-  <link rel="stylesheet" href="/shared.css" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.css">
-  <style>
-    ${generateSidebarStyles()}
-    
+  const head = `
     .commands-grid{display:grid;gap:12px}
     .category-section{margin-bottom:24px}
     .category-title{font-size:16px;font-weight:600;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
@@ -49,25 +39,9 @@ function generateCommandsPage(bot, PANEL_BASE, disabledCommands = []) {
     .alert-error{background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);color:#f87171}
     .muted{color:var(--text-muted);font-size:12.5px}
     .empty{text-align:center;padding:60px 20px;color:var(--text-muted)}
-  </style>
-</head>
-<body>
-  <div class="dashboard-wrapper">
-    ${generateSidebarHTML({
-      title: bot.name,
-      subtitle: 'Commands',
-      icon: '⚡',
-      botKey: bot.key,
-      PANEL_BASE,
-      currentPage: 'commands'
-    })}
+  `;
 
-    <main class="main-scroll-container">
-      <div class="scroll-progress">
-        <div class="scroll-progress-bar" id="scrollProgressBar"></div>
-      </div>
-
-      <div data-scroll-container id="scrollContainer">
+  const body = `
         <section class="panel-section" data-scroll-section>
           <div class="section-header" data-scroll data-scroll-class="is-inview">
             <h1 class="section-title"><span>⚡</span> Bot Commands</h1>
@@ -85,12 +59,9 @@ function generateCommandsPage(bot, PANEL_BASE, disabledCommands = []) {
             <div id="commandsRoot"></div>
           </div>
         </section>
-      </div>
-    </main>
-  </div>
+  `;
 
-  ${generateSidebarScripts()}
-
+  const scripts = `
   <script>
     const botKey = '${bot.key}';
     const apiBase = '${PANEL_BASE}';
@@ -227,8 +198,17 @@ function generateCommandsPage(bot, PANEL_BASE, disabledCommands = []) {
 
     document.addEventListener('DOMContentLoaded', loadCommands);
   </script>
-</body>
-</html>`;
+  `;
+
+  return generate({
+    head,
+    body,
+    scripts,
+    botKey: bot.key,
+    botName: bot.name,
+    title: 'JepsenCloud Panel - Bot Commands',
+    currentPage: 'commands'
+  });
 }
 
 module.exports = { generateCommandsPage };

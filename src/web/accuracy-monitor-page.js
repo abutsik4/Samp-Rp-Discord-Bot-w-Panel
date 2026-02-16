@@ -12,6 +12,7 @@
 
 const { dbAll, dbGet } = require("../utils/db-helpers");
 const { reconcileGuild } = require("../features/reconciliation");
+const { generate } = require("./shared-template");
 
 function generateAccuracyMonitorPage(bot, PANEL_BASE) {
   return async (req, res) => {
@@ -27,31 +28,13 @@ function generateAccuracyMonitorPage(bot, PANEL_BASE) {
       // Get error queue status
       const errorQueueStatus = await getErrorQueueStatus(req.app.locals.db);
 
-      const html = `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>JepsenCloud Panel — Accuracy Monitor</title>
-  <link rel="stylesheet" href="/shared.css" />
-  <style>
+      const html = generate({
+        title: "JepsenCloud Panel — Accuracy Monitor",
+        botKey: bot.key,
+        botName: bot.name,
+        currentPage: "accuracy",
+        head: `
     :root{color-scheme:dark;}
-    *{box-sizing:border-box;margin:0;padding:0}
-    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg-main);color:var(--text);line-height:1.6}
-    .wrap{max-width:1400px;margin:0 auto;padding:20px}
-    .top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px}
-    .title{font-weight:700;font-size:24px;display:flex;align-items:center;gap:8px}
-    .title .emoji{font-size:28px}
-    .muted{color:var(--text-muted);font-size:13px;margin-top:4px}
-    .nav{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-    .nav a{color:var(--accent-cyan);text-decoration:none;font-size:14px;transition:color .2s;padding:8px 12px;border-radius:6px}
-    .nav a:hover{background:color-mix(in srgb, var(--accent-cyan) 10%, transparent);color:var(--accent-purple)}
-    .btn{padding:10px 18px;border-radius:8px;border:1px solid var(--border);background:var(--input-bg);color:var(--text);cursor:pointer;font-size:14px;font-weight:500;transition:all .2s}
-    .btn:hover{background:var(--input-bg-focus);border-color:var(--accent-purple)}
-    .btn-primary{background:linear-gradient(135deg,var(--accent-purple),var(--accent-cyan));border:none;color:#fff;font-weight:600}
-    .btn-primary:hover{opacity:.9;transform:translateY(-1px)}
-    .btn-danger{background:linear-gradient(135deg,var(--accent-rose),#f97316);border:none;color:#fff;font-weight:600}
-    .btn-danger:hover{opacity:.9;transform:translateY(-1px)}
     .card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,.3);margin-bottom:20px}
     .card-title{font-size:16px;font-weight:600;margin-bottom:16px;color:var(--accent-purple);display:flex;align-items:center;gap:8px}
     .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px}
@@ -76,128 +59,118 @@ function generateAccuracyMonitorPage(bot, PANEL_BASE) {
     .event-failed{background:rgba(239,68,68,.2);color:#ff6b6b}
     .event-bulk_decrement{background:rgba(88,166,255,.2);color:#5eb3ff}
     .empty{text-align:center;padding:40px 20px;color:var(--text-muted)}
-    .loading{text-align:center;padding:40px 20px}
-    .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)}
-    .toolbar-info{color:var(--text-muted);font-size:13px;flex:1}
     .accuracy-bar{width:100%;height:8px;background:color-mix(in srgb, var(--border) 55%, transparent);border-radius:4px;overflow:hidden;margin-top:8px}
     .accuracy-fill{height:100%;background:linear-gradient(90deg,var(--accent-emerald),var(--accent-cyan));transition:width .3s}
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="top">
-      <div>
-        <div class="title"><span class="emoji">🔍</span> Accuracy Monitor</div>
-        <div class="muted">Real-time message counting accuracy and error tracking</div>
-      </div>
-      <div class="nav">
-        <button onclick="history.back()" class="btn" type="button" style="padding:8px 16px">← Back</button>
-        <a href="${PANEL_BASE}/bot/${bot.key}">🏠 Panel</a>
-        <a href="${PANEL_BASE}/bot/${bot.key}/stats">📊 Stats</a>
-        <a href="${PANEL_BASE}/bot/${bot.key}/rate-limits">🛡️ Spam Limits</a>
-        <a href="${PANEL_BASE}/bot/${bot.key}/messages">📨 Messages</a>
-        <a href="${PANEL_BASE}/bot/${bot.key}/ai-engagement">🤖 AI</a>
-        <a href="${PANEL_BASE}/bot/${bot.key}/commands">📚 Commands</a>
-        <a href="${PANEL_BASE}/verification-dashboard?bot=${bot.key}">🔍 Verification</a>
-        <form method="post" action="${PANEL_BASE}/logout" style="margin:0"><button class="btn" type="submit">Logout</button></form>
-      </div>
-    </div>
-
-    <!-- Stats Overview -->
-    <div class="card">
-      <div class="card-title">📈 Accuracy Statistics</div>
-      <div class="grid">
-        <div class="stat-box success">
-          <div class="stat-value">${stats.accuracyPercent.toFixed(1)}%</div>
-          <div class="stat-label">Accuracy Rate</div>
-          <div class="accuracy-bar">
-            <div class="accuracy-fill" style="width:${stats.accuracyPercent}%"></div>
+    .section-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+    .section-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  `,
+        body: `
+        <section class="panel-section" id="accuracy" data-scroll-section>
+          <div class="section-header" data-scroll data-scroll-class="is-inview">
+            <div>
+              <h1 class="section-title"><span>🔍</span> Accuracy Monitor</h1>
+              <p class="section-subtitle">Real-time message counting accuracy and error tracking</p>
+            </div>
+            <div class="section-actions">
+              <button onclick="history.back()" class="btn" type="button" style="padding:8px 16px">← Back</button>
+              <a href="${PANEL_BASE}/verification-dashboard?bot=${bot.key}" class="btn">🔍 Verification</a>
+            </div>
           </div>
-        </div>
-        <div class="stat-box">
-          <div class="stat-value">${stats.totalUsers.toLocaleString()}</div>
-          <div class="stat-label">Total Users</div>
-        </div>
-        <div class="stat-box">
-          <div class="stat-value">${stats.totalMessages.toLocaleString()}</div>
-          <div class="stat-label">Total Messages Counted</div>
-        </div>
-        <div class="stat-box">
-          <div class="stat-value">${stats.indexedMessages.toLocaleString()}</div>
-          <div class="stat-label">Indexed Messages</div>
-        </div>
-        <div class="stat-box ${stats.discrepancies > 0 ? 'warning' : 'success'}">
-          <div class="stat-value">${stats.discrepancies}</div>
-          <div class="stat-label">Discrepancies</div>
-        </div>
-      </div>
-    </div>
 
-    <!-- Error Queue Status -->
-    <div class="card">
-      <div class="card-title">⚠️ Error Queue Status</div>
-      <div class="grid">
-        <div class="stat-box">
-          <div class="stat-value">${errorQueueStatus.total}</div>
-          <div class="stat-label">Total Errors</div>
-        </div>
-        <div class="stat-box ${errorQueueStatus.pending > 0 ? 'warning' : 'success'}">
-          <div class="stat-value">${errorQueueStatus.pending}</div>
-          <div class="stat-label">Pending Retry</div>
-        </div>
-        <div class="stat-box ${errorQueueStatus.failed > 0 ? 'danger' : 'success'}">
-          <div class="stat-value">${errorQueueStatus.failed}</div>
-          <div class="stat-label">Failed (Max Retries)</div>
-        </div>
-      </div>
-    </div>
+          <div class="content-card" data-scroll data-scroll-class="is-inview">
+            <div class="card-title">📈 Accuracy Statistics</div>
+            <div class="grid">
+              <div class="stat-box success">
+                <div class="stat-value">${stats.accuracyPercent.toFixed(1)}%</div>
+                <div class="stat-label">Accuracy Rate</div>
+                <div class="accuracy-bar">
+                  <div class="accuracy-fill" style="width:${stats.accuracyPercent}%"></div>
+                </div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-value">${stats.totalUsers.toLocaleString()}</div>
+                <div class="stat-label">Total Users</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-value">${stats.totalMessages.toLocaleString()}</div>
+                <div class="stat-label">Total Messages Counted</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-value">${stats.indexedMessages.toLocaleString()}</div>
+                <div class="stat-label">Indexed Messages</div>
+              </div>
+              <div class="stat-box ${stats.discrepancies > 0 ? "warning" : "success"}">
+                <div class="stat-value">${stats.discrepancies}</div>
+                <div class="stat-label">Discrepancies</div>
+              </div>
+            </div>
+          </div>
 
-    <!-- Recent Events -->
-    <div class="card">
-      <div class="card-title">📋 Recent Events (Last 50)</div>
-      ${recentEvents.length === 0 ? '<div class="empty">No events recorded yet</div>' : `
-        <div class="table-container">
-          <table>
-            <thead>
-              <tr>
-                <th style="width:120px">Event Type</th>
-                <th>User</th>
-                <th>Guild ID</th>
-                <th>Details</th>
-                <th style="width:180px">Time</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${recentEvents.map(e => `
-                <tr>
-                  <td><span class="event-type event-${e.event_type}">${e.event_type.toUpperCase()}</span></td>
-                  <td style="font-size:12px"><div style="color:var(--text);font-weight:500">${e.username || 'Unknown'}</div><code style="color:var(--accent-cyan);font-size:10px">${e.user_id || '-'}</code></td>
-                  <td><code style="color:var(--accent-cyan);font-size:11px">${e.guild_id || '-'}</code></td>
-                  <td style="color:var(--text-muted);font-size:12px">${e.details.newCount !== undefined ? '→ ' + e.details.newCount : e.details.operation || '-'}</td>
-                  <td style="color:var(--text-muted);font-size:12px">${e.time}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-      `}
-    </div>
+          <div class="content-card" data-scroll data-scroll-class="is-inview">
+            <div class="card-title">⚠️ Error Queue Status</div>
+            <div class="grid">
+              <div class="stat-box">
+                <div class="stat-value">${errorQueueStatus.total}</div>
+                <div class="stat-label">Total Errors</div>
+              </div>
+              <div class="stat-box ${errorQueueStatus.pending > 0 ? "warning" : "success"}">
+                <div class="stat-value">${errorQueueStatus.pending}</div>
+                <div class="stat-label">Pending Retry</div>
+              </div>
+              <div class="stat-box ${errorQueueStatus.failed > 0 ? "danger" : "success"}">
+                <div class="stat-value">${errorQueueStatus.failed}</div>
+                <div class="stat-label">Failed (Max Retries)</div>
+              </div>
+            </div>
+          </div>
 
-    <!-- Actions -->
-    <div class="card">
-      <div class="card-title">🛠️ Admin Tools</div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <button class="btn btn-primary" onclick="runReconciliation()">Run Reconciliation</button>
-        <button class="btn btn-danger" onclick="runFullSync()">Full Sync (Force)</button>
-      </div>
-      <div id="actionResult" style="margin-top:16px;display:none"></div>
-    </div>
-  </div>
+          <div class="content-card" data-scroll data-scroll-class="is-inview">
+            <div class="card-title">📋 Recent Events (Last 50)</div>
+            ${recentEvents.length === 0 ? '<div class="empty">No events recorded yet</div>' : `
+              <div class="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style="width:120px">Event Type</th>
+                      <th>User</th>
+                      <th>Guild ID</th>
+                      <th>Details</th>
+                      <th style="width:180px">Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${recentEvents
+                      .map(
+                        (e) => `
+                      <tr>
+                        <td><span class="event-type event-${e.event_type}">${e.event_type.toUpperCase()}</span></td>
+                        <td style="font-size:12px"><div style="color:var(--text);font-weight:500">${e.username || "Unknown"}</div><code style="color:var(--accent-cyan);font-size:10px">${e.user_id || "-"}</code></td>
+                        <td><code style="color:var(--accent-cyan);font-size:11px">${e.guild_id || "-"}</code></td>
+                        <td style="color:var(--text-muted);font-size:12px">${e.details.newCount !== undefined ? "→ " + e.details.newCount : e.details.operation || "-"}</td>
+                        <td style="color:var(--text-muted);font-size:12px">${e.time}</td>
+                      </tr>
+                    `
+                      )
+                      .join("")}
+                  </tbody>
+                </table>
+              </div>
+            `}
+          </div>
+
+          <div class="content-card" data-scroll data-scroll-class="is-inview">
+            <div class="card-title">🛠️ Admin Tools</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <button class="btn btn-primary" onclick="runReconciliation()">Run Reconciliation</button>
+              <button class="btn btn-danger" onclick="runFullSync()">Full Sync (Force)</button>
+            </div>
+            <div id="actionResult" style="margin-top:16px;display:none"></div>
+          </div>
+        </section>
 
   <script>
-    // Live Stats Auto-Update (every 5 seconds)
-    const botKey = new URLSearchParams(window.location.search).get('bot') || 'default';
-    const guildId = '${guildId || ''}';
+    const botKey = new URLSearchParams(window.location.search).get('bot') || '${bot.key}';
+    const guildId = '${guildId || ""}';
     let updateInterval;
 
     async function fetchLiveStats() {
@@ -214,9 +187,8 @@ function generateAccuracyMonitorPage(bot, PANEL_BASE) {
     }
 
     function updateStatsDisplay(stats) {
-      // Update accuracy percent
       const accuracyBox = document.querySelector('.stat-box.success');
-      if (accuracyBox) {
+      if (accuracyBox && typeof stats.accuracyPercent === 'number') {
         accuracyBox.innerHTML = \`
           <div class="stat-value">\${stats.accuracyPercent.toFixed(1)}%</div>
           <div class="stat-label">Accuracy Rate</div>
@@ -226,15 +198,14 @@ function generateAccuracyMonitorPage(bot, PANEL_BASE) {
         \`;
       }
 
-      // Update other stats (find and update each stat box)
       const statBoxes = document.querySelectorAll('.stat-box');
-      if (statBoxes[1]) {
+      if (statBoxes[1] && typeof stats.uniqueUsers === 'number') {
         statBoxes[1].innerHTML = \`
           <div class="stat-value">\${stats.uniqueUsers.toLocaleString()}</div>
           <div class="stat-label">Total Users</div>
         \`;
       }
-      if (statBoxes[2]) {
+      if (statBoxes[2] && typeof stats.totalMessages === 'number') {
         statBoxes[2].innerHTML = \`
           <div class="stat-value">\${stats.totalMessages.toLocaleString()}</div>
           <div class="stat-label">Total Messages Counted</div>
@@ -242,18 +213,15 @@ function generateAccuracyMonitorPage(bot, PANEL_BASE) {
       }
     }
 
-    // Start polling for live stats
     function startLiveStats() {
-      fetchLiveStats(); // Fetch immediately
-      updateInterval = setInterval(fetchLiveStats, 5000); // Then every 5 seconds
+      fetchLiveStats();
+      updateInterval = setInterval(fetchLiveStats, 5000);
     }
 
-    // Stop polling when user leaves
     window.addEventListener('beforeunload', () => {
       if (updateInterval) clearInterval(updateInterval);
     });
 
-    // Start when page loads
     document.addEventListener('DOMContentLoaded', startLiveStats);
 
     function showStatus(message, type = 'info') {
@@ -269,7 +237,7 @@ function generateAccuracyMonitorPage(bot, PANEL_BASE) {
         const response = await fetch('${PANEL_BASE}/api/accuracy/reconcile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ guildId: '${guildId || ''}' })
+          body: JSON.stringify({ guildId: '${guildId || ""}' })
         });
         const data = await response.json();
         if (data.success) {
@@ -290,7 +258,7 @@ function generateAccuracyMonitorPage(bot, PANEL_BASE) {
         const response = await fetch('${PANEL_BASE}/api/accuracy/fullsync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ guildId: '${guildId || ''}' })
+          body: JSON.stringify({ guildId: '${guildId || ""}' })
         });
         const data = await response.json();
         if (data.success) {
@@ -304,8 +272,8 @@ function generateAccuracyMonitorPage(bot, PANEL_BASE) {
       }
     }
   </script>
-</body>
-</html>`;
+  `,
+      });
 
       res.send(html);
     } catch (err) {

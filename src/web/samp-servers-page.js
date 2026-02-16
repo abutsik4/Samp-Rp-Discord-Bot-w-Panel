@@ -1,19 +1,9 @@
 // SAMP Servers Status Page
 
-const { generateSidebarHTML, generateSidebarStyles, generateSidebarScripts } = require('./shared-template');
+const { generate } = require('./shared-template');
 
 function generateSampServersPage(bot, PANEL_BASE) {
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>JepsenCloud Panel — SAMP Servers</title>
-  <link rel="stylesheet" href="/shared.css" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.css">
-  <style>
-    ${generateSidebarStyles()}
-    
+  const head = `
     .alert{padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:14px}
     .alert-success{background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.3);color:var(--accent-green)}
     .alert-error{background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);color:#f87171}
@@ -57,25 +47,9 @@ function generateSampServersPage(bot, PANEL_BASE) {
     .empty-state-icon{font-size:64px;margin-bottom:16px;opacity:.5}
     
     .channel-select{width:100%;padding:10px;border-radius:6px;border:1px solid var(--border);background:var(--input-bg);color:var(--text);margin-bottom:12px}
-  </style>
-</head>
-<body>
-  <div class="dashboard-wrapper">
-    ${generateSidebarHTML({
-      title: bot.name,
-      subtitle: 'SAMP Servers',
-      icon: '🎮',
-      botKey: bot.key,
-      PANEL_BASE,
-      currentPage: 'samp-servers'
-    })}
+  `;
 
-    <main class="main-scroll-container">
-      <div class="scroll-progress">
-        <div class="scroll-progress-bar" id="scrollProgressBar"></div>
-      </div>
-
-      <div data-scroll-container id="scrollContainer">
+  const body = `
         <section class="panel-section" data-scroll-section>
           <div class="section-header" data-scroll data-scroll-class="is-inview">
             <h1 class="section-title"><span>🎮</span> SA-MP Server Status</h1>
@@ -173,12 +147,9 @@ function generateSampServersPage(bot, PANEL_BASE) {
             </ul>
           </div>
         </section>
-      </div>
-    </main>
-  </div>
+  `;
 
-  ${generateSidebarScripts()}
-
+  const scripts = `
   <script>
     const botKey = '${bot.key}';
     const apiBase = '${PANEL_BASE}';
@@ -371,8 +342,17 @@ function generateSampServersPage(bot, PANEL_BASE) {
       loadChannels().then(() => loadServers());
     });
   </script>
-</body>
-</html>`;
+  `;
+
+  return generate({
+    head,
+    body,
+    scripts,
+    botKey: bot.key,
+    botName: bot.name,
+    title: 'JepsenCloud Panel — SAMP Servers',
+    currentPage: 'samp-servers'
+  });
 }
 
 module.exports = { generateSampServersPage };
