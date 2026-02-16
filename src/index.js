@@ -468,17 +468,33 @@ app.listen(PORT, () => {
 });
 
 // -------------------------
-// DISCORD LOGIN
+// DISCORD LOGIN (with retry on session exhaustion)
 // -------------------------
-client.login(TOKEN);
+(async function loginWithRetry() {
+  const MAX_RETRIES = 10;
+  const BASE_DELAY = 30_000; // 30 seconds
 
-/* 
-# reload unit files (only needed if you edited the .service file)
-sudo systemctl daemon-reload
-
-# restart the bot
-sudo systemctl restart jepsencloud-bot.service
-
-# check status (full, no pager)
-sudo systemctl status jepsencloud-bot.service --no-pager -l
-*/
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      await client.login(TOKEN);
+      return; // success
+    } catch (err) {
+      const msg = err?.message || '';
+      // Discord session limit: "Not enough sessions remaining … resets at <ISO>"
+      const resetMatch = msg.match(/resets at (.+)/);
+      if (resetMatch) {
+        const resetAt = new Date(resetMatch[1]);
+        const waitMs = Math.max(resetAt - Date.now(), 0) + 5_000; // +5 s buffer
+        const waitMin = (waitMs / 60_000).toFixed(1);
+        console.error(`[Login] Session limit hit (attempt ${attempt}/${MAX_RETRIES}). Waiting ${waitMin} min until ${resetAt.toISOString()}…`);
+        await new Promise(r => setTimeout(r, waitMs));
+      } else {
+        // Generic error — exponential backoff
+        const delay = Math.min(BASE_DELAY * 2 ** (attempt - 1), 10 * 60_000);
+        console.error(`[Login] Attempt ${attempt}/${MAX_RETRIES} failed: ${msg}. Retrying in ${(delay / 1000).toFixed(0)}s…`);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+  }
+  console.error('[Login] All retry attempts exhausted. The web panel is still running. Restart the process later to reconnect Discord.');
+})();
