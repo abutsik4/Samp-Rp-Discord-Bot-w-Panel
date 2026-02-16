@@ -25,14 +25,14 @@ function buildTopCommand(name, description) {
   return new SlashCommandBuilder()
     .setName(name)
     .setDescription(description)
-    .addChannelOption((o) => o.setName("channel").setDescription("Filter by specific channel (optional)").setRequired(false))
-    .addStringOption((o) => o.setName("date").setDescription("Filter by date (YYYY-MM-DD, optional)").setRequired(false))
-    .addStringOption((o) => o.setName("period").setDescription("Time period (optional)").setRequired(false)
+    .addChannelOption((o) => o.setName("channel").setDescription("Фильтр по каналу (необязательно)").setRequired(false))
+    .addStringOption((o) => o.setName("date").setDescription("Фильтр по дате (ГГГГ-ММ-ДД, необязательно)").setRequired(false))
+    .addStringOption((o) => o.setName("period").setDescription("Период (необязательно)").setRequired(false)
       .addChoices(
-        { name: "Today", value: "today" },
-        { name: "This Week", value: "week" },
-        { name: "This Month", value: "month" },
-        { name: "All Time", value: "all" }
+        { name: "Сегодня", value: "today" },
+        { name: "Эта неделя", value: "week" },
+        { name: "Этот месяц", value: "month" },
+        { name: "Всё время", value: "all" }
       ));
 }
 
@@ -40,92 +40,92 @@ function buildTopCommand(name, description) {
 
 function buildCommandsJson() {
   return [
-    new SlashCommandBuilder().setName("mystats").setDescription("Show your message stats in this server."),
+    new SlashCommandBuilder().setName("mystats").setDescription("Показать вашу статистику сообщений на сервере."),
     new SlashCommandBuilder()
       .setName("userstats")
-      .setDescription("Show message stats for another user.")
-      .addUserOption((o) => o.setName("user").setDescription("User to view").setRequired(true)),
+      .setDescription("Показать статистику другого пользователя.")
+      .addUserOption((o) => o.setName("user").setDescription("Выберите пользователя").setRequired(true)),
 
-    buildTopCommand("top5", "Show top 5 users by message count in this server."),
-    buildTopCommand("top10", "Show top 10 users by message count in this server."),
+    buildTopCommand("top5", "Топ 5 пользователей по количеству сообщений."),
+    buildTopCommand("top10", "Топ 10 пользователей по количеству сообщений."),
 
     new SlashCommandBuilder()
       .setName("backfill")
-      .setDescription("Backfill message history for this server (owner only, may take a long time)."),
+      .setDescription("Загрузить историю сообщений сервера (только владелец, может занять время)."),
     new SlashCommandBuilder()
       .setName("sync-missing")
-      .setDescription("Sync messages missed during downtime (owner only, fast incremental sync)."),
+      .setDescription("Синхронизировать пропущенные сообщения (только владелец, быстрая синхронизация)."),
     new SlashCommandBuilder()
       .setName("synccommands")
-      .setDescription("Re-register slash commands for this server (owner only)."),
+      .setDescription("Перерегистрировать слеш-команды для сервера (только владелец)."),
 
-    new SlashCommandBuilder().setName("weekly").setDescription("Show weekly leaderboard (resets every Monday)."),
+    new SlashCommandBuilder().setName("weekly").setDescription("Еженедельный рейтинг (обнуляется каждый понедельник)."),
     new SlashCommandBuilder()
       .setName("streak")
-      .setDescription("View message streak for you or another user.")
-      .addUserOption((o) => o.setName("user").setDescription("User to check (optional)").setRequired(false)),
+      .setDescription("Посмотреть серию активности (свою или другого пользователя).")
+      .addUserOption((o) => o.setName("user").setDescription("Пользователь (необязательно)").setRequired(false)),
 
     new SlashCommandBuilder()
       .setName("reactions")
-      .setDescription("View reaction leaderboard.")
+      .setDescription("Рейтинг по реакциям.")
       .addStringOption((o) =>
-        o.setName("type").setDescription("Type of reactions").setRequired(false)
-          .addChoices({ name: "Given", value: "given" }, { name: "Received", value: "received" })
+        o.setName("type").setDescription("Тип реакций").setRequired(false)
+          .addChoices({ name: "Отправленные", value: "given" }, { name: "Полученные", value: "received" })
       ),
 
-    new SlashCommandBuilder().setName("export").setDescription("Export server stats to CSV (owner only)."),
+    new SlashCommandBuilder().setName("export").setDescription("Экспорт статистики в CSV (только владелец)."),
     new SlashCommandBuilder().setName("countdown").setDescription("Обратный отсчёт до Нового Года!"),
     new SlashCommandBuilder().setName("mystrikes").setDescription("Просмотреть ваши текущие нарушения и страйки"),
 
     // Channel whitelist
     new SlashCommandBuilder()
       .setName("whitelist")
-      .setDescription("Manage counting channel whitelist (owner only)")
-      .addSubcommand((s) => s.setName("add").setDescription("Add channel to counting whitelist")
-        .addChannelOption((o) => o.setName("channel").setDescription("Channel to add").setRequired(true)))
-      .addSubcommand((s) => s.setName("remove").setDescription("Remove channel from counting whitelist")
-        .addChannelOption((o) => o.setName("channel").setDescription("Channel to remove").setRequired(true)))
-      .addSubcommand((s) => s.setName("list").setDescription("List whitelisted channels"))
-      .addSubcommand((s) => s.setName("clear").setDescription("Clear whitelist (count all channels)")),
+      .setDescription("Управление белым списком каналов (только владелец)")
+      .addSubcommand((s) => s.setName("add").setDescription("Добавить канал в белый список")
+        .addChannelOption((o) => o.setName("channel").setDescription("Канал для добавления").setRequired(true)))
+      .addSubcommand((s) => s.setName("remove").setDescription("Удалить канал из белого списка")
+        .addChannelOption((o) => o.setName("channel").setDescription("Канал для удаления").setRequired(true)))
+      .addSubcommand((s) => s.setName("list").setDescription("Показать белый список каналов"))
+      .addSubcommand((s) => s.setName("clear").setDescription("Очистить белый список (считать все каналы)")),
 
     // AutoMod
     new SlashCommandBuilder()
       .setName("automod")
-      .setDescription("Manage banned words (owner only)")
-      .addSubcommand((s) => s.setName("add").setDescription("Ban a word")
-        .addStringOption((o) => o.setName("word").setDescription("Word to ban").setRequired(true))
-        .addBooleanOption((o) => o.setName("case_sensitive").setDescription("Case sensitive? (default: no)")))
-      .addSubcommand((s) => s.setName("remove").setDescription("Unban a word")
-        .addStringOption((o) => o.setName("word").setDescription("Word to unban").setRequired(true)))
-      .addSubcommand((s) => s.setName("list").setDescription("List banned words"))
-      .addSubcommand((s) => s.setName("clear").setDescription("Clear all banned words")),
+      .setDescription("Управление запрещёнными словами (только владелец)")
+      .addSubcommand((s) => s.setName("add").setDescription("Запретить слово")
+        .addStringOption((o) => o.setName("word").setDescription("Слово для запрета").setRequired(true))
+        .addBooleanOption((o) => o.setName("case_sensitive").setDescription("Учитывать регистр? (по умолчанию: нет)")))
+      .addSubcommand((s) => s.setName("remove").setDescription("Разрешить слово")
+        .addStringOption((o) => o.setName("word").setDescription("Слово для разрешения").setRequired(true)))
+      .addSubcommand((s) => s.setName("list").setDescription("Список запрещённых слов"))
+      .addSubcommand((s) => s.setName("clear").setDescription("Очистить все запрещённые слова")),
 
     // Undo / History
     new SlashCommandBuilder()
       .setName("undo")
-      .setDescription("Undo last bulk operation (owner only)")
-      .addIntegerOption((o) => o.setName("operation_id").setDescription("Specific operation ID to undo")),
+      .setDescription("Отменить последнюю массовую операцию (только владелец)")
+      .addIntegerOption((o) => o.setName("operation_id").setDescription("ID операции для отмены")),
     new SlashCommandBuilder()
       .setName("history")
-      .setDescription("View recent bulk operations (owner only)")
-      .addIntegerOption((o) => o.setName("limit").setDescription("Number of operations to show (default: 10)")),
+      .setDescription("Просмотр последних массовых операций (только владелец)")
+      .addIntegerOption((o) => o.setName("limit").setDescription("Количество операций (по умолчанию: 10)")),
 
     // SAMP Server Status
     new SlashCommandBuilder()
       .setName("sampstatus")
-      .setDescription("Manage SA-MP server status channels (owner only)")
-      .addSubcommand((s) => s.setName("add").setDescription("Add a SA-MP server to track")
-        .addStringOption((o) => o.setName("server_id").setDescription("Server identifier (e.g., server1)").setRequired(true))
-        .addStringOption((o) => o.setName("server_name").setDescription("Display name (e.g., Samp-Rp #1)").setRequired(true))
-        .addStringOption((o) => o.setName("ip").setDescription("Server IP address").setRequired(true))
-        .addChannelOption((o) => o.setName("channel").setDescription("Voice channel for status").setRequired(true))
-        .addIntegerOption((o) => o.setName("port").setDescription("Server port (default: 7777)"))
-        .addStringOption((o) => o.setName("emoji").setDescription("Emoji (default: \xF0\x9F\x8E\xAE)")))
-      .addSubcommand((s) => s.setName("remove").setDescription("Remove a tracked server")
-        .addStringOption((o) => o.setName("server_id").setDescription("Server identifier").setRequired(true)))
-      .addSubcommand((s) => s.setName("list").setDescription("List all tracked servers"))
-      .addSubcommand((s) => s.setName("stop").setDescription("Stop all trackers"))
-      .addSubcommand((s) => s.setName("start").setDescription("Start all trackers")),
+      .setDescription("Управление статусом SA-MP серверов (только владелец)")
+      .addSubcommand((s) => s.setName("add").setDescription("Добавить SA-MP сервер для отслеживания")
+        .addStringOption((o) => o.setName("server_id").setDescription("Идентификатор сервера (напр., server1)").setRequired(true))
+        .addStringOption((o) => o.setName("server_name").setDescription("Отображаемое имя (напр., Samp-Rp #1)").setRequired(true))
+        .addStringOption((o) => o.setName("ip").setDescription("IP-адрес сервера").setRequired(true))
+        .addChannelOption((o) => o.setName("channel").setDescription("Голосовой канал для статуса").setRequired(true))
+        .addIntegerOption((o) => o.setName("port").setDescription("Порт сервера (по умолчанию: 7777)"))
+        .addStringOption((o) => o.setName("emoji").setDescription("Эмодзи (по умолчанию: \xF0\x9F\x8E\xAE)")))
+      .addSubcommand((s) => s.setName("remove").setDescription("Удалить отслеживаемый сервер")
+        .addStringOption((o) => o.setName("server_id").setDescription("Идентификатор сервера").setRequired(true)))
+      .addSubcommand((s) => s.setName("list").setDescription("Показать все отслеживаемые серверы"))
+      .addSubcommand((s) => s.setName("stop").setDescription("Остановить все трекеры"))
+      .addSubcommand((s) => s.setName("start").setDescription("Запустить все трекеры")),
 
     // Feature module commands
     ...getSampLifeCommandBuilders(),

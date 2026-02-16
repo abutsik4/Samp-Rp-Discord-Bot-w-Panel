@@ -58,7 +58,7 @@ async function ensureRateLimitTables(db) {
       default_limit INTEGER DEFAULT 10,
       time_window_minutes INTEGER DEFAULT 60,
       role_limits TEXT DEFAULT '[]',
-      warning_message TEXT DEFAULT 'You have exceeded the message limit for this channel.',
+      warning_message TEXT DEFAULT 'Вы превысили лимит сообщений в этом канале.',
       action TEXT DEFAULT 'delete',
       strike_reset_days INTEGER DEFAULT 7,
       strike_role_multipliers TEXT DEFAULT '[]',
@@ -215,7 +215,7 @@ async function setRateLimitConfig(db, guildId, channelId, config) {
   // Turn-taking: time window is unused; store NULL.
   const timeWindowMinutes = null;
   const roleLimits = jsonVal('role_limits', 'role_limits', []);
-  const warningMessage = val('warning_message', "You have exceeded the message limit for this channel.");
+  const warningMessage = val('warning_message', "Вы превысили лимит сообщений в этом канале.");
   const action = val('action', "delete");
   
   const strikeResetDays = val('strike_reset_days', 7);

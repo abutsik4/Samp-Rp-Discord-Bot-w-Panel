@@ -341,7 +341,7 @@ class SAMPStatusTracker {
       if (isOnline) {
         newName = `${emoji} ${serverName} [${playerCount}/${maxPlayers}]`;
       } else {
-        newName = `${emoji} ${serverName} [OFFLINE]`;
+        newName = `${emoji} ${serverName} [ОФФЛАЙН]`;
       }
 
       console.log(`[SAMP] ${serverAddr}: old="${channel.name}" new="${newName}" match=${channel.name === newName}`);

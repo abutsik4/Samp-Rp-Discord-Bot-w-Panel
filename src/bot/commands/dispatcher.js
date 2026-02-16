@@ -42,7 +42,7 @@ function registerCommandHandlers(ctx) {
         const disabled = await isCommandDisabled(guildId, commandName);
         if (disabled) {
           await interaction.reply({
-            content: "❌ This command is currently disabled by administrators.",
+            content: "❌ Эта команда отключена администраторами.",
             ephemeral: true,
           });
           return;
@@ -90,7 +90,7 @@ function registerCommandHandlers(ctx) {
       const funFact = getFunFact(analytics.count);
 
       const joinedAt = member.joinedAt;
-      let timeOnServer = "Unknown";
+      let timeOnServer = "Неизвестно";
 
       if (joinedAt) {
         timeOnServer = formatTimeOnServer(joinedAt, new Date());
@@ -103,13 +103,13 @@ function registerCommandHandlers(ctx) {
           { name: "💬 Всего сообщений", value: `${analytics.count.toLocaleString()}`, inline: true },
           { name: "📅 Эта неделя", value: `${weeklyCount}`, inline: true },
           { name: "🏆 Ранг", value: `#${analytics.rank} из ${analytics.totalUsers}`, inline: true },
-          { name: "📈 Percentile", value: `Top ${100 - analytics.percentile}%`, inline: true },
-          { name: "🔥 Current Streak", value: `${streak.currentStreak} ${ruPlural(streak.currentStreak, "день", "дня", "дней")}`, inline: true },
-          { name: "⭐ Best Streak", value: `${streak.longestStreak} ${ruPlural(streak.longestStreak, "день", "дня", "дней")}`, inline: true },
-          { name: "👍 Reactions Given", value: `${reactions.given}`, inline: true },
-          { name: "❤️ Reactions Received", value: `${reactions.received}`, inline: true },
+          { name: "📈 Процентиль", value: `Топ ${100 - analytics.percentile}%`, inline: true },
+          { name: "🔥 Текущая серия", value: `${streak.currentStreak} ${ruPlural(streak.currentStreak, "день", "дня", "дней")}`, inline: true },
+          { name: "⭐ Лучшая серия", value: `${streak.longestStreak} ${ruPlural(streak.longestStreak, "день", "дня", "дней")}`, inline: true },
+          { name: "👍 Реакций отправлено", value: `${reactions.given}`, inline: true },
+          { name: "❤️ Реакций получено", value: `${reactions.received}`, inline: true },
           { name: "📆 На сервере", value: `${timeOnServer}`, inline: true },
-          { name: "🎯 Fun Fact", value: funFact, inline: false },
+          { name: "🎯 Интересный факт", value: funFact, inline: false },
         )
         .setColor(0x00aeff)
         .setTimestamp();
@@ -128,8 +128,8 @@ function registerCommandHandlers(ctx) {
       const count = await getUserMessageCount(interaction.guild.id, targetUser.id);
 
       const joinedAt = targetMember.joinedAt;
-      let joinedText = "Unknown";
-      let timeOnServer = "Unknown";
+      let joinedText = "Неизвестно";
+      let timeOnServer = "Неизвестно";
 
       if (joinedAt) {
         joinedText = joinedAt.toISOString().split("T")[0];
@@ -166,13 +166,13 @@ function registerCommandHandlers(ctx) {
         if (channel) {
           whereClauses.push("channel_id = ?");
           params.push(channel.id);
-          filterDesc += ` in #${channel.name}`;
+          filterDesc += ` в #${channel.name}`;
         }
 
         if (date) {
           whereClauses.push("message_date = ?");
           params.push(date);
-          filterDesc += ` on ${date}`;
+          filterDesc += ` за ${date}`;
         } else if (period !== "all") {
           const dateFilter = {
             today: "0 days",
@@ -180,7 +180,8 @@ function registerCommandHandlers(ctx) {
             month: "-1 month",
           }[period];
           whereClauses.push(`message_date >= date('now', '${dateFilter}')`);
-          filterDesc += ` (${period})`;
+          const periodNames = { today: "сегодня", week: "неделя", month: "месяц" };
+          filterDesc += ` (${periodNames[period] || period})`;
         }
 
         const whereString = whereClauses.join(" AND ");
@@ -259,19 +260,19 @@ function registerCommandHandlers(ctx) {
 
       if (!watermark) {
         await interaction.editReply({
-          content: "⏳ No watermark found. Initializing from current state...",
+          content: "⏳ Маркер не найден. Инициализация из текущего состояния...",
         });
 
         const initResult = await initializeWatermark(client, db, interaction.guild.id);
 
         if (!initResult.success) {
           return interaction.editReply({
-            content: `❌ Failed to initialize watermark: ${initResult.error}\nPlease run a full backfill first.`,
+            content: `❌ Не удалось инициализировать маркер: ${initResult.error}\nСначала выполните полный бэкфилл.`,
           });
         }
 
         return interaction.editReply({
-          content: `✅ Watermark initialized at message \`${initResult.messageId}\`\n\nYou can now use this command to sync missing messages after downtime.`,
+            content: `✅ Маркер инициализирован на сообщении \`${initResult.messageId}\`\n\nТеперь вы можете использовать эту команду для синхронизации пропущенных сообщений.`,
         });
       }
 
@@ -279,13 +280,13 @@ function registerCommandHandlers(ctx) {
 
       if (!result.success) {
         return interaction.editReply({
-          content: `❌ Sync failed: ${result.error}`,
+          content: `❌ Ошибка синхронизации: ${result.error}`,
         });
       }
 
       if (result.synced === 0) {
         return interaction.editReply({
-          content: `✅ No new messages to sync. Already up to date!\n\nWatermark: \`${result.watermark.before}\``,
+          content: `✅ Нет новых сообщений для синхронизации. Всё актуально!\n\nМаркер: \`${result.watermark.before}\``,
         });
       }
 
@@ -295,7 +296,7 @@ function registerCommandHandlers(ctx) {
         .join("\n");
 
       await interaction.editReply({
-        content: `✅ Synced **${result.synced}** missing messages!\n\n**Watermark Updated:**\nBefore: \`${result.watermark.before}\`\nAfter: \`${result.watermark.after}\`\n\n**Top Channels:**\n${channelSummary || "None"}`,
+        content: `✅ Синхронизировано **${result.synced}** пропущенных сообщений!\n\n**Маркер обновлён:**\nДо: \`${result.watermark.before}\`\nПосле: \`${result.watermark.after}\`\n\n**Топ каналов:**\n${channelSummary || "Нет"}`,
       });
     } else if (commandName === "backfill") {
       if (interaction.user.id !== OWNER_ID) {
@@ -312,7 +313,7 @@ function registerCommandHandlers(ctx) {
       await interaction.followUp({ content: "История сообщений собрана.", flags: 64 });
     } else if (commandName === "whitelist") {
       if (interaction.user.id !== interaction.guild.ownerId) {
-        return interaction.reply({ content: "❌ Только владелец сервера может управлять whitelist.", flags: 64 });
+        return interaction.reply({ content: "❌ Только владелец сервера может управлять белым списком.", flags: 64 });
       }
 
       const subcommand = interaction.options.getSubcommand();
@@ -324,7 +325,7 @@ function registerCommandHandlers(ctx) {
           [interaction.guild.id, ch.id]
         );
         return interaction.reply({
-          content: `✅ ${ch} добавлен в whitelist. Теперь сообщения будут считаться только в whitelisted каналах.`,
+          content: `✅ ${ch} добавлен в белый список. Теперь сообщения будут считаться только в разрешённых каналах.`,
           flags: 64,
         });
       } else if (subcommand === "remove") {
@@ -334,7 +335,7 @@ function registerCommandHandlers(ctx) {
           [interaction.guild.id, ch.id]
         );
         return interaction.reply({
-          content: `✅ ${ch} удалён из whitelist.`,
+          content: `✅ ${ch} удалён из белого списка.`,
           flags: 64,
         });
       } else if (subcommand === "list") {
@@ -344,19 +345,19 @@ function registerCommandHandlers(ctx) {
         );
         if (!rows || rows.length === 0) {
           return interaction.reply({
-            content: "📋 Whitelist пуст. Сообщения считаются во всех каналах.",
+            content: "📋 Белый список пуст. Сообщения считаются во всех каналах.",
             flags: 64,
           });
         }
         const channels = rows.map((r) => `<#${r.channel_id}>`).join(", ");
         return interaction.reply({
-          content: `📋 Whitelist каналов:\n${channels}\n\nСообщения считаются только в этих каналах.`,
+          content: `📋 Белый список каналов:\n${channels}\n\nСообщения считаются только в этих каналах.`,
           flags: 64,
         });
       } else if (subcommand === "clear") {
         await dbRun(`DELETE FROM channel_whitelist WHERE guild_id = ?`, [interaction.guild.id]);
         return interaction.reply({
-          content: "✅ Whitelist очищен. Сообщения теперь считаются во всех каналах.",
+          content: "✅ Белый список очищен. Сообщения теперь считаются во всех каналах.",
           flags: 64,
         });
       }
@@ -723,11 +724,11 @@ function registerCommandHandlers(ctx) {
       const streak = await getStreak(db, interaction.guild.id, targetUser.id);
 
       const embed = new EmbedBuilder()
-        .setTitle("🔥 Message Streak")
-        .setDescription(`Streak stats for ${targetUser.tag}`)
+        .setTitle("🔥 Серия активности")
+        .setDescription(`Статистика серии для ${targetUser.tag}`)
         .addFields(
-          { name: "Current Streak", value: `${streak.currentStreak} ${ruPlural(streak.currentStreak, "день", "дня", "дней")}`, inline: true },
-          { name: "Longest Streak", value: `${streak.longestStreak} ${ruPlural(streak.longestStreak, "день", "дня", "дней")}`, inline: true },
+          { name: "Текущая серия", value: `${streak.currentStreak} ${ruPlural(streak.currentStreak, "день", "дня", "дней")}`, inline: true },
+          { name: "Лучшая серия", value: `${streak.longestStreak} ${ruPlural(streak.longestStreak, "день", "дня", "дней")}`, inline: true },
         )
         .setColor(0xf59e0b)
         .setTimestamp();
@@ -766,7 +767,7 @@ function registerCommandHandlers(ctx) {
 
       const lines = visible.map((entry, index) => {
         const label = entry.member.user.tag;
-        return `\`${index + 1}.\` **${label}** — ${entry.count} reactions`;
+        return `\`${index + 1}.\` **${label}** — ${entry.count} реакций`;
       });
 
       const title = type === "given" ? "👍 Топ по реакциям (отправлено)" : "❤️ Топ по реакциям (получено)";

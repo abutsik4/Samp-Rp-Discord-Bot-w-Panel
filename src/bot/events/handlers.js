@@ -118,8 +118,8 @@ function registerEventHandlers(ctx) {
 
       if (milestone) {
         const embed = new EmbedBuilder()
-          .setTitle("🎉 Milestone Achieved!")
-          .setDescription(`<@${userId}> has reached **${milestone.toLocaleString()}** messages!`)
+          .setTitle("🎉 Достижение!")
+          .setDescription(`<@${userId}> достиг **${milestone.toLocaleString()}** сообщений!`)
           .setColor(0xffd700)
           .setTimestamp();
         try {

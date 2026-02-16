@@ -75,8 +75,8 @@ async function runSecurityPipeline(db, message, userRoles) {
     const config = rateLimitCheck.config;
 
     try {
-      const warningMsg = config?.warning_message || "You have exceeded the message limit.";
-      await message.author.send(`⚠️ ${warningMsg}\nLimit: ${rateLimitCheck.limit} consecutive messages (resets when someone else speaks).`);
+      const warningMsg = config?.warning_message || "Вы превысили лимит сообщений.";
+      await message.author.send(`⚠️ ${warningMsg}\nЛимит: ${rateLimitCheck.limit} сообщений подряд (сбрасывается, когда напишет кто-то другой).`);
     } catch {}
 
     if (config?.action === 'delete') {
@@ -120,7 +120,7 @@ async function runSecurityPipeline(db, message, userRoles) {
       if (pattern.test(content)) {
         try {
           await message.delete();
-          await message.author.send(`⚠️ Your message was deleted because it contained a banned word: "${word}"`);
+          await message.author.send(`⚠️ Ваше сообщение было удалено, так как содержит запрещённое слово: "${word}"`);
         } catch {}
         return { allowed: false, stop: true };
       }
