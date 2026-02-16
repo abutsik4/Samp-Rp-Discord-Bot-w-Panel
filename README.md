@@ -4,11 +4,14 @@
   <img src="https://img.shields.io/badge/Express-4-000000?style=for-the-badge&logo=express&logoColor=white" alt="Express" />
   <img src="https://img.shields.io/badge/SQLite-3-003B57?style=for-the-badge&logo=sqlite&logoColor=white" alt="SQLite" />
   <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License" />
+  <img src="https://img.shields.io/badge/Язык-Русский-blue?style=for-the-badge" alt="Русский" />
 </p>
 
 # SA-MP RP Discord Bot with Management Panel
 
 A comprehensive Discord bot for SA-MP roleplay communities with an advanced web administration panel. Features real-time statistics, AI engagement, game economy, rate limiting, holiday system, and a modern glassmorphic UI — all in a clean modular architecture.
+
+> **🇷🇺 Весь интерфейс бота на русском языке** — команды, описания, уведомления и эмбеды полностью переведены на русский.
 
 ---
 
@@ -305,6 +308,8 @@ node src/panel-only.js
 ---
 
 ## 🤖 Bot Commands
+
+> All slash command descriptions and responses are in Russian. The table below shows English descriptions for reference.
 
 ### User Commands
 
