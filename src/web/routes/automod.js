@@ -1,10 +1,11 @@
 const { Router } = require("express");
+const { invalidateBannedWordsCache } = require("../../features/security-pipeline");
 
 function createAutomodRouter(ctx) {
   const router = Router();
-  const { PANEL_BASE, requireAuth, bots, dbRun, dbAll } = ctx;
+  const { PANEL_BASE, requireAuth, requireAdmin, bots, dbRun, dbAll } = ctx;
 
-  router.get(`${PANEL_BASE}/api/bot/:botKey/automod`, requireAuth, async (req, res) => {
+  router.get(`${PANEL_BASE}/api/:botKey/automod`, requireAuth, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -20,7 +21,7 @@ function createAutomodRouter(ctx) {
     }
   });
 
-  router.post(`${PANEL_BASE}/api/bot/:botKey/automod`, requireAuth, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/automod`, requireAuth, requireAdmin, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -34,6 +35,7 @@ function createAutomodRouter(ctx) {
         `INSERT OR REPLACE INTO banned_words (guild_id, word, case_sensitive) VALUES (?, ?, ?)`,
         [bot.guild_id, word, caseSensitive ? 1 : 0]
       );
+      invalidateBannedWordsCache(bot.guild_id);
       return res.json({ ok: true });
     } catch (e) {
       console.error("Add banned word error:", e);
@@ -41,7 +43,7 @@ function createAutomodRouter(ctx) {
     }
   });
 
-  router.delete(`${PANEL_BASE}/api/bot/:botKey/automod/:word`, requireAuth, async (req, res) => {
+  router.delete(`${PANEL_BASE}/api/:botKey/automod/:word`, requireAuth, requireAdmin, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -52,6 +54,7 @@ function createAutomodRouter(ctx) {
         `DELETE FROM banned_words WHERE guild_id = ? AND word = ?`,
         [bot.guild_id, word]
       );
+      invalidateBannedWordsCache(bot.guild_id);
       return res.json({ ok: true });
     } catch (e) {
       console.error("Remove banned word error:", e);
@@ -59,12 +62,13 @@ function createAutomodRouter(ctx) {
     }
   });
 
-  router.delete(`${PANEL_BASE}/api/bot/:botKey/automod`, requireAuth, async (req, res) => {
+  router.delete(`${PANEL_BASE}/api/:botKey/automod`, requireAuth, requireAdmin, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
     try {
       await dbRun(`DELETE FROM banned_words WHERE guild_id = ?`, [bot.guild_id]);
+      invalidateBannedWordsCache(bot.guild_id);
       return res.json({ ok: true });
     } catch (e) {
       console.error("Clear banned words error:", e);

@@ -206,8 +206,7 @@ function generateChannelsPage(bot, PANEL_BASE) {
 
     async function loadChannels() {
       try {
-        const res = await fetch(PANEL_BASE + '/api/bot/' + botKey + '/channels');
-        const data = await res.json();
+        const data = await window.panelFetchJson(PANEL_BASE + '/api/' + botKey + '/channels');
         allChannels = data.channels || [];
         
         const categories = allChannels.filter(ch => ch.type === 4);
@@ -461,15 +460,13 @@ function generateChannelsPage(bot, PANEL_BASE) {
       const progressText = document.getElementById('progressText');
 
       try {
-        const res = await fetch(PANEL_BASE + '/api/bot/' + botKey + '/channels/bulk-delete', {
+        const data = await window.panelFetchJson(PANEL_BASE + '/api/' + botKey + '/channels/bulk-delete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ channelIds })
         });
 
-        const data = await res.json();
-        
-        if (data.ok) {
+        if (data && data.ok) {
           const deleted = data.deleted || 0;
           const failed = data.failed || 0;
           
@@ -511,7 +508,8 @@ function generateChannelsPage(bot, PANEL_BASE) {
     botKey: bot.key,
     botName: bot.name,
     title: 'JepsenCloud Panel — Channel Manager',
-    currentPage: 'channels'
+    currentPage: 'channels',
+    PANEL_BASE,
   });
 }
 

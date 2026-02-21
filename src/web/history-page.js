@@ -74,6 +74,7 @@ function generateHistoryPage(bot, PANEL_BASE) {
   const scripts = `
   <script>
     const botKey = '${bot.key}';
+    const apiBase = '${PANEL_BASE}/api/' + botKey;
     function showAlert(msg, type) {
       const c = document.getElementById('alertContainer');
       const d = document.createElement('div');
@@ -111,8 +112,7 @@ function generateHistoryPage(bot, PANEL_BASE) {
 
     async function loadOperations() {
       try {
-        const res = await fetch('/api/bot/' + botKey + '/history?limit=50');
-        const data = await res.json();
+        const data = await window.panelFetchJson(apiBase + '/history?limit=50');
         const container = document.getElementById('operationsContainer');
         document.getElementById('totalOps').textContent = data.operations.length;
         document.getElementById('activeOps').textContent = data.operations.filter(o => !o.undone).length;
@@ -126,19 +126,25 @@ function generateHistoryPage(bot, PANEL_BASE) {
           const li = document.createElement('li');
           li.className = 'operation-item' + (op.undone ? ' undone' : '');
           const timestamp = new Date(op.timestamp * 1000);
-          li.innerHTML = '<div class="operation-header"><div class="operation-title"><span>' + getOperationIcon(op.operation) + '</span><span>' + op.operation + '</span><span class="operation-badge ' + (op.undone ? 'badge-undone' : 'badge-active') + '">' + (op.undone ? '❌ Undone' : '✅ Active') + '</span></div>' + (!op.undone ? '<button class="btn btn-warning btn-sm" onclick="undoOperation(' + op.id + ')">⏮️ Undo</button>' : '') + '</div><div class="operation-meta"><div class="meta-item"><span class="meta-label">ID</span><div class="meta-value">#' + op.id + '</div></div><div class="meta-item"><span class="meta-label">Actor</span><div class="meta-value"><@' + op.actor_id + '></div></div><div class="meta-item"><span class="meta-label">Scope</span><div class="meta-value">' + op.scope + '</div></div><div class="meta-item"><span class="meta-label">When</span><div class="meta-value">' + timestamp.toLocaleString() + '</div><div style="font-size:11px;color:var(--text-muted);margin-top:2px">' + getTimeAgo(timestamp) + '</div></div></div><a class="details-toggle" onclick="toggleDetails(' + op.id + ')">🔍 View Details</a><div id="details-' + op.id + '" class="operation-details" style="display:none"><strong>Before:</strong><br><pre>' + JSON.stringify(JSON.parse(op.payload_before), null, 2) + '</pre><br><strong>After:</strong><br><pre>' + JSON.stringify(JSON.parse(op.payload_after), null, 2) + '</pre></div>';
+          li.innerHTML = '<div class="operation-header"><div class="operation-title"><span>' + getOperationIcon(op.operation) + '</span><span>' + op.operation + '</span><span class="operation-badge ' + (op.undone ? 'badge-undone' : 'badge-active') + '">' + (op.undone ? '❌ Undone' : '✅ Active') + '</span></div>' + (!op.undone ? '<button class="btn btn-secondary btn-sm" onclick="undoOperation(' + op.id + ')">⏮️ Undo</button>' : '') + '</div><div class="operation-meta"><div class="meta-item"><span class="meta-label">ID</span><div class="meta-value">#' + op.id + '</div></div><div class="meta-item"><span class="meta-label">Actor</span><div class="meta-value"><@' + op.actor_id + '></div></div><div class="meta-item"><span class="meta-label">Scope</span><div class="meta-value">' + op.scope + '</div></div><div class="meta-item"><span class="meta-label">When</span><div class="meta-value">' + timestamp.toLocaleString() + '</div><div style="font-size:11px;color:var(--text-muted);margin-top:2px">' + getTimeAgo(timestamp) + '</div></div></div><a class="details-toggle" onclick="toggleDetails(' + op.id + ')">🔍 View Details</a><div id="details-' + op.id + '" class="operation-details" style="display:none"><strong>Before:</strong><br><pre>' + JSON.stringify(JSON.parse(op.payload_before), null, 2) + '</pre><br><strong>After:</strong><br><pre>' + JSON.stringify(JSON.parse(op.payload_after), null, 2) + '</pre></div>';
           container.appendChild(li);
         });
-      } catch (err) { showAlert('Failed to load operations', 'warning'); }
+      } catch (err) {
+        if (err && err.status === 401) showAlert('Session expired. Please log in again.', 'warning');
+        else showAlert('Failed to load operations', 'warning');
+      }
     }
 
     async function undoOperation(id) {
       if (!confirm('Undo operation #' + id + '? This will restore the previous state.')) return;
       try {
-        const res = await fetch('/api/bot/' + botKey + '/history/' + id + '/undo', { method: 'POST' });
-        if (res.ok) { showAlert('Operation undone successfully', 'success'); loadOperations(); }
-        else showAlert('Failed to undo operation', 'warning');
-      } catch (err) { showAlert('Error undoing operation', 'warning'); }
+        await window.panelFetchJson(apiBase + '/history/' + id + '/undo', { method: 'POST' });
+        showAlert('Operation undone successfully', 'success');
+        loadOperations();
+      } catch (err) {
+        if (err && err.status === 401) showAlert('Session expired. Please log in again.', 'warning');
+        else showAlert('Error undoing operation', 'warning');
+      }
     }
 
     document.addEventListener('DOMContentLoaded', loadOperations);
@@ -152,7 +158,8 @@ function generateHistoryPage(bot, PANEL_BASE) {
     botKey: bot.key,
     botName: bot.name,
     title: 'JepsenCloud Panel — Operation History',
-    currentPage: 'history'
+    currentPage: 'history',
+    PANEL_BASE,
   });
 }
 

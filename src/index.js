@@ -16,21 +16,16 @@ const {
 
 const { ensureSampLifeTables } = require("./features/samp-life");
 const sqlite3 = require("sqlite3").verbose();
+const fs = require("fs");
 const path = require("path");
-const express = require("express");
 const { initSchema } = require("./db/schema");
 
 // dotenv already loaded at top of file
 
-// Panel security deps
-const helmet = require("helmet");
-const rateLimit = require("express-rate-limit");
-const session = require("express-session");
-const SQLiteStore = require("connect-sqlite3")(session);
+const { createPanelApp } = require("./web/panel-app");
 
 
-// Structured logging
-const { createLogger, newTraceId } = require("./utils/logger");
+// Structured logging is used by the shared panel app and feature modules.
 
 // New feature modules
 const { dbRun: dbRunHelper, dbGet: dbGetHelper, dbAll: dbAllHelper } = require("./utils/db-helpers");
@@ -259,205 +254,29 @@ registerCommandHandlers({
 
 
 
-// Panel helpers (extracted to src/web/panel-helpers.js)
-const panelHelpers = require("./web/panel-helpers");
-panelHelpers.init({ db, dbRun, dbGet, dbAll, panelBase: PANEL_BASE });
-
-const {
-  escapeHtml, parseHexColor, validateLength,
-  requireAuth, requireAdmin,
-  createPanelUser, getPanelUser, getAllPanelUsers,
-  updatePanelUserPassword, updatePanelUserLastLogin,
-  deletePanelUser, updatePanelUserRole, validateLogin,
-  upsertPanelItem, markPanelItemDeleted, deletePanelItemLocalById,
-  listPanelItems, getPanelItemById,
-  fetchChannelForBot, isTextSendableChannel, extractEmbedForStorage,
-  buildEmbedFromFields, getAllSendableChannels,
-} = panelHelpers;
-
 // WEB (Landing + Panel under /panel)
 // -------------------------
-const app = express();
-if (TRUST_PROXY) app.set("trust proxy", 1);
-
-const panelHttpLogger = createLogger("panel-http");
-
-app.use(helmet({ contentSecurityPolicy: false }));
-app.use(express.json({ limit: "300kb" }));
-app.use(express.urlencoded({ extended: false }));
-
-const publicDir = path.join(__dirname, "..", "public");
-app.use(express.static(publicDir, { index: false }));
-
-// Assets referenced by EJS views as /public/* (bot.js, snow.js, etc.)
-const webPublicDir = path.join(__dirname, "web", "public");
-app.use("/public", express.static(webPublicDir, { index: false }));
-
-// Some browsers still request /favicon.ico even when an SVG favicon is set.
-app.get("/favicon.ico", (req, res) => res.redirect(302, "/icons/panel.svg"));
-
-
-app.set("views", path.join(__dirname, "views"));
-app.set("view engine", "ejs");
-app.get("/", (req, res) => {
-  return res.sendFile(path.join(publicDir, "index.html"));
-});
-
-// Sessions DB lives in ./data
-const sessionsDir = path.join(__dirname, "..", "data");
-
-app.use(
-  session({
-    store: new SQLiteStore({ db: "sessions.db", dir: sessionsDir }),
-    secret: (() => {
-      const s = process.env.SESSION_SECRET;
-      if (!s || s === "CHANGE_THIS_IN_PROD") {
-        console.warn("[SECURITY-001] SESSION_SECRET is not set or uses the default value. Set a strong random string in .env");
-      }
-      return s || "CHANGE_THIS_IN_PROD";
-    })(),
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: COOKIE_SECURE,
-    },
-  })
-);
-
-// Request tracing + structured HTTP logging (panel + APIs)
-app.use((req, res, next) => {
-  const traceId = newTraceId();
-  req.traceId = traceId;
-  res.setHeader("X-Trace-Id", traceId);
-
-  const started = Date.now();
-  const ip = (req.headers["x-forwarded-for"] || req.ip || "").toString().split(",")[0].trim();
-  const ua = (req.headers["user-agent"] || "").toString().slice(0, 220);
-  const user = req.session?.user?.username || null;
-
-  // avoid logging extremely noisy long URLs (but keep enough for debugging)
-  const pathSafe = String(req.originalUrl || req.url || "").slice(0, 2048);
-
-  const isStaticAsset =
-    req.method === "GET" &&
-    (/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff2?|ttf|map)(\?|$)/i.test(pathSafe) ||
-      pathSafe.startsWith("/icons/") ||
-      pathSafe.startsWith("/public/") ||
-      pathSafe.startsWith("/shared.css"));
-
-  const logReq = isStaticAsset ? panelHttpLogger.debug : panelHttpLogger.info;
-  const logRes = isStaticAsset ? panelHttpLogger.debug : panelHttpLogger.info;
-
-  logReq("HTTP request", {
-    traceId,
-    method: req.method,
-    path: pathSafe,
-    ip,
-    user,
-    ua,
-  });
-
-  res.on("finish", () => {
-    const durationMs = Date.now() - started;
-    logRes("HTTP response", {
-      traceId,
-      method: req.method,
-      path: pathSafe,
-      status: res.statusCode,
-      durationMs,
-      ip,
-      user,
-    });
-  });
-
-  next();
-});
-
-// Rate limits
-const loginLimiter = rateLimit({ windowMs: 60_000, max: 10 });
-const apiLimiter = rateLimit({ windowMs: 10_000, max: 40 });
-
-
 // Multi-bot registry (future-proof). Today: one bot.
 const bots = [{ key: "samprp", name: "JepsenCloud Bot", kind: "discord", client, guild_id: "537187880842559499" }];
 
-// =========================================
-// ROUTE MODULES
-// =========================================
-const { createDebugRouter } = require("./web/routes/debug");
-const { createAuthRouter } = require("./web/routes/auth");
-const { createMessagesRouter } = require("./web/routes/messages");
-const { createStatsRouter } = require("./web/routes/stats");
-const { createAnalyticsRouter } = require("./web/routes/analytics");
-const { createBotPagesRouter } = require("./web/routes/bot-pages");
-const { createCommandsRouter } = require("./web/routes/commands");
-const { createAccuracyRouter } = require("./web/routes/accuracy");
-const { createHolidaysRouter } = require("./web/routes/holidays");
-const { createAIEngagementRouter } = require("./web/routes/ai-engagement");
-const { createRateLimitsRouter } = require("./web/routes/rate-limits");
-const { createCountdownRouter } = require("./web/routes/countdown");
-const { createWhitelistRouter } = require("./web/routes/whitelist");
-const { createAutomodRouter } = require("./web/routes/automod");
-const { createHistoryRouter } = require("./web/routes/history");
-const { createChannelsRouter } = require("./web/routes/channels");
-const { createSampServersRouter } = require("./web/routes/samp-servers");
-
-const routeCtx = {
-  PANEL_BASE, db, client, bots,
-  requireAuth, requireAdmin,
-  apiLimiter, loginLimiter,
-  dbRun, dbGet, dbAll,
-  panelHttpLogger,
-  // Panel helpers
-  escapeHtml, parseHexColor, validateLength,
-  validateLogin, createPanelUser, getPanelUser, getAllPanelUsers,
-  updatePanelUserPassword, deletePanelUser, updatePanelUserRole,
-  getAllSendableChannels, isAllowedChannel,
-  // Bot helpers
-  recordOperation, performUndo, getUserMessageCount, ruPlural,
-  getDisabledCommands, enableCommand, disableCommand,
-};
-
-app.use(createDebugRouter(routeCtx));
-app.use(createAuthRouter(routeCtx));
-app.use(createMessagesRouter(routeCtx));
-app.use(createStatsRouter(routeCtx));
-app.use(createAnalyticsRouter(routeCtx));
-app.use(createBotPagesRouter(routeCtx));
-app.use(createCommandsRouter(routeCtx));
-app.use(createAccuracyRouter(routeCtx));
-app.use(createHolidaysRouter(routeCtx));
-app.use(createAIEngagementRouter(routeCtx));
-app.use(createRateLimitsRouter(routeCtx));
-app.use(createCountdownRouter(routeCtx));
-app.use(createWhitelistRouter(routeCtx));
-app.use(createAutomodRouter(routeCtx));
-app.use(createHistoryRouter(routeCtx));
-app.use(createChannelsRouter(routeCtx));
-app.use(createSampServersRouter(routeCtx));
-
-// -------------------------
-// Start web server
-// -------------------------
-// Final error handler (keeps traceId context in logs)
-app.use((err, req, res, next) => {
-  try {
-    panelHttpLogger.error("Unhandled server error", {
-      traceId: req?.traceId || null,
-      method: req?.method,
-      path: req?.originalUrl,
-      status: res?.statusCode,
-      error: err?.message || String(err),
-      stack: err?.stack,
-    });
-  } catch (_) {
-    // ignore logging failures
-  }
-
-  if (res.headersSent) return next(err);
-  return res.status(500).json({ error: "Internal server error", traceId: req?.traceId || null });
+const { app } = createPanelApp({
+  client,
+  db,
+  dbRun,
+  dbGet,
+  dbAll,
+  bots,
+  isAllowedChannel,
+  PANEL_BASE,
+  TRUST_PROXY,
+  COOKIE_SECURE,
+  recordOperation,
+  performUndo,
+  getUserMessageCount,
+  ruPlural,
+  getDisabledCommands,
+  enableCommand,
+  disableCommand,
 });
 
 const PORT = process.env.PORT || 3000;
@@ -471,12 +290,57 @@ app.listen(PORT, () => {
 // DISCORD LOGIN (with retry on session exhaustion)
 // -------------------------
 (async function loginWithRetry() {
+  const backoffFilePath = path.join(__dirname, "..", "data", "discord-login-backoff.json");
+
+  async function readBackoff() {
+    try {
+      const raw = await fs.promises.readFile(backoffFilePath, "utf8");
+      const parsed = JSON.parse(raw);
+      const notBefore = parsed?.notBefore ? new Date(parsed.notBefore) : null;
+      if (!notBefore || Number.isNaN(notBefore.getTime())) return null;
+      return { notBefore };
+    } catch (err) {
+      if (err?.code === "ENOENT") return null;
+      console.error(`[Login] Failed to read backoff file: ${err?.message || String(err)}`);
+      return null;
+    }
+  }
+
+  async function writeBackoff(notBefore) {
+    try {
+      const tmpPath = `${backoffFilePath}.tmp`;
+      const payload = JSON.stringify({ notBefore: notBefore.toISOString() });
+      await fs.promises.writeFile(tmpPath, payload, "utf8");
+      await fs.promises.rename(tmpPath, backoffFilePath);
+    } catch (err) {
+      console.error(`[Login] Failed to write backoff file: ${err?.message || String(err)}`);
+    }
+  }
+
+  async function clearBackoff() {
+    try {
+      await fs.promises.unlink(backoffFilePath);
+    } catch (err) {
+      if (err?.code === "ENOENT") return;
+      console.error(`[Login] Failed to clear backoff file: ${err?.message || String(err)}`);
+    }
+  }
+
   const MAX_RETRIES = 10;
   const BASE_DELAY = 30_000; // 30 seconds
+
+  const initialBackoff = await readBackoff();
+  if (initialBackoff?.notBefore && Date.now() < initialBackoff.notBefore.getTime()) {
+    const waitMs = initialBackoff.notBefore.getTime() - Date.now() + 5_000;
+    const waitMin = (waitMs / 60_000).toFixed(1);
+    console.error(`[Login] Backoff active from previous run. Waiting ${waitMin} min until ${initialBackoff.notBefore.toISOString()}…`);
+    await new Promise(r => setTimeout(r, waitMs));
+  }
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       await client.login(TOKEN);
+      await clearBackoff();
       return; // success
     } catch (err) {
       const msg = err?.message || '';
@@ -484,10 +348,17 @@ app.listen(PORT, () => {
       const resetMatch = msg.match(/resets at (.+)/);
       if (resetMatch) {
         const resetAt = new Date(resetMatch[1]);
-        const waitMs = Math.max(resetAt - Date.now(), 0) + 5_000; // +5 s buffer
-        const waitMin = (waitMs / 60_000).toFixed(1);
-        console.error(`[Login] Session limit hit (attempt ${attempt}/${MAX_RETRIES}). Waiting ${waitMin} min until ${resetAt.toISOString()}…`);
-        await new Promise(r => setTimeout(r, waitMs));
+        if (!Number.isNaN(resetAt.getTime())) {
+          await writeBackoff(resetAt);
+          const waitMs = Math.max(resetAt - Date.now(), 0) + 5_000; // +5 s buffer
+          const waitMin = (waitMs / 60_000).toFixed(1);
+          console.error(`[Login] Session limit hit (attempt ${attempt}/${MAX_RETRIES}). Waiting ${waitMin} min until ${resetAt.toISOString()}…`);
+          await new Promise(r => setTimeout(r, waitMs));
+        } else {
+          console.error(`[Login] Session limit hit (attempt ${attempt}/${MAX_RETRIES}) but could not parse reset time: ${msg}`);
+          const delay = Math.min(BASE_DELAY * 2 ** (attempt - 1), 10 * 60_000);
+          await new Promise(r => setTimeout(r, delay));
+        }
       } else {
         // Generic error — exponential backoff
         const delay = Math.min(BASE_DELAY * 2 ** (attempt - 1), 10 * 60_000);

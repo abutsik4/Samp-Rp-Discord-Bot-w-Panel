@@ -4,7 +4,7 @@ const { panelList: holidaysPanelList, panelAdd: holidaysPanelAdd, panelRemove: h
 function createHolidaysRouter(ctx) {
   const router = Router();
   const {
-    PANEL_BASE, requireAuth, apiLimiter, bots, db,
+    PANEL_BASE, requireAuth, requireAdmin, apiLimiter, bots, db,
   } = ctx;
 
   router.get(`${PANEL_BASE}/api/:botKey/holidays`, requireAuth, apiLimiter, async (req, res) => {
@@ -23,7 +23,7 @@ function createHolidaysRouter(ctx) {
     }
   });
 
-  router.post(`${PANEL_BASE}/api/:botKey/holidays`, requireAuth, apiLimiter, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/holidays`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -43,7 +43,7 @@ function createHolidaysRouter(ctx) {
     }
   });
 
-  router.delete(`${PANEL_BASE}/api/:botKey/holidays/:id`, requireAuth, apiLimiter, async (req, res) => {
+  router.delete(`${PANEL_BASE}/api/:botKey/holidays/:id`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 

@@ -2,9 +2,9 @@ const { Router } = require("express");
 
 function createWhitelistRouter(ctx) {
   const router = Router();
-  const { PANEL_BASE, requireAuth, bots, client, dbRun, dbAll } = ctx;
+  const { PANEL_BASE, requireAuth, requireAdmin, bots, client, dbRun, dbAll } = ctx;
 
-  router.get(`${PANEL_BASE}/api/bot/:botKey/whitelist`, requireAuth, async (req, res) => {
+  router.get(`${PANEL_BASE}/api/:botKey/whitelist`, requireAuth, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -27,7 +27,7 @@ function createWhitelistRouter(ctx) {
     }
   });
 
-  router.post(`${PANEL_BASE}/api/bot/:botKey/whitelist`, requireAuth, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/whitelist`, requireAuth, requireAdmin, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -46,7 +46,7 @@ function createWhitelistRouter(ctx) {
     }
   });
 
-  router.delete(`${PANEL_BASE}/api/bot/:botKey/whitelist/:channelId`, requireAuth, async (req, res) => {
+  router.delete(`${PANEL_BASE}/api/:botKey/whitelist/:channelId`, requireAuth, requireAdmin, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -62,7 +62,7 @@ function createWhitelistRouter(ctx) {
     }
   });
 
-  router.delete(`${PANEL_BASE}/api/bot/:botKey/whitelist`, requireAuth, async (req, res) => {
+  router.delete(`${PANEL_BASE}/api/:botKey/whitelist`, requireAuth, requireAdmin, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 

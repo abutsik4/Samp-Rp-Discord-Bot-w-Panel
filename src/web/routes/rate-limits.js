@@ -4,7 +4,7 @@ const { getRateLimitConfig, setRateLimitConfig, getRateLimitStats, getUsersWithS
 function createRateLimitsRouter(ctx) {
   const router = Router();
   const {
-    PANEL_BASE, requireAuth, apiLimiter, bots, db, client,
+    PANEL_BASE, requireAuth, requireAdmin, apiLimiter, bots, db, client,
   } = ctx;
 
   // Channel-specific handlers
@@ -75,7 +75,7 @@ function createRateLimitsRouter(ctx) {
   });
 
   // Set config (by body guildId + channelId)
-  router.post(`${PANEL_BASE}/api/:botKey/rate-limits/config`, requireAuth, apiLimiter, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/rate-limits/config`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -135,7 +135,7 @@ function createRateLimitsRouter(ctx) {
   });
 
   // Clear strikes (POST compat endpoint)
-  router.post(`${PANEL_BASE}/api/:botKey/rate-limits/strikes/clear`, requireAuth, apiLimiter, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/rate-limits/strikes/clear`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -155,7 +155,7 @@ function createRateLimitsRouter(ctx) {
   });
 
   // Clear strikes (DELETE)
-  router.delete(`${PANEL_BASE}/api/:botKey/rate-limits/strikes/:userId`, requireAuth, apiLimiter, async (req, res) => {
+  router.delete(`${PANEL_BASE}/api/:botKey/rate-limits/strikes/:userId`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -176,7 +176,7 @@ function createRateLimitsRouter(ctx) {
 
   // Channel-specific config routes (AFTER specific routes to avoid param collision)
   router.get(`${PANEL_BASE}/api/:botKey/rate-limits/:channelId`, requireAuth, apiLimiter, handleLimitConfigGet);
-  router.post(`${PANEL_BASE}/api/:botKey/rate-limits/:channelId`, requireAuth, apiLimiter, handleLimitConfigSet);
+  router.post(`${PANEL_BASE}/api/:botKey/rate-limits/:channelId`, requireAuth, requireAdmin, apiLimiter, handleLimitConfigSet);
 
   // Guild roles (for role name resolution)
   router.get(`${PANEL_BASE}/api/:botKey/roles`, requireAuth, apiLimiter, async (req, res) => {

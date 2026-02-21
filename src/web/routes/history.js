@@ -2,9 +2,9 @@ const { Router } = require("express");
 
 function createHistoryRouter(ctx) {
   const router = Router();
-  const { PANEL_BASE, requireAuth, bots, dbRun, dbGet, dbAll, performUndo } = ctx;
+  const { PANEL_BASE, requireAuth, requireAdmin, bots, dbRun, dbGet, dbAll, performUndo } = ctx;
 
-  router.get(`${PANEL_BASE}/api/bot/:botKey/history`, requireAuth, async (req, res) => {
+  router.get(`${PANEL_BASE}/api/:botKey/history`, requireAuth, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -22,7 +22,7 @@ function createHistoryRouter(ctx) {
     }
   });
 
-  router.post(`${PANEL_BASE}/api/bot/:botKey/history/:id/undo`, requireAuth, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/history/:id/undo`, requireAuth, requireAdmin, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 

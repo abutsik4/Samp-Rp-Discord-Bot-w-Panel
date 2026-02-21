@@ -2,9 +2,9 @@ const { Router } = require("express");
 
 function createAccuracyRouter(ctx) {
   const router = Router();
-  const { PANEL_BASE, requireAuth, apiLimiter, db, client } = ctx;
+  const { PANEL_BASE, requireAuth, requireAdmin, apiLimiter, db, client } = ctx;
 
-  router.post(`${PANEL_BASE}/api/accuracy/reconcile`, requireAuth, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/accuracy/reconcile`, requireAuth, requireAdmin, async (req, res) => {
     try {
       const { guildId } = req.body;
       if (!guildId) return res.json({ success: false, error: "Missing guild ID" });
@@ -18,7 +18,7 @@ function createAccuracyRouter(ctx) {
     }
   });
 
-  router.post(`${PANEL_BASE}/api/accuracy/fullsync`, requireAuth, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/accuracy/fullsync`, requireAuth, requireAdmin, async (req, res) => {
     try {
       const { guildId } = req.body;
       if (!guildId) return res.json({ success: false, error: "Missing guild ID" });

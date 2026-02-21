@@ -8,6 +8,7 @@ function generateAnalyticsPage(bot, PANEL_BASE) {
     botKey: bot.key,
     botName: bot.name,
     currentPage: 'analytics',
+    PANEL_BASE,
     head: `
     .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:24px}
     .stat-card{background:linear-gradient(135deg,color-mix(in srgb, var(--accent-purple) 8%, transparent),color-mix(in srgb, var(--accent-cyan) 8%, transparent));border:1px solid var(--border);border-radius:12px;padding:20px;text-align:center;transition:all .3s}
@@ -173,8 +174,7 @@ function generateAnalyticsPage(bot, PANEL_BASE) {
 
     async function loadAnalytics(days) {
       try {
-        const res = await fetch(apiBase + '/api/' + botKey + '/analytics?days=' + days);
-        const data = await res.json();
+        const data = await window.panelFetchJson(apiBase + '/api/' + botKey + '/analytics?days=' + days);
         
         document.getElementById('totalMessages').textContent = (data.totalMessages || 0).toLocaleString();
         document.getElementById('activeUsers').textContent = (data.activeUsers || 0).toLocaleString();

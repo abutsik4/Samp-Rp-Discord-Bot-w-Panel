@@ -86,14 +86,27 @@ function registerEventHandlers(ctx) {
 
       // XP/Levels
       const levelUp = await awardMessageXP(db, guildId, userId);
-      if (levelUp) {
+      const levelsAnnounceEnabled = process.env.LEVELS_ANNOUNCE !== "0";
+      if (levelsAnnounceEnabled && levelUp?.leveledUp) {
         try {
+          let targetChannel = message.channel;
+          const configuredChannelId = process.env.LEVELS_ANNOUNCE_CHANNEL_ID;
+          if (configuredChannelId) {
+            try {
+              const ch = await message.guild.channels.fetch(configuredChannelId);
+              if (ch && ch.isTextBased && ch.isTextBased()) {
+                targetChannel = ch;
+              }
+            } catch {}
+          }
+
+          const rankName = levelUp.rank?.name || "Новый ранг";
           const embed = new EmbedBuilder()
             .setTitle("⬆️ Новый уровень!")
-            .setDescription(`<@${userId}> достиг уровня **${levelUp.newLevel}** — **${levelUp.rankName}**!`)
+            .setDescription(`<@${userId}> достиг уровня **${levelUp.newLevel}** — **${rankName}**!`)
             .setColor(0x2ecc71)
             .setTimestamp();
-          await message.channel.send({ embeds: [embed] });
+          await targetChannel.send({ embeds: [embed] });
         } catch {}
       }
 

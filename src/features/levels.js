@@ -103,7 +103,8 @@ async function ensureLevelsTable(db) {
  */
 async function awardMessageXP(db, guildId, userId) {
   const now = Math.floor(Date.now() / 1000);
-  const XP_COOLDOWN_SEC = 60; // 1 message per minute gets XP
+  const parsedCooldown = Number.parseInt(process.env.LEVELS_XP_COOLDOWN_SEC || "60", 10);
+  const XP_COOLDOWN_SEC = Number.isFinite(parsedCooldown) && parsedCooldown >= 0 ? parsedCooldown : 60;
 
   try {
     const existing = await dbGet(

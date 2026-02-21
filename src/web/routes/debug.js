@@ -3,7 +3,7 @@ const { Router } = require("express");
 function createDebugRouter(ctx) {
   const router = Router();
   const {
-    PANEL_BASE, requireAuth, apiLimiter,
+    PANEL_BASE, requireAuth, requireAdmin, apiLimiter,
     dbRun, dbGet, dbAll,
     client, bots, panelHttpLogger,
   } = ctx;
@@ -11,7 +11,7 @@ function createDebugRouter(ctx) {
   router.get("/health", (req, res) => res.json({ ok: true }));
 
   // In-browser panel debug overlay report ingestion
-  router.post(`${PANEL_BASE}/api/debug/report`, requireAuth, apiLimiter, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/debug/report`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     try {
       const report = req.body?.report;
       if (!report || typeof report !== "object") return res.status(400).json({ error: "report object is required" });
@@ -47,7 +47,7 @@ function createDebugRouter(ctx) {
   });
 
   // Debug reports viewer APIs
-  router.get(`${PANEL_BASE}/api/debug/reports`, requireAuth, apiLimiter, async (req, res) => {
+  router.get(`${PANEL_BASE}/api/debug/reports`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     try {
       const limit = Math.min(Math.max(parseInt(req.query.limit || 50, 10), 1), 200);
       const offset = Math.max(parseInt(req.query.offset || 0, 10), 0);
@@ -85,7 +85,7 @@ function createDebugRouter(ctx) {
     }
   });
 
-  router.get(`${PANEL_BASE}/api/debug/reports/:id`, requireAuth, apiLimiter, async (req, res) => {
+  router.get(`${PANEL_BASE}/api/debug/reports/:id`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid id" });

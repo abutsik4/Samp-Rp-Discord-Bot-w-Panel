@@ -15,8 +15,49 @@ const { dbAll } = require("../utils/db-helpers");
 const bannedWordsCache = new Map();
 const BANNED_WORDS_TTL_MS = 60_000;
 
+function invalidateBannedWordsCache(guildId) {
+  if (guildId === undefined || guildId === null) return;
+  bannedWordsCache.delete(String(guildId));
+}
+
+function invalidateAllBannedWordsCache() {
+  bannedWordsCache.clear();
+}
+
 function escapeRegExp(str) {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeAutomodText(input, caseSensitive) {
+  let out = String(input || "").normalize("NFKC");
+  if (!caseSensitive) {
+    out = out.toLowerCase();
+    // Common RU equivalence in chats: treat "ё" ~ "е" for matching.
+    out = out.replaceAll("ё", "е");
+  }
+  return out;
+}
+
+function compileBannedWord(wordRaw, caseSensitive) {
+  const original = String(wordRaw || "").trim();
+  if (!original) return null;
+
+  const needle = normalizeAutomodText(original, caseSensitive);
+  if (!needle) return null;
+
+  // If the entry contains spaces/punctuation, treat it as a simple substring.
+  // If it's a single word/token, apply Unicode-aware boundaries.
+  const isToken = /^[\p{L}\p{N}_]+$/u.test(needle);
+  if (!isToken) {
+    return { word: original, case_sensitive: !!caseSensitive, mode: "substr", needle, regex: null };
+  }
+
+  // Unicode-aware boundary check (Cyrillic-safe):
+  //   (^|non-word) + needle + ($|non-word)
+  // where "word" is letters/numbers/underscore.
+  const safe = escapeRegExp(needle);
+  const regex = new RegExp(`(?:^|[^\\p{L}\\p{N}_])${safe}(?:$|[^\\p{L}\\p{N}_])`, "u");
+  return { word: original, case_sensitive: !!caseSensitive, mode: "boundary", needle, regex };
 }
 
 async function getBannedWordsCached(db, guildId) {
@@ -24,7 +65,12 @@ async function getBannedWordsCached(db, guildId) {
   const cached = bannedWordsCache.get(guildId);
   if (cached && cached.expiresAt > now) return cached.words;
 
-  const words = (await dbAll(db, `SELECT word, case_sensitive FROM banned_words WHERE guild_id = ?`, [guildId])) || [];
+  const rows = (await dbAll(db, `SELECT word, case_sensitive FROM banned_words WHERE guild_id = ?`, [guildId])) || [];
+  const words = [];
+  for (const r of rows) {
+    const compiled = compileBannedWord(r?.word, !!r?.case_sensitive);
+    if (compiled) words.push(compiled);
+  }
   bannedWordsCache.set(guildId, { expiresAt: now + BANNED_WORDS_TTL_MS, words });
 
   // Best-effort pruning to avoid unbounded growth.
@@ -112,15 +158,17 @@ async function runSecurityPipeline(db, message, userRoles) {
   const bannedWords = await getBannedWordsCached(db, guildId);
   
   if (bannedWords?.length > 0 && message.content) {
-    const content = message.content;
-    for (const { word, case_sensitive } of bannedWords) {
-      if (!word) continue;
-      const safeWord = escapeRegExp(word);
-      const pattern = new RegExp(`\\b${safeWord}\\b`, case_sensitive ? "g" : "gi");
-      if (pattern.test(content)) {
+    const contentN = normalizeAutomodText(message.content, true);
+    const contentL = normalizeAutomodText(message.content, false);
+
+    for (const entry of bannedWords) {
+      if (!entry?.word) continue;
+      const hay = entry.case_sensitive ? contentN : contentL;
+      const hit = entry.mode === "substr" ? hay.includes(entry.needle) : entry.regex?.test(hay);
+      if (hit) {
         try {
           await message.delete();
-          await message.author.send(`⚠️ Ваше сообщение было удалено, так как содержит запрещённое слово: "${word}"`);
+          await message.author.send(`⚠️ Ваше сообщение было удалено, так как содержит запрещённое слово: "${entry.word}"`);
         } catch {}
         return { allowed: false, stop: true };
       }
@@ -130,4 +178,8 @@ async function runSecurityPipeline(db, message, userRoles) {
   return { allowed: true, stop: false };
 }
 
-module.exports = { runSecurityPipeline };
+module.exports = {
+  runSecurityPipeline,
+  invalidateBannedWordsCache,
+  invalidateAllBannedWordsCache,
+};

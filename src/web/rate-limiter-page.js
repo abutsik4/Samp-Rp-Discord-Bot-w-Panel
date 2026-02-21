@@ -274,8 +274,7 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
 
     async function loadChannels() {
       try {
-        const res = await fetch(apiBase + '/api/' + botKey + '/channels');
-        const data = await res.json();
+        const data = await window.panelFetchJson(apiBase + '/api/' + botKey + '/sendable-channels');
         const select = document.getElementById('channelSelect');
         select.innerHTML = '<option value="">Select a channel...</option>';
         (data.items || data).forEach(ch => {
@@ -290,8 +289,7 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
     async function loadRoles(guildId) {
       if (!guildId) return;
       try {
-        const res = await fetch(apiBase + '/api/' + botKey + '/roles?guildId=' + guildId);
-        const data = await res.json();
+        const data = await window.panelFetchJson(apiBase + '/api/' + botKey + '/roles?guildId=' + encodeURIComponent(guildId));
         rolesCache = data.roles || [];
         
         const populate = (selId) => {
@@ -316,8 +314,7 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
       if (!currentChannelId) return;
       
       try {
-        const res = await fetch(apiBase + '/api/' + botKey + '/rate-limits/' + currentChannelId);
-        const config = await res.json();
+        const config = await window.panelFetchJson(apiBase + '/api/' + botKey + '/rate-limits/' + encodeURIComponent(currentChannelId));
         
         if (config.guild_id) loadRoles(config.guild_id);
 
@@ -368,8 +365,7 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
       if (!guildId) return;
       const container = document.getElementById('strikesContainer');
       try {
-        const res = await fetch(apiBase + '/api/' + botKey + '/rate-limits/strikes?guildId=' + guildId);
-        const data = await res.json();
+        const data = await window.panelFetchJson(apiBase + '/api/' + botKey + '/rate-limits/strikes?guildId=' + encodeURIComponent(guildId));
         const users = data.users || [];
 
         if (users.length === 0) {
@@ -453,17 +449,13 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
     window.clearStrikes = async function(userId, guildId) {
       if (!confirm('Are you sure you want to clear strikes for this user?')) return;
       try {
-        const res = await fetch(
+        await window.panelFetchJson(
           apiBase + '/api/' + botKey + '/rate-limits/strikes/' + encodeURIComponent(userId) +
           '?guildId=' + encodeURIComponent(guildId),
           { method: 'DELETE' }
         );
-        if (res.ok) {
-          showAlert('Strikes cleared', 'success');
-          loadStrikes(guildId);
-        } else {
-          showAlert('Failed to clear strikes', 'warning');
-        }
+        showAlert('Strikes cleared', 'success');
+        loadStrikes(guildId);
       } catch (err) { showAlert('Error clearing strikes', 'warning'); }
     }
 
@@ -552,13 +544,12 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
       };
 
       try {
-        const res = await fetch(apiBase + '/api/' + botKey + '/rate-limits/' + currentChannelId, {
+        await window.panelFetchJson(apiBase + '/api/' + botKey + '/rate-limits/' + encodeURIComponent(currentChannelId), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        if (res.ok) showAlert('Settings successfully saved! (Role overrides: ' + (rateRoleLimits?.length || 0) + ')', 'success');
-        else showAlert('Failed to save settings', 'warning');
+        showAlert('Settings successfully saved! (Role overrides: ' + (rateRoleLimits?.length || 0) + ')', 'success');
       } catch (err) { showAlert('Error saving config', 'warning'); }
     }
 
@@ -593,7 +584,8 @@ function generateRateLimiterPage(bot, PANEL_BASE) {
     botKey: bot.key,
     botName: bot.name,
     title: 'JepsenCloud Panel — Spam Prevention',
-    currentPage: 'rate-limits'
+    currentPage: 'rate-limits',
+    PANEL_BASE,
   });
 }
 

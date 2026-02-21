@@ -2,7 +2,9 @@ const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
 
 function initStatsDb() {
-    const dbPath = path.join(__dirname, "../data/stats.db");
+    const dbPath = process.env.STATS_DB_PATH
+        ? path.resolve(process.env.STATS_DB_PATH)
+        : path.join(__dirname, "..", "..", "data", "stats.db");
     const db = new sqlite3.Database(dbPath);
 
     db.run(

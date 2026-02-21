@@ -72,6 +72,7 @@ function generateAutoModPage(bot, PANEL_BASE) {
   const scripts = `
   <script>
     const botKey = '${bot.key}';
+    const apiBase = '${PANEL_BASE}/api/' + botKey;
     function escapeHtml(str) { return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
     function showAlert(msg, type) {
       const c = document.getElementById('alertContainer');
@@ -84,8 +85,7 @@ function generateAutoModPage(bot, PANEL_BASE) {
 
     async function loadBannedWords() {
       try {
-        const res = await fetch('/api/bot/' + botKey + '/automod');
-        const data = await res.json();
+        const data = await window.panelFetchJson(apiBase + '/automod');
         const container = document.getElementById('wordsContainer');
         document.getElementById('wordCount').textContent = data.words.length;
         const clearBtn = document.getElementById('clearAllBtn');
@@ -102,16 +102,22 @@ function generateAutoModPage(bot, PANEL_BASE) {
           li.innerHTML = '<div><div><span class="word-text">' + escapeHtml(w.word) + '</span>' + (w.case_sensitive ? '<span class="word-badge">CASE SENSITIVE</span>' : '') + '</div><div class="word-date">Added: ' + new Date(w.added_at).toLocaleString() + '</div></div><button class="btn btn-danger" onclick="removeWord(\\'' + escapeHtml(w.word).replace(/'/g,"\\\\'") + '\\')">Remove</button>';
           container.appendChild(li);
         });
-      } catch (err) { showAlert('Failed to load banned words', 'warning'); }
+      } catch (err) {
+        if (err && err.status === 401) showAlert('Session expired. Please log in again.', 'warning');
+        else showAlert('Failed to load banned words', 'warning');
+      }
     }
 
     async function removeWord(word) {
       if (!confirm('Remove "' + word + '" from banned words?')) return;
       try {
-        const res = await fetch('/api/bot/' + botKey + '/automod/' + encodeURIComponent(word), { method: 'DELETE' });
-        if (res.ok) { showAlert('Word removed', 'success'); loadBannedWords(); }
-        else showAlert('Failed to remove word', 'warning');
-      } catch (err) { showAlert('Error removing word', 'warning'); }
+        await window.panelFetchJson(apiBase + '/automod/' + encodeURIComponent(word), { method: 'DELETE' });
+        showAlert('Word removed', 'success');
+        loadBannedWords();
+      } catch (err) {
+        if (err && err.status === 401) showAlert('Session expired. Please log in again.', 'warning');
+        else showAlert('Error removing word', 'warning');
+      }
     }
 
     document.getElementById('addWordForm').addEventListener('submit', async (e) => {
@@ -120,18 +126,19 @@ function generateAutoModPage(bot, PANEL_BASE) {
       const caseSensitive = document.getElementById('caseSensitive').checked;
       if (!word) return;
       try {
-        const res = await fetch('/api/bot/' + botKey + '/automod', {
+        await window.panelFetchJson(apiBase + '/automod', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ word, case_sensitive: caseSensitive })
         });
-        if (res.ok) {
-          showAlert('Word banned', 'success');
-          document.getElementById('wordInput').value = '';
-          document.getElementById('caseSensitive').checked = false;
-          loadBannedWords();
-        } else showAlert('Failed to ban word', 'warning');
-      } catch (err) { showAlert('Error banning word', 'warning'); }
+        showAlert('Word banned', 'success');
+        document.getElementById('wordInput').value = '';
+        document.getElementById('caseSensitive').checked = false;
+        loadBannedWords();
+      } catch (err) {
+        if (err && err.status === 401) showAlert('Session expired. Please log in again.', 'warning');
+        else showAlert('Error banning word', 'warning');
+      }
     });
 
     document.addEventListener('DOMContentLoaded', loadBannedWords);
@@ -145,7 +152,8 @@ function generateAutoModPage(bot, PANEL_BASE) {
     botKey: bot.key,
     botName: bot.name,
     title: 'JepsenCloud Panel — AutoMod',
-    currentPage: 'automod'
+    currentPage: 'automod',
+    PANEL_BASE,
   });
 }
 

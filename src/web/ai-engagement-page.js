@@ -211,24 +211,18 @@ function generateAIEngagementPage(bot, PANEL_BASE) {
     }
 
     async function api(path, opts = {}) {
-      const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
-      const text = await res.text();
-      let json = null;
-      try { json = JSON.parse(text); } catch (_) {}
-      if (!res.ok) {
-        const msg = (json && (json.error || json.message)) || text || ('HTTP ' + res.status);
-        throw new Error(msg);
-      }
-      if (!json) {
-        // Happens if auth redirects to HTML or a proxy returns non-JSON.
-        throw new Error('Non-JSON response from API');
-      }
-      return json;
+      return window.panelFetchJson(path, {
+        ...opts,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(opts && opts.headers ? opts.headers : {})
+        }
+      });
     }
 
     async function loadChannels() {
       try {
-        const data = await api(apiBase + '/api/' + botKey + '/channels');
+        const data = await api(apiBase + '/api/' + botKey + '/sendable-channels');
         channels = (data.items || []).slice().sort((a, b) => {
           const g = String(a.guild_name || '').localeCompare(String(b.guild_name || ''));
           if (g !== 0) return g;
@@ -469,7 +463,8 @@ function generateAIEngagementPage(bot, PANEL_BASE) {
     botKey: bot.key,
     botName: bot.name,
     title: 'JepsenCloud Panel — AI Engagement',
-    currentPage: 'ai-engagement'
+    currentPage: 'ai-engagement',
+    PANEL_BASE,
   });
 }
 

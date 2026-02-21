@@ -69,6 +69,7 @@ function generateWhitelistPage(bot, PANEL_BASE) {
   const scripts = `
   <script>
     const botKey = '${bot.key}';
+    const apiBase = '${PANEL_BASE}/api/' + botKey;
     function showAlert(msg, type) {
       const c = document.getElementById('alertContainer');
       const d = document.createElement('div');
@@ -80,8 +81,8 @@ function generateWhitelistPage(bot, PANEL_BASE) {
 
     async function loadChannels() {
       try {
-        const res = await fetch('/api/bot/' + botKey + '/channels');
-        const channels = await res.json();
+        const data = await window.panelFetchJson(apiBase + '/channels');
+        const channels = Array.isArray(data) ? data : (data.channels || []);
         const select = document.getElementById('channelSelect');
         select.innerHTML = '<option value="">-- Select Channel --</option>';
         channels.forEach(ch => {
@@ -90,13 +91,15 @@ function generateWhitelistPage(bot, PANEL_BASE) {
           opt.textContent = ch.name;
           select.appendChild(opt);
         });
-      } catch (err) { showAlert('Failed to load channels', 'warning'); }
+      } catch (err) {
+        if (err && err.status === 401) showAlert('Session expired. Please log in again.', 'warning');
+        else showAlert('Failed to load channels', 'warning');
+      }
     }
 
     async function loadWhitelist() {
       try {
-        const res = await fetch('/api/bot/' + botKey + '/whitelist');
-        const data = await res.json();
+        const data = await window.panelFetchJson(apiBase + '/whitelist');
         const container = document.getElementById('whitelistContainer');
         document.getElementById('whitelistCount').textContent = data.channels.length;
         const clearBtn = document.getElementById('clearAllBtn');
@@ -113,16 +116,22 @@ function generateWhitelistPage(bot, PANEL_BASE) {
           li.innerHTML = '<div><div class="channel-name">' + ch.name + '</div><div class="channel-date">Added: ' + new Date(ch.added_at).toLocaleString() + '</div></div><button class="btn btn-danger" onclick="removeChannel(\\'' + ch.id + '\\')">Remove</button>';
           container.appendChild(li);
         });
-      } catch (err) { showAlert('Failed to load whitelist', 'warning'); }
+      } catch (err) {
+        if (err && err.status === 401) showAlert('Session expired. Please log in again.', 'warning');
+        else showAlert('Failed to load whitelist', 'warning');
+      }
     }
 
     async function removeChannel(channelId) {
       if (!confirm('Remove this channel from whitelist?')) return;
       try {
-        const res = await fetch('/api/bot/' + botKey + '/whitelist/' + channelId, { method: 'DELETE' });
-        if (res.ok) { showAlert('Channel removed', 'success'); loadWhitelist(); }
-        else showAlert('Failed to remove channel', 'warning');
-      } catch (err) { showAlert('Error removing channel', 'warning'); }
+        await window.panelFetchJson(apiBase + '/whitelist/' + channelId, { method: 'DELETE' });
+        showAlert('Channel removed', 'success');
+        loadWhitelist();
+      } catch (err) {
+        if (err && err.status === 401) showAlert('Session expired. Please log in again.', 'warning');
+        else showAlert('Error removing channel', 'warning');
+      }
     }
 
     document.getElementById('addChannelForm').addEventListener('submit', async (e) => {
@@ -130,16 +139,17 @@ function generateWhitelistPage(bot, PANEL_BASE) {
       const channelId = document.getElementById('channelSelect').value;
       if (!channelId) return;
       try {
-        const res = await fetch('/api/bot/' + botKey + '/whitelist', {
+        await window.panelFetchJson(apiBase + '/whitelist', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ channel_id: channelId })
         });
-        if (res.ok) {
-          showAlert('Channel added to whitelist', 'success');
-          loadWhitelist();
-        } else showAlert('Failed to add channel', 'warning');
-      } catch (err) { showAlert('Error adding channel', 'warning'); }
+        showAlert('Channel added to whitelist', 'success');
+        loadWhitelist();
+      } catch (err) {
+        if (err && err.status === 401) showAlert('Session expired. Please log in again.', 'warning');
+        else showAlert('Error adding channel', 'warning');
+      }
     });
 
     document.addEventListener('DOMContentLoaded', () => { loadChannels(); loadWhitelist(); });
@@ -153,7 +163,8 @@ function generateWhitelistPage(bot, PANEL_BASE) {
     botKey: bot.key,
     botName: bot.name,
     title: 'JepsenCloud Panel — Channel Whitelist',
-    currentPage: 'whitelist'
+    currentPage: 'whitelist',
+    PANEL_BASE,
   });
 }
 

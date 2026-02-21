@@ -118,7 +118,8 @@ function generateCommandsPage(bot, PANEL_BASE, disabledCommands = []) {
 
       const byCat = { user: [], admin: [], other: [] };
       (commands || []).forEach(c => {
-        const cat = c.category === 'admin' ? 'admin' : (c.category === 'user' ? 'user' : 'other');
+      currentPage: 'commands',
+      PANEL_BASE,
         byCat[cat].push(c);
       });
       byCat.user.sort((a,b) => a.name.localeCompare(b.name));
@@ -155,12 +156,11 @@ function generateCommandsPage(bot, PANEL_BASE, disabledCommands = []) {
       const cmd = el.dataset.command;
       const enabled = el.checked;
       try {
-        const res = await fetch(apiBase + '/api/' + botKey + '/commands/toggle', {
+        await window.panelFetchJson(apiBase + '/api/' + botKey + '/commands/toggle', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ commandName: cmd, enabled })
         });
-        if (!res.ok) throw new Error('Failed');
         showAlert(cmd + ' ' + (enabled ? 'enabled' : 'disabled'), 'success');
         el.closest('.command-card').classList.toggle('command-disabled', !enabled);
       } catch (e) {
@@ -180,9 +180,7 @@ function generateCommandsPage(bot, PANEL_BASE, disabledCommands = []) {
 
     async function loadCommands() {
       try {
-        const res = await fetch(apiBase + '/api/' + botKey + '/commands');
-        const data = await res.json().catch(() => null);
-        if (!res.ok) throw new Error((data && (data.error || data.message)) || ('HTTP ' + res.status));
+        const data = await window.panelFetchJson(apiBase + '/api/' + botKey + '/commands');
         renderCommands((data && data.commands) || []);
       } catch (e) {
         const loading = document.getElementById('commandsLoading');
@@ -207,7 +205,8 @@ function generateCommandsPage(bot, PANEL_BASE, disabledCommands = []) {
     botKey: bot.key,
     botName: bot.name,
     title: 'JepsenCloud Panel - Bot Commands',
-    currentPage: 'commands'
+    currentPage: 'commands',
+    PANEL_BASE,
   });
 }
 

@@ -51,11 +51,23 @@ function validateLength(value, max, label) {
 
 function requireAuth(req, res, next) {
   if (req.session?.user?.ok) return next();
+
+  const accept = String(req.headers?.accept || "").toLowerCase();
+  const url = String(req.originalUrl || req.url || "");
+  const isApi = url.startsWith(`${_panelBase}/api/`) || url.includes(`${_panelBase}/api/`);
+  const wantsJson = isApi || accept.includes("application/json") || req.xhr;
+
+  if (wantsJson) return res.status(401).json({ error: "Authentication required" });
   return res.redirect(`${_panelBase}/login`);
 }
 
 function requireAdmin(req, res, next) {
   if (req.session?.user?.ok && req.session?.user?.role === "admin") return next();
+  const accept = String(req.headers?.accept || "").toLowerCase();
+  const url = String(req.originalUrl || req.url || "");
+  const isApi = url.startsWith(`${_panelBase}/api/`) || url.includes(`${_panelBase}/api/`);
+  const wantsJson = isApi || accept.includes("application/json") || req.xhr;
+  if (wantsJson) return res.status(403).json({ error: "Access denied. Admin role required." });
   return res.status(403).send("Access denied. Admin role required.");
 }
 

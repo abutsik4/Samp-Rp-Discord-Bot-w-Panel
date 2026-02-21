@@ -3,7 +3,7 @@ const { Router } = require("express");
 function createCommandsRouter(ctx) {
   const router = Router();
   const {
-    PANEL_BASE, requireAuth, apiLimiter, bots,
+    PANEL_BASE, requireAuth, requireAdmin, apiLimiter, bots,
     getDisabledCommands, enableCommand, disableCommand,
   } = ctx;
 
@@ -58,7 +58,7 @@ function createCommandsRouter(ctx) {
     }
   });
 
-  router.post(`${PANEL_BASE}/api/:botKey/commands/toggle`, requireAuth, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/commands/toggle`, requireAuth, requireAdmin, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 

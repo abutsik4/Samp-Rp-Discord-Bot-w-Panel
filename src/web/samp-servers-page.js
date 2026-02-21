@@ -165,10 +165,13 @@ function generateSampServersPage(bot, PANEL_BASE) {
     }
 
     async function api(path, opts = {}) {
-      const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Request failed');
-      return json;
+      return window.panelFetchJson(path, {
+        ...opts,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(opts && opts.headers ? opts.headers : {})
+        }
+      });
     }
 
     function updateStats() {
@@ -227,7 +230,7 @@ function generateSampServersPage(bot, PANEL_BASE) {
 
     async function loadServers() {
       try {
-        const data = await api(apiBase + '/api/bot/' + botKey + '/samp-servers');
+        const data = await api(apiBase + '/api/' + botKey + '/samp-servers');
         servers = (data.servers || []).map(s => ({
           ...s,
           enabled: Boolean(s.enabled)
@@ -249,7 +252,7 @@ function generateSampServersPage(bot, PANEL_BASE) {
 
     async function loadChannels() {
       try {
-        const data = await api(apiBase + '/api/' + botKey + '/channels');
+        const data = await api(apiBase + '/api/' + botKey + '/sendable-channels');
         const select = document.getElementById('channelSelect');
         const addSelect = document.getElementById('addChannelSelect');
         select.innerHTML = '<option value="">Select a channel...</option>';
@@ -273,7 +276,7 @@ function generateSampServersPage(bot, PANEL_BASE) {
       if (!parsed) return showAlert('Invalid IP:Port', 'warning');
       try {
         const serverId = slugify(name) + '-' + Math.random().toString(36).slice(2, 6);
-        await api(apiBase + '/api/bot/' + botKey + '/samp-servers', {
+        await api(apiBase + '/api/' + botKey + '/samp-servers', {
           method: 'POST',
           body: JSON.stringify({
             server_id: serverId,
@@ -295,7 +298,7 @@ function generateSampServersPage(bot, PANEL_BASE) {
     window.deleteServer = async (id) => {
       if (!confirm('Remove this server?')) return;
       try {
-        await api(apiBase + '/api/bot/' + botKey + '/samp-servers/' + id, { method: 'DELETE' });
+        await api(apiBase + '/api/' + botKey + '/samp-servers/' + id, { method: 'DELETE' });
         showAlert('Server removed', 'success');
         loadServers();
       } catch (e) { showAlert(e.message, 'error'); }
@@ -303,7 +306,7 @@ function generateSampServersPage(bot, PANEL_BASE) {
 
     window.startServer = async (id) => {
       try {
-        await api(apiBase + '/api/bot/' + botKey + '/samp-servers/' + id + '/start', { method: 'POST' });
+        await api(apiBase + '/api/' + botKey + '/samp-servers/' + id + '/start', { method: 'POST' });
         showAlert('Tracker started', 'success');
         loadServers();
       } catch (e) { showAlert(e.message, 'error'); }
@@ -311,7 +314,7 @@ function generateSampServersPage(bot, PANEL_BASE) {
 
     window.stopServer = async (id) => {
       try {
-        await api(apiBase + '/api/bot/' + botKey + '/samp-servers/' + id + '/stop', { method: 'POST' });
+        await api(apiBase + '/api/' + botKey + '/samp-servers/' + id + '/stop', { method: 'POST' });
         showAlert('Tracker stopped', 'success');
         loadServers();
       } catch (e) { showAlert(e.message, 'error'); }
@@ -323,7 +326,7 @@ function generateSampServersPage(bot, PANEL_BASE) {
       if (targets.length === 0) return;
       for (const s of targets) {
         try {
-          await api(apiBase + '/api/bot/' + botKey + '/samp-servers/' + s.server_id + '/' + action, { method: 'POST' });
+          await api(apiBase + '/api/' + botKey + '/samp-servers/' + s.server_id + '/' + action, { method: 'POST' });
         } catch (e) {
           // keep going
         }
@@ -351,7 +354,8 @@ function generateSampServersPage(bot, PANEL_BASE) {
     botKey: bot.key,
     botName: bot.name,
     title: 'JepsenCloud Panel — SAMP Servers',
-    currentPage: 'samp-servers'
+    currentPage: 'samp-servers',
+    PANEL_BASE,
   });
 }
 

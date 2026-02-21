@@ -4,7 +4,7 @@ const { EmbedBuilder, PermissionsBitField } = require("discord.js");
 function createMessagesRouter(ctx) {
   const router = Router();
   const {
-    PANEL_BASE, requireAuth, apiLimiter, bots,
+    PANEL_BASE, requireAuth, requireAdmin, apiLimiter, bots,
     isAllowedChannel, validateLength, parseHexColor,
     getAllSendableChannels, dbRun, dbGet, dbAll,
     panelHttpLogger,
@@ -13,7 +13,7 @@ function createMessagesRouter(ctx) {
   // -------------------------
   // PANEL API
   // -------------------------
-  router.get(`${PANEL_BASE}/api/:botKey/channels`, requireAuth, apiLimiter, async (req, res) => {
+  router.get(`${PANEL_BASE}/api/:botKey/sendable-channels`, requireAuth, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -42,7 +42,7 @@ function createMessagesRouter(ctx) {
   });
 
   // Messages API - POST create/send message
-  router.post(`${PANEL_BASE}/api/:botKey/messages`, requireAuth, apiLimiter, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/messages`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -76,6 +76,9 @@ function createMessagesRouter(ctx) {
 
       // Send to Discord if status is 'sent'
       if (status === 'sent' && channelId) {
+        if (!isAllowedChannel(String(channelId))) {
+          return res.status(403).json({ error: "Channel is not allow-listed for panel posting" });
+        }
         const channel = await bot.client.channels.fetch(channelId);
         if (!channel || !channel.isTextBased()) {
           return res.status(400).json({ error: "Invalid channel" });
@@ -126,7 +129,7 @@ function createMessagesRouter(ctx) {
   });
 
   // Messages API - PUT update message
-  router.put(`${PANEL_BASE}/api/:botKey/messages/:id`, requireAuth, apiLimiter, async (req, res) => {
+  router.put(`${PANEL_BASE}/api/:botKey/messages/:id`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -164,6 +167,9 @@ function createMessagesRouter(ctx) {
 
       // If sending to Discord
       if (status === 'sent' && channelId) {
+        if (!isAllowedChannel(String(channelId))) {
+          return res.status(403).json({ error: "Channel is not allow-listed for panel posting" });
+        }
         const channel = await bot.client.channels.fetch(channelId);
         if (!channel || !channel.isTextBased()) {
           return res.status(400).json({ error: "Invalid channel" });
@@ -222,7 +228,7 @@ function createMessagesRouter(ctx) {
   });
 
   // Messages API - DELETE message
-  router.delete(`${PANEL_BASE}/api/:botKey/messages/:id`, requireAuth, apiLimiter, async (req, res) => {
+  router.delete(`${PANEL_BASE}/api/:botKey/messages/:id`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -264,6 +270,9 @@ function createMessagesRouter(ctx) {
     if (!channelId || !messageId) return res.status(400).json({ error: "channelId and messageId are required" });
 
     try {
+      if (!isAllowedChannel(String(channelId))) {
+        return res.status(403).json({ error: "Channel is not allow-listed for panel posting" });
+      }
       const channel = await bot.client.channels.fetch(channelId);
       if (!channel || !channel.isTextBased()) return res.status(400).json({ error: "Invalid channel" });
 
@@ -298,7 +307,7 @@ function createMessagesRouter(ctx) {
     }
   });
 
-  router.post(`${PANEL_BASE}/api/:botKey/discord-message/edit`, requireAuth, apiLimiter, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/discord-message/edit`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -318,6 +327,9 @@ function createMessagesRouter(ctx) {
       const footerCheck = validateLength(embed?.footer, 2048, "Embed footer");
       if (!footerCheck.ok) return res.status(400).json({ error: footerCheck.error });
 
+      if (!isAllowedChannel(String(chId))) {
+        return res.status(403).json({ error: "Channel is not allow-listed for panel posting" });
+      }
       const channel = await bot.client.channels.fetch(chId);
       if (!channel || !channel.isTextBased()) return res.status(400).json({ error: "Invalid channel" });
 

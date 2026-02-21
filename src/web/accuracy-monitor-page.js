@@ -33,6 +33,7 @@ function generateAccuracyMonitorPage(bot, PANEL_BASE) {
         botKey: bot.key,
         botName: bot.name,
         currentPage: "accuracy",
+        PANEL_BASE,
         head: `
     :root{color-scheme:dark;}
     .card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,.3);margin-bottom:20px}
@@ -176,8 +177,7 @@ function generateAccuracyMonitorPage(bot, PANEL_BASE) {
     async function fetchLiveStats() {
       try {
         const url = \`${PANEL_BASE}/api/\${botKey}/stats/live?guildId=\${guildId}\`;
-        const response = await fetch(url);
-        const data = await response.json();
+        const data = await window.panelFetchJson(url);
         if (data.ok && data.stats) {
           updateStatsDisplay(data.stats);
         }
@@ -234,12 +234,11 @@ function generateAccuracyMonitorPage(bot, PANEL_BASE) {
     async function runReconciliation() {
       try {
         showStatus('Running reconciliation...', 'info');
-        const response = await fetch('${PANEL_BASE}/api/accuracy/reconcile', {
+        const data = await window.panelFetchJson('${PANEL_BASE}/api/accuracy/reconcile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ guildId: '${guildId || ""}' })
         });
-        const data = await response.json();
         if (data.success) {
           showStatus('✓ Reconciliation complete: ' + JSON.stringify(data.result), 'success');
           setTimeout(() => location.reload(), 2000);
@@ -255,12 +254,11 @@ function generateAccuracyMonitorPage(bot, PANEL_BASE) {
       if (!confirm('This will force a full database sync. Continue?')) return;
       try {
         showStatus('Running full sync...', 'info');
-        const response = await fetch('${PANEL_BASE}/api/accuracy/fullsync', {
+        const data = await window.panelFetchJson('${PANEL_BASE}/api/accuracy/fullsync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ guildId: '${guildId || ""}' })
         });
-        const data = await response.json();
         if (data.success) {
           showStatus('✓ Full sync complete: ' + JSON.stringify(data.result), 'success');
           setTimeout(() => location.reload(), 2000);

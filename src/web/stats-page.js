@@ -205,10 +205,7 @@ function generateStatsPage(bot, PANEL_BASE) {
           guildId: document.getElementById('guildId').value || ''
         });
 
-        const response = await fetch(PANEL_BASE + '/api/' + BOT_KEY + '/stats/users?' + query);
-        if (!response.ok) throw new Error('Failed to fetch statistics');
-
-        const data = await response.json();
+        const data = await window.panelFetchJson(PANEL_BASE + '/api/' + BOT_KEY + '/stats/users?' + query);
         allUsers = data.users || [];
 
         if (allUsers.length > 0) {
@@ -307,17 +304,26 @@ function generateStatsPage(bot, PANEL_BASE) {
       const payload = { guildId, userId };
       if (mode.startsWith('=')) payload.setTo = parseInt(mode.slice(1));
       else payload.delta = parseInt(mode);
-      const res = await fetch(PANEL_BASE + '/api/' + BOT_KEY + '/stats/adjust', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-      });
-      if (res.ok) { alert('Done'); loadStats(); } else alert('Error');
+      try {
+        await window.panelFetchJson(PANEL_BASE + '/api/' + BOT_KEY + '/stats/adjust', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        alert('Done');
+        loadStats();
+      } catch (e) {
+        alert('Error: ' + (e && e.message ? e.message : 'Request failed'));
+      }
     }
 
     async function showChannelBreakdown(userId, username) {
       let guildId = document.getElementById('guildId')?.value || DEFAULT_GUILD_ID;
       if (!guildId) return alert('Enter Guild ID first');
-      const res = await fetch(PANEL_BASE + '/api/' + BOT_KEY + '/stats/user-channels?guildId=' + guildId + '&userId=' + userId);
-      const data = await res.json();
+      const data = await window.panelFetchJson(
+        PANEL_BASE + '/api/' + BOT_KEY + '/stats/user-channels?guildId=' + encodeURIComponent(guildId) +
+        '&userId=' + encodeURIComponent(userId)
+      );
       if (!data.channels?.length) return alert('No channel data');
       alert(username + '\\n\\n' + data.channels.map((c, i) => (i + 1) + '. #' + c.channel_id + ' — ' + c.count + ' msgs').join('\\n'));
     }
@@ -347,9 +353,17 @@ function generateStatsPage(bot, PANEL_BASE) {
       if (!guildId) return;
 
       channelStatus.textContent = 'Loading channels…';
-      const res = await fetch(PANEL_BASE + '/api/' + BOT_KEY + '/stats/channels?guildId=' + encodeURIComponent(guildId));
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
+      let data;
+      try {
+        data = await window.panelFetchJson(PANEL_BASE + '/api/' + BOT_KEY + '/stats/channels?guildId=' + encodeURIComponent(guildId));
+      } catch (e) {
+        channelError.textContent = '❌ ' + (e && e.message ? e.message : 'Failed to load channels');
+        channelError.style.display = 'block';
+        channelStatus.textContent = '';
+        return;
+      }
+
+      if (!data.ok) {
         channelError.textContent = '❌ ' + (data.error || 'Failed to load channels');
         channelError.style.display = 'block';
         channelStatus.textContent = '';
@@ -394,14 +408,21 @@ function generateStatsPage(bot, PANEL_BASE) {
         return;
       }
 
-      const res = await fetch(
-        PANEL_BASE + '/api/' + BOT_KEY + '/stats/channel-users?guildId=' + encodeURIComponent(guildId) +
-        '&channelId=' + encodeURIComponent(channelId) + '&limit=200&offset=0&sortBy=count'
-      );
-      const data = await res.json();
+      let data;
+      try {
+        data = await window.panelFetchJson(
+          PANEL_BASE + '/api/' + BOT_KEY + '/stats/channel-users?guildId=' + encodeURIComponent(guildId) +
+          '&channelId=' + encodeURIComponent(channelId) + '&limit=200&offset=0&sortBy=count'
+        );
+      } catch (e) {
+        channelLoading.style.display = 'none';
+        channelError.textContent = '❌ ' + (e && e.message ? e.message : 'Failed to load channel users');
+        channelError.style.display = 'block';
+        return;
+      }
       channelLoading.style.display = 'none';
 
-      if (!res.ok || !data.ok) {
+      if (!data.ok) {
         channelError.textContent = '❌ ' + (data.error || 'Failed to load channel users');
         channelError.style.display = 'block';
         return;
@@ -447,13 +468,17 @@ function generateStatsPage(bot, PANEL_BASE) {
       const delta = parseInt(mode, 10);
       if (!Number.isFinite(delta) || delta === 0) return alert('Invalid delta');
 
-      const res = await fetch(PANEL_BASE + '/api/' + BOT_KEY + '/stats/channel-adjust', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guildId, channelId, userId, delta })
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) return alert('Error: ' + (data.error || 'Failed'));
+      let data;
+      try {
+        data = await window.panelFetchJson(PANEL_BASE + '/api/' + BOT_KEY + '/stats/channel-adjust', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ guildId, channelId, userId, delta })
+        });
+      } catch (e) {
+        return alert('Error: ' + (e && e.message ? e.message : 'Failed'));
+      }
+      if (!data.ok) return alert('Error: ' + (data.error || 'Failed'));
       await loadStats();
       await loadChannelUsers();
     }
@@ -469,13 +494,17 @@ function generateStatsPage(bot, PANEL_BASE) {
       const setTo = parseInt(mode.replace(/^=/, ''), 10);
       if (!Number.isFinite(setTo) || setTo < 0) return alert('Invalid setTo');
 
-      const res = await fetch(PANEL_BASE + '/api/' + BOT_KEY + '/stats/channel-adjust', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guildId, channelId, userId, setTo })
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) return alert('Error: ' + (data.error || 'Failed'));
+      let data;
+      try {
+        data = await window.panelFetchJson(PANEL_BASE + '/api/' + BOT_KEY + '/stats/channel-adjust', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ guildId, channelId, userId, setTo })
+        });
+      } catch (e) {
+        return alert('Error: ' + (e && e.message ? e.message : 'Failed'));
+      }
+      if (!data.ok) return alert('Error: ' + (data.error || 'Failed'));
       await loadStats();
       await loadChannelUsers();
     }
@@ -487,13 +516,20 @@ function generateStatsPage(bot, PANEL_BASE) {
 
       const channelStatus = document.getElementById('channelStatus');
       channelStatus.textContent = 'Recalculating…';
-      const res = await fetch(PANEL_BASE + '/api/' + BOT_KEY + '/stats/recalculate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guildId })
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
+      let data;
+      try {
+        data = await window.panelFetchJson(PANEL_BASE + '/api/' + BOT_KEY + '/stats/recalculate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ guildId })
+        });
+      } catch (e) {
+        alert('Error: ' + (e && e.message ? e.message : 'Failed to recalculate'));
+        channelStatus.textContent = '';
+        return;
+      }
+
+      if (!data.ok) {
         alert('Error: ' + (data.error || 'Failed to recalculate'));
         channelStatus.textContent = '';
         return;
@@ -517,13 +553,20 @@ function generateStatsPage(bot, PANEL_BASE) {
 
       const channelStatus = document.getElementById('channelStatus');
       channelStatus.textContent = 'Backfilling from Discord…';
-      const res = await fetch(PANEL_BASE + '/api/' + BOT_KEY + '/stats/backfill-channel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
+      let data;
+      try {
+        data = await window.panelFetchJson(PANEL_BASE + '/api/' + BOT_KEY + '/stats/backfill-channel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      } catch (e) {
+        alert('Error: ' + (e && e.message ? e.message : 'Failed to backfill'));
+        channelStatus.textContent = '';
+        return;
+      }
+
+      if (!data.ok) {
         alert('Error: ' + (data.error || 'Failed to backfill'));
         channelStatus.textContent = '';
         return;
@@ -567,7 +610,8 @@ function generateStatsPage(bot, PANEL_BASE) {
     botKey: bot.key,
     botName: bot.name,
     title: 'JepsenCloud Panel — Statistics',
-    currentPage: 'stats'
+    currentPage: 'stats',
+    PANEL_BASE,
   });
 }
 

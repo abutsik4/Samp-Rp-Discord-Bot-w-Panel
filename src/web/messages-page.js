@@ -1405,41 +1405,29 @@ function generateMessagesPage(bot, PANEL_BASE) {
     async function api(path, opts = {}) {
       const startTime = Date.now();
       try {
-        const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
-        const txt = await res.text();
-        let json;
-        try { json = JSON.parse(txt); } catch { json = null; }
-        
-        if (!res.ok) {
-          const errorMsg = (json && (json.error || json.message)) || txt || ('HTTP ' + res.status);
-          const error = new Error(errorMsg);
-          error.status = res.status;
-          
-          // Log to global error tracker
-          if (window.panelLogError) {
-            window.panelLogError(error, {
-              source: 'messages-page',
-              path,
-              status: res.status,
-              duration: Date.now() - startTime
-            });
+        const json = await window.panelFetchJson(path, {
+          ...opts,
+          headers: {
+            'Content-Type': 'application/json',
+            ...(opts && opts.headers ? opts.headers : {})
           }
-          
-          logDebug('API Error: ' + path + ' - ' + errorMsg, 'error');
-          throw error;
-        }
-        
+        });
+
         logDebug('API Success: ' + path + ' (' + (Date.now() - startTime) + 'ms)');
         return json;
       } catch (e) {
-        if (!e.status && window.panelLogError) {
+        // Log to global error tracker
+        if (window.panelLogError) {
           window.panelLogError(e, {
             source: 'messages-page',
             path,
-            type: 'network_error',
+            status: e && e.status ? e.status : undefined,
+            type: e && e.status ? 'http_error' : 'network_error',
             duration: Date.now() - startTime
           });
         }
+
+        logDebug('API Error: ' + path + ' - ' + (e && e.message ? e.message : String(e)), 'error');
         throw e;
       }
     }
@@ -1450,7 +1438,7 @@ function generateMessagesPage(bot, PANEL_BASE) {
 
     async function loadChannels() {
       try {
-        const data = await api(apiBase + '/api/' + botKey + '/channels');
+        const data = await api(apiBase + '/api/' + botKey + '/sendable-channels');
         channels = data.items || [];
         channelIndex = new Map(channels.map(ch => [String(ch.id), ch]));
         const select = document.getElementById('channelSelect');
@@ -1928,7 +1916,8 @@ function generateMessagesPage(bot, PANEL_BASE) {
     botKey: bot.key,
     botName: bot.name,
     title: 'JepsenCloud Panel — Message Pool',
-    currentPage: 'messages'
+    currentPage: 'messages',
+    PANEL_BASE,
   });
 }
 

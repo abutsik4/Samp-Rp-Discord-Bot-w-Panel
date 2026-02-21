@@ -1,4 +1,8 @@
 <p align="center">
+  <img src="public/icons/logo.svg" width="220" alt="SA-MP RP Discord Bot + Panel" />
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/Node.js-20+-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js" />
   <img src="https://img.shields.io/badge/Discord.js-14-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord.js" />
   <img src="https://img.shields.io/badge/Express-4-000000?style=for-the-badge&logo=express&logoColor=white" alt="Express" />
@@ -242,6 +246,14 @@ OAUTH_CALLBACK_URL=http://localhost:3001/panel/callback
 HOLIDAYS_GUILD_ID=<your_guild_id>
 HOLIDAYS_CHANNEL_ID=<target_channel_id>
 
+# Levels / XP (optional)
+# XP is awarded at most once per cooldown window per user.
+LEVELS_XP_COOLDOWN_SEC=60
+# Set to 0 to disable public level-up announcements.
+LEVELS_ANNOUNCE=1
+# Optional: send level-up announcements to a specific channel instead of the message channel.
+LEVELS_ANNOUNCE_CHANNEL_ID=
+
 # Admin Discord IDs (comma-separated)
 ADMIN_IDS=<user_id_1>,<user_id_2>
 ```
@@ -286,6 +298,12 @@ Run the panel independently (without the Discord bot), for testing or panel-only
 ```bash
 node src/panel-only.js
 ```
+
+### Panel API (UI v2)
+
+- Canonical API prefix: `/panel/api/:botKey/...`
+- Legacy compatibility: `/panel/api/bot/:botKey/...` is rewritten to the canonical form.
+- All UI v2 pages use the shared HTML generator and call panel APIs via `window.panelFetchJson()` (consistent JSON errors, auth handling, and `PANEL_BASE` support).
 
 ### Panel Pages
 
@@ -378,7 +396,7 @@ node src/panel-only.js
 | **Database** | SQLite3 (WAL mode) |
 | **Auth** | bcryptjs, role-based access (Admin/User) |
 | **AI/ML** | Markov chains, keyword-based sentiment analysis |
-| **Frontend** | Vanilla JS, CSS3 glassmorphism, Fetch API |
+| **Frontend** | Vanilla JS, CSS3 glassmorphism, `window.panelFetchJson()` wrapper |
 
 ---
 
@@ -394,10 +412,23 @@ npm run dev
 pm2 start ecosystem.config.js --watch
 ```
 
+### NPM Scripts (Command Guide)
+
+| Command | What it does |
+|--------:|--------------|
+| `npm run dev` | Start in development mode |
+| `npm start` | Start in production mode |
+| `npm run check` | Syntax-check entrypoint (`node --check src/index.js`) |
+| `npm test` | Run unit tests (`node --test`) |
+| `npm run test:integration` | Run DB/query integration checks (expects server running for HTTP checks) |
+| `npm run test:all` | Run unit + integration tests |
+| `npm run make:hash` | Generate a password hash helper for panel users |
+| `npm run audit:user` | Audit a user by id (wraps `scripts/audit-user.js`) |
+
 ### Testing
 
 ```bash
-# Run all unit tests — 26 tests across 3 suites
+# Run all unit tests
 npm test
 
 # Or directly:
@@ -435,7 +466,12 @@ LOG_LEVEL=info LOG_FORMAT=json pm2 start ecosystem.config.js
 node scripts/validate-message-counts.js          # Validate counts
 node scripts/audit-user.js <user_id>              # Audit specific user
 node scripts/safe-backfill.js                     # Safe historical backfill
+node scripts/backfill-daily-stats.js              # Backfill daily_channel_stats
+node scripts/migrate-analytics-schema.js          # Apply analytics schema migrations
 node scripts/verify-counts-from-search.js         # Verify from Discord search
+node scripts/verify-analytics.js                  # Verify analytics data quality
+node scripts/verify-single-user.js <id> --guild <gid>    # Verify a single user
+node scripts/verify-channel-user.js --guild <gid> --channel <cid> --user <uid> # Verify channel+user
 node scripts/trace-message-counting.js user <id> --guild <gid>   # Trace user
 node scripts/trace-message-counting.js message <id> --guild <gid> # Trace message
 ```

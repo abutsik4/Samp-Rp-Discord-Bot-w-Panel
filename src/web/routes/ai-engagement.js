@@ -4,7 +4,7 @@ const { getEngagementSettings, getEngagementStats, updateEngagementSettings } = 
 function createAIEngagementRouter(ctx) {
   const router = Router();
   const {
-    PANEL_BASE, requireAuth, apiLimiter, bots, db, dbRun, dbAll,
+    PANEL_BASE, requireAuth, requireAdmin, apiLimiter, bots, db, dbRun, dbAll,
   } = ctx;
 
   router.get(`${PANEL_BASE}/api/:botKey/ai-engagement/settings`, requireAuth, apiLimiter, async (req, res) => {
@@ -24,7 +24,7 @@ function createAIEngagementRouter(ctx) {
     }
   });
 
-  router.post(`${PANEL_BASE}/api/:botKey/ai-engagement/settings`, requireAuth, apiLimiter, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/ai-engagement/settings`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -64,7 +64,7 @@ function createAIEngagementRouter(ctx) {
     }
   });
 
-  router.post(`${PANEL_BASE}/api/:botKey/ai-engagement/test`, requireAuth, apiLimiter, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/ai-engagement/test`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -91,7 +91,7 @@ function createAIEngagementRouter(ctx) {
     }
   });
 
-  router.delete(`${PANEL_BASE}/api/:botKey/ai-engagement/history`, requireAuth, apiLimiter, async (req, res) => {
+  router.delete(`${PANEL_BASE}/api/:botKey/ai-engagement/history`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -107,7 +107,7 @@ function createAIEngagementRouter(ctx) {
     }
   });
 
-  router.post(`${PANEL_BASE}/api/:botKey/ai-engagement/train`, requireAuth, apiLimiter, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/ai-engagement/train`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 

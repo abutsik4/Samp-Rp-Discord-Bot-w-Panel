@@ -5,7 +5,7 @@ const { getCountdownConfig, setCountdownConfig, updateCountdownLastPosted } = re
 function createCountdownRouter(ctx) {
   const router = Router();
   const {
-    PANEL_BASE, requireAuth, apiLimiter, bots, db, client,
+    PANEL_BASE, requireAuth, requireAdmin, apiLimiter, bots, db, client,
     ruPlural,
   } = ctx;
 
@@ -25,7 +25,7 @@ function createCountdownRouter(ctx) {
     }
   });
 
-  router.post(`${PANEL_BASE}/api/:botKey/countdown/config`, requireAuth, apiLimiter, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/countdown/config`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -44,7 +44,7 @@ function createCountdownRouter(ctx) {
     }
   });
 
-  router.post(`${PANEL_BASE}/api/:botKey/countdown/test`, requireAuth, apiLimiter, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/countdown/test`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 

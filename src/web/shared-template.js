@@ -31,6 +31,7 @@ function generateSidebarHTML(options = {}) {
         { href: `${PANEL_BASE}/bot/${botKey}/rate-limits`, icon: '🛡️', label: 'Spam Limits', id: 'rate-limits' },
         { href: `${PANEL_BASE}/bot/${botKey}/whitelist`, icon: '📋', label: 'Whitelist', id: 'whitelist' },
         { href: `${PANEL_BASE}/bot/${botKey}/automod`, icon: '🛡️', label: 'Automod', id: 'automod' },
+        { href: `${PANEL_BASE}/bot/${botKey}/holidays`, icon: '🎉', label: 'Holidays', id: 'holidays' },
         { href: `${PANEL_BASE}/bot/${botKey}/channels`, icon: '🗑️', label: 'Channels', id: 'channels' },
       ]
     },
@@ -105,10 +106,7 @@ function generateSidebarHTML(options = {}) {
 
 function generateSidebarStyles() {
   return `
-    html, body {
-      overflow: hidden;
-      height: 100%;
-    }
+    html, body { height: 100%; }
 
     .dashboard-wrapper {
       display: flex;
@@ -252,7 +250,7 @@ function generateSidebarStyles() {
       flex: 1;
       margin-left: 280px;
       height: 100vh;
-      overflow: hidden;
+      overflow: auto;
     }
 
     .scroll-progress {
@@ -364,86 +362,46 @@ function generateSidebarStyles() {
   `;
 }
 
-function generateSidebarScripts() {
+function generateSidebarScripts(PANEL_BASE = '/panel') {
   return `
-    <script src="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
     <script src="/public/snow.js"></script>
     <script>
-      // Initialize Locomotive Scroll
-      const locoScroll = new LocomotiveScroll({
-        el: document.querySelector('[data-scroll-container]'),
-        smooth: true,
-        lerp: 0.075,
-        multiplier: 0.8,
-        smartphone: { smooth: true },
-        tablet: { smooth: true }
-      });
+      window.PANEL_BASE = ${JSON.stringify(PANEL_BASE)};
 
-      // Only enable reveal animations when Locomotive is running.
-      try { document.documentElement.classList.add('has-loco'); } catch (_) {}
+      // Native scroll shell: provide safe no-ops for legacy pages.
+      window.__locoScroll = null;
+      window.requestLocoUpdate = function requestLocoUpdate() {};
 
-      // Ensure common elements are actually hooked into Locomotive's in-view system.
-      // Some pages wrap cards in a data-scroll container but forget to mark the cards,
-      // which would leave them permanently hidden if CSS expects .is-inview.
-      try {
-        const ensureInViewHook = (selector) => {
-          document.querySelectorAll(selector).forEach((el) => {
-            if (!el.hasAttribute('data-scroll')) el.setAttribute('data-scroll', '');
-            if (!el.getAttribute('data-scroll-class')) el.setAttribute('data-scroll-class', 'is-inview');
-          });
-        };
-        ensureInViewHook('.section-header');
-        ensureInViewHook('.content-card');
-      } catch (_) {}
+      // Shared API helper for JS-generated pages.
+      window.panelFetchJson = async function panelFetchJson(url, opts) {
+        const res = await fetch(url, {
+          credentials: 'same-origin',
+          ...opts,
+          headers: {
+            'Accept': 'application/json',
+            ...(opts && opts.headers ? opts.headers : {})
+          }
+        });
 
-      // Expose for pages that load dynamic content and need a refresh.
-      // (Without this, Locomotive may think the page is shorter than it is,
-      // which can break scrolling and in-view animations.)
-      window.__locoScroll = locoScroll;
-
-      gsap.registerPlugin(ScrollTrigger);
-      locoScroll.on('scroll', ScrollTrigger.update);
-      ScrollTrigger.scrollerProxy('[data-scroll-container]', {
-        scrollTop(value) {
-          return arguments.length ? locoScroll.scrollTo(value, 0, 0) : locoScroll.scroll.instance.scroll.y;
-        },
-        getBoundingClientRect() {
-          return { top: 0, left: 0, width: window.innerWidth, height: window.innerHeight };
-        },
-        pinType: document.querySelector('[data-scroll-container]').style.transform ? 'transform' : 'fixed'
-      });
-      ScrollTrigger.addEventListener('refresh', () => locoScroll.update());
-      ScrollTrigger.refresh();
-
-      // Safe helper for dynamic pages.
-      let __locoUpdateTimer = null;
-      window.requestLocoUpdate = function requestLocoUpdate() {
-        try {
-          if (__locoUpdateTimer) clearTimeout(__locoUpdateTimer);
-          __locoUpdateTimer = setTimeout(() => {
-            try { locoScroll.update(); } catch (_) {}
-            try { window.ScrollTrigger && window.ScrollTrigger.refresh(); } catch (_) {}
-          }, 50);
-        } catch (_) {
-          // ignore
+        const ct = String(res.headers.get('content-type') || '').toLowerCase();
+        const isJson = ct.includes('application/json');
+        if (isJson) {
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            const err = new Error(data && data.error ? data.error : ('Request failed (' + res.status + ')'));
+            err.status = res.status;
+            err.data = data;
+            throw err;
+          }
+          return data;
         }
+
+        const bodyText = await res.text().catch(() => '');
+        const err = new Error(res.status === 401 ? 'Authentication required' : ('Unexpected response (' + res.status + ')'));
+        err.status = res.status;
+        err.body = bodyText;
+        throw err;
       };
-
-      // Kick an initial measurement after DOM is ready.
-      try {
-        setTimeout(() => {
-          try { locoScroll.update(); } catch (_) {}
-          try { window.ScrollTrigger && window.ScrollTrigger.refresh(); } catch (_) {}
-        }, 60);
-      } catch (_) {}
-
-      locoScroll.on('scroll', (args) => {
-        const progress = (args.scroll.y / (args.limit.y || 1)) * 100;
-        const bar = document.getElementById('scrollProgressBar');
-        if (bar) bar.style.width = progress + '%';
-      });
 
       // Mobile sidebar
       const toggle = document.getElementById('sidebarToggle');
@@ -470,11 +428,7 @@ function generateSidebarScripts() {
         window.addEventListener('mousemove', (e) => { lastMouse = { x: e.clientX, y: e.clientY }; }, { passive: true });
 
         function getPanelBase() {
-          // Current deployments use /panel as the base.
-          // Keep this resilient in case the app is mounted elsewhere later.
-          const p = location.pathname || '';
-          const m = p.match(/^\\/panel(\\/|$)/);
-          return m ? '/panel' : '/panel';
+          return window.PANEL_BASE || '/panel';
         }
 
         function ensureClientTraceId() {
@@ -927,8 +881,7 @@ function generatePageHeader(title, botName = '', botKey = '', PANEL_BASE = '/pan
   });
 }
 
-function generate({ head = '', body = '', scripts = '', botKey = '', botName = '', title = 'JepsenCloud', currentPage = '' }) {
-  const PANEL_BASE = '/panel';
+function generate({ head = '', body = '', scripts = '', botKey = '', botName = '', title = 'JepsenCloud', currentPage = '', PANEL_BASE = '/panel', navSections = [] }) {
   
   return `<!doctype html>
 <html>
@@ -937,7 +890,6 @@ function generate({ head = '', body = '', scripts = '', botKey = '', botName = '
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>${title}</title>
   <link rel="stylesheet" href="/shared.css">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/locomotive-scroll@4.1.4/dist/locomotive-scroll.min.css">
   <style>
     ${generateSidebarStyles()}
     ${head}
@@ -951,20 +903,15 @@ function generate({ head = '', body = '', scripts = '', botKey = '', botName = '
       icon: '🤖',
       botKey,
       PANEL_BASE,
+      navSections,
       currentPage
     })}
     
     <main class="main-scroll-container">
-      <div class="scroll-progress">
-        <div class="scroll-progress-bar" id="scrollProgressBar"></div>
-      </div>
-      
-      <div data-scroll-container id="scrollContainer">
-        ${body}
-      </div>
+      <div id="scrollContainer">${body}</div>
     </main>
   </div>
-  ${generateSidebarScripts()}
+  ${generateSidebarScripts(PANEL_BASE)}
   ${scripts}
 </body>
 </html>`;

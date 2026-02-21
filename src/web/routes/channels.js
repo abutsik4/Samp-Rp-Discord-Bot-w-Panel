@@ -2,9 +2,9 @@ const { Router } = require("express");
 
 function createChannelsRouter(ctx) {
   const router = Router();
-  const { PANEL_BASE, requireAuth, bots, client } = ctx;
+  const { PANEL_BASE, requireAuth, requireAdmin, bots, client } = ctx;
 
-  router.get(`${PANEL_BASE}/api/bot/:botKey/channels`, requireAuth, async (req, res) => {
+  router.get(`${PANEL_BASE}/api/:botKey/channels`, requireAuth, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -29,7 +29,7 @@ function createChannelsRouter(ctx) {
     }
   });
 
-  router.post(`${PANEL_BASE}/api/bot/:botKey/channels/bulk-delete`, requireAuth, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/channels/bulk-delete`, requireAuth, requireAdmin, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 

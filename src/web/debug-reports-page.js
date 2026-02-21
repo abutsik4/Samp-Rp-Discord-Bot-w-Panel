@@ -106,9 +106,8 @@ function generateDebugReportsPage(bot, PANEL_BASE) {
 
       try {
         const qs = new URLSearchParams({ limit, offset: String(currentOffset), search });
-        const res = await fetch(PANEL_BASE + '/api/debug/reports?' + qs.toString());
-        const data = await res.json();
-        if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to load');
+        const data = await window.panelFetchJson(PANEL_BASE + '/api/debug/reports?' + qs.toString());
+        if (!data.ok) throw new Error(data.error || 'Failed to load');
 
         const rows = data.reports || [];
         lastPagination = data.pagination || { offset: currentOffset, limit: Number(limit), total: rows.length };
@@ -173,9 +172,8 @@ function generateDebugReportsPage(bot, PANEL_BASE) {
       selectedMeta = null;
 
       try {
-        const res = await fetch(PANEL_BASE + '/api/debug/reports/' + encodeURIComponent(id));
-        const data = await res.json();
-        if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to load report');
+        const data = await window.panelFetchJson(PANEL_BASE + '/api/debug/reports/' + encodeURIComponent(id));
+        if (!data.ok) throw new Error(data.error || 'Failed to load report');
         selectedMeta = data.report || null;
         pre.textContent = JSON.stringify(data.report, null, 2);
       } catch (e) {
@@ -247,7 +245,8 @@ function generateDebugReportsPage(bot, PANEL_BASE) {
     botKey: bot.key,
     botName: bot.name,
     title: 'JepsenCloud Panel — Debug Reports',
-    currentPage: 'debug-reports'
+    currentPage: 'debug-reports',
+    PANEL_BASE,
   });
 }
 

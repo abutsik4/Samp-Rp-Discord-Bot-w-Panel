@@ -3,7 +3,7 @@ const { Router } = require("express");
 function createStatsRouter(ctx) {
   const router = Router();
   const {
-    PANEL_BASE, requireAuth, apiLimiter, bots,
+    PANEL_BASE, requireAuth, requireAdmin, apiLimiter, bots,
     db, dbRun, dbGet, dbAll,
     recordOperation, client, getUserMessageCount,
     panelHttpLogger,
@@ -160,7 +160,7 @@ function createStatsRouter(ctx) {
   });
 
   // Adjust a user's message count (admin tool)
-  router.post(`${PANEL_BASE}/api/:botKey/stats/adjust`, requireAuth, apiLimiter, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/stats/adjust`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -402,7 +402,7 @@ function createStatsRouter(ctx) {
   });
 
   // Apply a per-channel adjustment for a user (delta or setTo, persists via channel_user_adjustments)
-  router.post(`${PANEL_BASE}/api/:botKey/stats/channel-adjust`, requireAuth, apiLimiter, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/stats/channel-adjust`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -482,7 +482,7 @@ function createStatsRouter(ctx) {
   });
 
   // Recalculate daily_channel_stats and user_stats from message_index (DB-only rebuild)
-  router.post(`${PANEL_BASE}/api/:botKey/stats/recalculate`, requireAuth, apiLimiter, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/stats/recalculate`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
@@ -561,7 +561,7 @@ function createStatsRouter(ctx) {
   });
 
   // Backfill a single channel from Discord history into message_index (rate-limited)
-  router.post(`${PANEL_BASE}/api/:botKey/stats/backfill-channel`, requireAuth, apiLimiter, async (req, res) => {
+  router.post(`${PANEL_BASE}/api/:botKey/stats/backfill-channel`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).json({ error: "Bot not found" });
 
