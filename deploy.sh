@@ -124,21 +124,31 @@ start_bot() {
     log "Starting bot..."
     
     cd "$BOT_DIR"
-    
-    # Check if pm2 is installed globally
-    if command -v pm2 &> /dev/null; then
-        log "Using PM2 to start bot"
-        # Ensure single process name consistent with ecosystem.config.js
-        pm2 delete jepsencloud-bot 2>/dev/null || true
-        pm2 restart jepsencloud-panel --update-env || pm2 start ecosystem.config.js
-        pm2 save
-        log "Bot started with PM2 (jepsencloud-panel)"
-    else
-        warn "PM2 not found. Consider installing: npm install -g pm2"
-        warn "Starting bot in foreground (not recommended for production)"
-        npm start &
-        log "Bot started (consider using PM2 for production)"
+
+    # Production is managed by systemd on this host.
+    # Avoid starting with PM2 here: running two instances can cause EADDRINUSE and Discord session exhaustion.
+    if command -v systemctl &> /dev/null && systemctl list-unit-files --type=service 2>/dev/null | grep -q '^jepsencloud-bot\.service'; then
+        log "Restarting systemd service (jepsencloud-bot.service)"
+
+        if [ "$EUID" -eq 0 ]; then
+            systemctl restart jepsencloud-bot.service
+            systemctl --no-pager --full status jepsencloud-bot.service || true
+        else
+            if ! command -v sudo &> /dev/null; then
+                error "jepsencloud-bot.service exists but sudo is not available to restart it. Run this script as root."
+            fi
+            sudo systemctl restart jepsencloud-bot.service
+            sudo systemctl --no-pager --full status jepsencloud-bot.service || true
+        fi
+
+        log "Bot restarted via systemd"
+        return
     fi
+
+    # Local/staging fallback
+    warn "Systemd unit jepsencloud-bot.service not found. Starting via npm (foreground/background)"
+    npm start &
+    log "Bot started via npm"
 }
 
 # Verify deployment
@@ -148,14 +158,14 @@ verify_deployment() {
     sleep 2
     
     # Check if bot is listening
-    if netstat -tlnp 2>/dev/null | grep -q ":5012"; then
+    if command -v ss &> /dev/null && ss -ltnp 2>/dev/null | grep -q ":5012"; then
         log "Bot is listening on port 5012"
     else
         error "Bot is not listening on port 5012"
     fi
     
     # Try to reach health endpoint
-    if curl -s http://localhost:5012/panel > /dev/null 2>&1; then
+    if curl -s http://localhost:5012/api/status > /dev/null 2>&1; then
         log "Health check passed"
     else
         error "Health check failed"

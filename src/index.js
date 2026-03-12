@@ -54,11 +54,20 @@ const { ensureWantedTable } = require("./features/wanted-stars");
 const { ensureWeeklyAwardsTable } = require("./features/weekly-awards");
 const { ensureRadioTable } = require("./features/radio-vote");
 
+const { initLeaderboardCache } = require("./features/leaderboard-cache");
+
+const { ensurePerksTables } = require("./features/perks");
+const { ensureXpMultipliersTable } = require("./features/xp-multipliers");
+
 // -------------------------
 // CONFIG / ENV
 // -------------------------
 const TOKEN = process.env.DISCORD_TOKEN;
 const OWNER_ID = process.env.OWNER_ID;
+
+// Optional Redis leaderboard cache for faster /top queries.
+// Requires: npm install ioredis
+initLeaderboardCache({ url: process.env.REDIS_URL });
 
 if (!TOKEN || !OWNER_ID) {
   console.error("Please set DISCORD_TOKEN and OWNER_ID in your .env file.");
@@ -71,7 +80,10 @@ const PANEL_BASE = "/panel";
 // Optional: if you are behind a reverse proxy and want secure cookies:
 // set TRUST_PROXY=1 and COOKIE_SECURE=true in env
 const TRUST_PROXY = process.env.TRUST_PROXY === "1";
-const COOKIE_SECURE = process.env.COOKIE_SECURE === "true";
+const COOKIE_SECURE =
+  process.env.COOKIE_SECURE === "auto"
+    ? "auto"
+    : process.env.COOKIE_SECURE === "true";
 
 // Optional allow-list for panel posting (comma-separated IDs).
 // If not set, panel can post to any text channel the bot can access.
@@ -151,6 +163,9 @@ async function initDb() {
   await ensureWantedTable(db);
   await ensureWeeklyAwardsTable(db);
   await ensureRadioTable(db);
+
+  await ensurePerksTables(db);
+  await ensureXpMultipliersTable(db);
 }
 
 initDb().catch((e) => {
@@ -291,6 +306,56 @@ app.listen(PORT, () => {
 // -------------------------
 (async function loginWithRetry() {
   const backoffFilePath = path.join(__dirname, "..", "data", "discord-login-backoff.json");
+  const lastAttemptFilePath = path.join(__dirname, "..", "data", "discord-login-last-attempt.json");
+
+  async function readLastAttempt() {
+    try {
+      const raw = await fs.promises.readFile(lastAttemptFilePath, "utf8");
+      const parsed = JSON.parse(raw);
+      const lastAttemptAt = parsed?.lastAttemptAt ? new Date(parsed.lastAttemptAt) : null;
+      if (!lastAttemptAt || Number.isNaN(lastAttemptAt.getTime())) return null;
+      return { lastAttemptAt };
+    } catch (err) {
+      if (err?.code === "ENOENT") return null;
+      console.error(`[Login] Failed to read last-attempt file: ${err?.message || String(err)}`);
+      return null;
+    }
+  }
+
+  async function writeLastAttempt(lastAttemptAt) {
+    try {
+      const tmpPath = `${lastAttemptFilePath}.tmp`;
+      const payload = JSON.stringify({ lastAttemptAt: lastAttemptAt.toISOString() });
+      await fs.promises.writeFile(tmpPath, payload, "utf8");
+      await fs.promises.rename(tmpPath, lastAttemptFilePath);
+    } catch (err) {
+      console.error(`[Login] Failed to write last-attempt file: ${err?.message || String(err)}`);
+    }
+  }
+
+  async function getGatewaySessionStartLimit() {
+    try {
+      // axios is already a dependency; require lazily here to keep startup order simple.
+      const axios = require("axios");
+      const r = await axios.get("https://discord.com/api/v10/gateway/bot", {
+        headers: { Authorization: `Bot ${TOKEN}` },
+        timeout: 15_000,
+      });
+      const lim = r.data?.session_start_limit;
+      if (!lim) return null;
+      return {
+        remaining: lim.remaining,
+        resetAfterMs: lim.reset_after,
+        maxConcurrency: lim.max_concurrency,
+      };
+    } catch (err) {
+      // If Discord is unreachable, fall back to the existing login retry logic.
+      const status = err?.response?.status;
+      const msg = err?.response?.data || err?.message || String(err);
+      console.error(`[Login] Failed to query gateway session limit${status ? ` (HTTP ${status})` : ""}: ${typeof msg === "string" ? msg : JSON.stringify(msg)}`);
+      return null;
+    }
+  }
 
   async function readBackoff() {
     try {
@@ -328,6 +393,7 @@ app.listen(PORT, () => {
 
   const MAX_RETRIES = 10;
   const BASE_DELAY = 30_000; // 30 seconds
+  const MIN_ATTEMPT_INTERVAL_MS = 2 * 60_000; // 2 minutes (persists across restarts)
 
   const initialBackoff = await readBackoff();
   if (initialBackoff?.notBefore && Date.now() < initialBackoff.notBefore.getTime()) {
@@ -339,6 +405,32 @@ app.listen(PORT, () => {
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
+      // Proactive safeguard: check Discord session start limit before attempting login.
+      // This avoids burning attempts in a restart loop and avoids a guaranteed failure when remaining=0.
+      const lim = await getGatewaySessionStartLimit();
+      if (lim && typeof lim.remaining === "number") {
+        if (lim.remaining <= 0 && lim.resetAfterMs && lim.resetAfterMs > 0) {
+          const resetAt = new Date(Date.now() + lim.resetAfterMs);
+          await writeBackoff(resetAt);
+          const waitMs = Math.max(resetAt.getTime() - Date.now(), 0) + 5_000;
+          const waitMin = (waitMs / 60_000).toFixed(1);
+          console.error(`[Login] Session limit pre-check: remaining=0. Waiting ${waitMin} min until ${resetAt.toISOString()}…`);
+          await new Promise(r => setTimeout(r, waitMs));
+        }
+      }
+
+      // Persisted cooldown between attempts across restarts.
+      const lastAttempt = await readLastAttempt();
+      if (lastAttempt?.lastAttemptAt) {
+        const sinceMs = Date.now() - lastAttempt.lastAttemptAt.getTime();
+        if (sinceMs >= 0 && sinceMs < MIN_ATTEMPT_INTERVAL_MS) {
+          const waitMs = MIN_ATTEMPT_INTERVAL_MS - sinceMs;
+          console.error(`[Login] Cooldown active. Waiting ${(waitMs / 1000).toFixed(0)}s before next login attempt…`);
+          await new Promise(r => setTimeout(r, waitMs));
+        }
+      }
+
+      await writeLastAttempt(new Date());
       await client.login(TOKEN);
       await clearBackoff();
       return; // success

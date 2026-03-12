@@ -12,7 +12,9 @@ module.exports = {
       // Environment
       env: {
         NODE_ENV: "production",
-        PORT: 5012
+        PORT: 5012,
+        // Prevent accidental spam from public level-up announcements.
+        LEVELS_ANNOUNCE: "0"
       },
       
       // Auto-restart settings

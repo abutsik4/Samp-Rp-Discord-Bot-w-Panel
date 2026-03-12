@@ -37,7 +37,10 @@ const TOKEN = process.env.DISCORD_TOKEN;
 
 const PANEL_BASE = "/panel";
 const TRUST_PROXY = process.env.TRUST_PROXY === "1";
-const COOKIE_SECURE = process.env.COOKIE_SECURE === "true";
+const COOKIE_SECURE =
+  process.env.COOKIE_SECURE === "auto"
+    ? "auto"
+    : process.env.COOKIE_SECURE === "true";
 
 function isAllowedChannel(channelId) {
   const list = (process.env.ALLOWED_CHANNEL_IDS || "")

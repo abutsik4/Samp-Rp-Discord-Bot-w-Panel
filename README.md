@@ -5,6 +5,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-20+-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js" />
   <img src="https://img.shields.io/badge/Discord.js-14-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord.js" />
+  <img src="https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React" />
   <img src="https://img.shields.io/badge/Express-4-000000?style=for-the-badge&logo=express&logoColor=white" alt="Express" />
   <img src="https://img.shields.io/badge/SQLite-3-003B57?style=for-the-badge&logo=sqlite&logoColor=white" alt="SQLite" />
   <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License" />
@@ -13,9 +14,28 @@
 
 # SA-MP RP Discord Bot with Management Panel
 
-A comprehensive Discord bot for SA-MP roleplay communities with an advanced web administration panel. Features real-time statistics, AI engagement, game economy, rate limiting, holiday system, and a modern glassmorphic UI — all in a clean modular architecture.
+A production-grade, full-stack Discord bot platform for a Russian SA-MP roleplay community — built from scratch as a solo engineering project. Features real-time message analytics, an ML-based conversational AI, a complete roleplay economy, gamification systems, moderation tooling, and a React 19 single-page admin panel backed by a RESTful Express API.
 
 > **🇷🇺 Весь интерфейс бота на русском языке** — команды, описания, уведомления и эмбеды полностью переведены на русский.
+
+---
+
+## 🔑 Technical Highlights
+
+These are the engineering decisions and challenges that characterise this project:
+
+| Area | Detail |
+|------|--------|
+| **Full-stack solo build** | End-to-end ownership: Discord bot, REST API (17 route modules), React SPA (13 pages), DB schema (45+ tables), CI scripts, deployment |
+| **Real-time event pipeline** | Discord gateway events → security checks (automod, rate-limit) → atomic DB writes → XP/badge/perk side-effects, all within a single message handler |
+| **Robust message counting** | Custom reconciliation system that cross-references a `message_index` shadow table against `user_stats` to catch and repair discrepancies caused by deleted messages, bulk deletes, or Discord API gaps |
+| **Incremental & full backfill** | Resumable backfill engine with adaptive rate-limiting, thread support, and SQLite batch inserts — processes thousands of historical messages without data loss or duplication |
+| **Modular architecture** | Thin orchestrator pattern: `src/index.js` wires together 25+ self-contained feature modules. No module imports another via the orchestrator — each is independently testable |
+| **Hybrid API/SPA server** | Same Express app serves both a React SPA (served at `/panel`) and a legacy server-rendered fallback, controlled by env flag. API routes are normalised at middleware level for backward compatibility |
+| **Per-role XP multipliers & perks** | Database-driven rule engine: badge/level triggers → Discord role grants, evaluated on each XP award event |
+| **AI engagement** | Markov chain NLP model (order-2) trained on Russian community messages; keyword sentiment classification for context-aware responses |
+| **Security hardening** | bcrypt password hashing, express-session with SQLite store, Content Security Policy via Helmet, rate-limiting on login and API endpoints, admin-only route guards |
+| **Observability** | Structured JSON logging (custom logger), per-request trace IDs propagated through all HTTP logs and error responses |
 
 ---
 
@@ -32,7 +52,6 @@ A comprehensive Discord bot for SA-MP roleplay communities with an advanced web 
 - [Deployment](#-deployment)
 - [Security](#-security)
 - [License](#-license)
-- [Contributing](#-contributing)
 
 ---
 
@@ -57,10 +76,10 @@ A comprehensive Discord bot for SA-MP roleplay communities with an advanced web 
 - **Context-Aware Responses** — Natural conversational AI
 
 ### 🛡️ Moderation & Rate Limiting
-- **Channel Rate Limits** — Customizable frequency controls
-- **Role-Based Limits** — Per-role rate configurations
+- **Channel Rate Limits** — Customizable frequency controls per channel and per role
 - **Strike System** — Violation tracking with `/mystrikes`
 - **Automod** — Banned words and security pipeline
+- **Bulk Channel Operations** — Mass channel management with safety confirmation
 
 </td>
 <td width="50%" valign="top">
@@ -73,8 +92,9 @@ A comprehensive Discord bot for SA-MP roleplay communities with an advanced web 
 
 ### 🎮 Game & Economy (SA-MP RP)
 - **SA-MP Life** — Roleplay economy (`/reg`, `/work`, `/rob`, `/car`, `/house`)
-- **Levels & XP** — Experience system with rank tiers
-- **Badges** — Collectible user badges
+- **Levels & XP** — Experience system with rank tiers and role-based XP multipliers
+- **Badges** — 24 collectible achievement badges (message count, streaks, reactions)
+- **Perk Rules** — Automatic Discord role grants on badge/level milestones
 - **Wanted Stars** — GTA-style wanted system with decay
 - **Trivia** — Interactive quiz game with streaks
 - **Radio Vote** — Song voting system
@@ -84,7 +104,7 @@ A comprehensive Discord bot for SA-MP roleplay communities with an advanced web 
 ### ⚙️ Advanced Systems
 - **Full Reconciliation** — Daily count verification (03:00 AM)
 - **Message Index Cleanup** — Weekly old index purging
-- **Backfill System** — Historical data loading with progress
+- **Resumable Backfill** — Historical data loading with checkpoint system
 - **Incremental Sync** — Efficient message synchronization
 - **CSV Export** — Full statistics export
 
@@ -93,15 +113,14 @@ A comprehensive Discord bot for SA-MP roleplay communities with an advanced web 
 </table>
 
 ### 🖥️ Web Administration Panel
-- **Multi-User Auth** — Database-backed users with admin/user roles
-- **User Management** — Create, delete, promote/demote users
+- **Multi-User Auth** — Database-backed users with bcrypt passwords and admin/user roles
+- **User Management** — Create, delete, promote/demote panel users via JSON API
 - **Real-Time Dashboard** — Live server statistics & graphs
-- **Message Manager** — Create and send rich embeds
-- **AI Configuration** — Control engagement settings & channels
-- **Rate Limit Manager** — Per-channel and per-role config
-- **Channel Manager** — Bulk channel operations with safety confirmation
-- **Accuracy Monitor** — Message counting accuracy & reconciliation status
-- **Glassmorphic UI** — Modern dark theme with glassmorphism design
+- **Message Manager** — Create and send rich Discord embeds with full preview
+- **AI Configuration** — Control engagement settings, channels, and model stats
+- **Gameplay Management** — Full CRUD for levels, badges, perk rules, XP multipliers, trivia, wanted stars, radio votes, SA-MP Life economy
+- **Accuracy Monitor** — Message counting accuracy, reconciliation status, per-user trace debugging
+- **Glassmorphic React SPA** — Modern dark/light theme with per-section error isolation
 
 ---
 
@@ -109,7 +128,9 @@ A comprehensive Discord bot for SA-MP roleplay communities with an advanced web 
 
 ### Design Principles
 
-The codebase follows a **thin orchestrator** pattern. The entry point (`src/index.js`, ~480 lines) creates resources and wires together self-contained modules. Each module imports its own dependencies directly — no pass-through imports.
+The codebase follows a **thin orchestrator** pattern. The entry point (`src/index.js`, ~480 lines) creates resources and wires together self-contained modules — no pass-through imports between feature modules. Each module owns its own DB table schema, queries, and business logic, making it independently testable.
+
+The web layer uses a **parallel API + SPA** approach: the same Express app serves a React 19 SPA at `/panel` (built by Vite) while also exposing 17 route modules under `/panel/api/:botKey/*`. A backward-compatibility middleware normalises legacy URL patterns at the request level so existing clients continue to work transparently.
 
 ### Project Structure
 
@@ -123,26 +144,28 @@ The codebase follows a **thin orchestrator** pattern. The entry point (`src/inde
 │   │   ├── helpers.js           # Shared utilities (formatting, plurals, etc.)
 │   │   ├── schedulers.js        # All periodic tasks (ML, reconciliation, cleanup)
 │   │   ├── discordClient.js     # Discord client factory
-│   │   ├── slashCommands.js     # Slash command registration
+│   │   ├── slashCommands.js     # Slash command registration (30+ commands)
 │   │   ├── statsDb.js           # Database query operations
 │   │   ├── commands/
-│   │   │   └── dispatcher.js    # Slash command dispatch (30+ commands)
+│   │   │   └── dispatcher.js    # Slash command dispatch
 │   │   └── events/
-│   │       └── handlers.js      # Discord event handlers
+│   │       └── handlers.js      # Discord event handlers (message, reaction, delete)
 │   │
 │   ├── features/                # Self-contained feature modules (25+)
-│   │   ├── robust-message-counting.js  # Core counting pipeline
+│   │   ├── robust-message-counting.js  # Core counting pipeline with reconciliation
 │   │   ├── ai-engagement.js     # AI responses & settings
 │   │   ├── analytics.js         # Advanced analytics & daily stats
 │   │   ├── holidays.js          # Holiday system (calend.ru + manual)
 │   │   ├── samp-life.js         # SA-MP roleplay economy
 │   │   ├── levels.js            # XP & leveling system
-│   │   ├── badges.js            # User badge system
+│   │   ├── badges.js            # User badge system (24 achievements)
+│   │   ├── perks.js             # Badge/level → Discord role rule engine
+│   │   ├── xp-multipliers.js    # Per-role XP multiplier config
 │   │   ├── wanted-stars.js      # GTA-style wanted stars
 │   │   ├── trivia.js            # Quiz game
 │   │   ├── radio-vote.js        # Song voting
 │   │   ├── weekly-awards.js     # Automated weekly posts
-│   │   ├── ...                  # + 14 more modules
+│   │   ├── ...                  # + 11 more modules
 │   │   └── *.test.js            # Unit tests (26 tests, 3 suites)
 │   │
 │   ├── db/
@@ -150,38 +173,48 @@ The codebase follows a **thin orchestrator** pattern. The entry point (`src/inde
 │   │
 │   ├── utils/
 │   │   ├── db-helpers.js        # DB utilities (dbRun, dbGet, dbAll, KV store)
-│   │   └── logger.js            # Structured logging
-│   │
-│   ├── views/                   # EJS templates (login, users, password)
+│   │   └── logger.js            # Structured logging with trace IDs
 │   │
 │   └── web/
-│       ├── shared-template.js   # Unified HTML generator for all pages
-│       ├── panel-helpers.js     # Panel utility functions
-│       ├── auth.js              # Authentication (bcrypt + sessions)
-│       ├── *-page.js            # Page generators (13 files)
-│       ├── public/              # Client-side assets (CSS, JS)
-│       └── routes/              # Express route modules (17 files)
+│       ├── panel-app.js         # Express app factory (CSP, sessions, route wiring)
+│       ├── panel-helpers.js     # Auth, bcrypt, role guards
+│       └── routes/              # 17 Express route modules
+│           ├── auth.js          # Login/logout + full user CRUD JSON API
+│           ├── gameplay.js      # Levels, badges, perks, XP multipliers, trivia, etc.
+│           ├── analytics.js     # Stats aggregation and verification
+│           ├── messages.js      # Discord embed creation & editing
+│           └── ...              # + 13 more route modules
 │
-├── public/                      # Static landing page
-├── scripts/                     # Maintenance & debug scripts
-├── data/                        # SQLite database
-├── logs/                        # Application logs
-└── backups/                     # Database backups
+├── panel-ui/                    # React 19 + Vite SPA
+│   └── src/
+│       ├── App.jsx              # Router, auth guard, sidebar nav
+│       ├── pages/               # 13 page components
+│       │   ├── GameplayPage.jsx         # Per-section error-isolated UI
+│       │   ├── UserManagementPage.jsx   # Full user CRUD panel
+│       │   └── ...
+│       ├── lib/api.js           # 70+ REST client methods
+│       └── styles.css           # CSS variables theme system (dark/light)
+│
+├── public/panel/                # Built SPA (Vite output)
+├── scripts/                     # 12 maintenance & debug scripts
+├── data/                        # SQLite database + session store
+└── logs/                        # Structured application logs
 ```
 
 ### Database Schema
 
-**SQLite** with WAL mode — 45+ tables including:
+**SQLite** with WAL mode — 45+ tables across all subsystems:
 
 | Category | Tables |
 |----------|--------|
 | **Core** | `user_stats`, `weekly_stats`, `message_index`, `user_cache`, `bot_kv` |
 | **Counting** | `message_count_events`, `message_count_errors`, `message_count_reference` |
 | **Features** | `user_streaks`, `user_milestones`, `user_reactions`, `user_badges`, `user_levels` |
+| **Gamification** | `badge_definitions`, `perk_rules`, `xp_role_multipliers` |
 | **Game** | `samp_users`, `samp_garage`, `samp_inventory`, `samp_cooldowns`, `samp_ledger` |
 | **AI/ML** | `ai_engagement_settings`, `ai_ml_training_data`, `ai_ml_metadata` |
 | **Moderation** | `rate_limit_config`, `rate_limit_violations`, `banned_words`, `disabled_commands` |
-| **Panel** | `panel_users`, `panel_messages`, `panel_sent_items`, `panel_debug_reports` |
+| **Panel** | `panel_users`, `panel_messages`, `panel_sent_items`, `panel_debug_reports`, `sessions` |
 | **Other** | `holidays`, `countdown_config`, `wanted_stars`, `trivia_scores`, `radio_votes`, `weekly_awards` |
 
 ---
@@ -205,7 +238,10 @@ cd Samp-Rp-Discord-Bot-w-Panel
 # Install dependencies
 npm install
 
-# Configure environment (see next section)
+# Build the admin panel SPA
+npm run build
+
+# Configure environment
 cp .env.example .env   # then edit with your values
 
 # Initialize panel users
@@ -217,7 +253,7 @@ node src/index.js
 pm2 start ecosystem.config.js
 ```
 
-The SQLite database is created automatically on first run.
+The SQLite database schema is created automatically on first run.
 
 ---
 
@@ -230,28 +266,22 @@ Create a `.env` file in the project root:
 ```env
 # Discord Bot
 DISCORD_TOKEN=<your_bot_token>
-DISCORD_CLIENT_ID=<your_client_id>
-DISCORD_CLIENT_SECRET=<your_client_secret>
-BOT_OWNER_ID=<your_discord_user_id>
+OWNER_ID=<your_discord_user_id>
+
+# Optional Redis leaderboard cache (requires: npm install ioredis)
+REDIS_URL=redis://localhost:6379
 
 # Web Panel
 PANEL_PORT=3001
-PANEL_BASE_URL=http://localhost:3001
-SESSION_SECRET=<generate_a_random_string>
-
-# OAuth Callback (optional)
-OAUTH_CALLBACK_URL=http://localhost:3001/panel/callback
+SESSION_SECRET=<strong_random_string_32+_chars>
 
 # Holiday System (optional)
 HOLIDAYS_GUILD_ID=<your_guild_id>
 HOLIDAYS_CHANNEL_ID=<target_channel_id>
 
 # Levels / XP (optional)
-# XP is awarded at most once per cooldown window per user.
 LEVELS_XP_COOLDOWN_SEC=60
-# Set to 0 to disable public level-up announcements.
-LEVELS_ANNOUNCE=1
-# Optional: send level-up announcements to a specific channel instead of the message channel.
+LEVELS_ANNOUNCE=0
 LEVELS_ANNOUNCE_CHANNEL_ID=
 
 # Admin Discord IDs (comma-separated)
@@ -269,7 +299,7 @@ ADMIN_IDS=<user_id_1>,<user_id_2>
 ### Bot Permissions
 
 Recommended: **Administrator** (`permissions=8`), or grant individually:
-- Read/Send Messages, Embed Links, Read Message History, Add Reactions, Use Slash Commands
+- Read/Send Messages, Embed Links, Read Message History, Add Reactions, Use Slash Commands, Manage Roles
 
 ### Invite URL
 
@@ -293,41 +323,42 @@ Creates default accounts for initial access. **Change all passwords immediately 
 
 ### Standalone Panel Mode
 
-Run the panel independently (without the Discord bot), for testing or panel-only access:
+Run the panel independently (without the Discord bot):
 
 ```bash
 node src/panel-only.js
 ```
-
-### Panel API (UI v2)
-
-- Canonical API prefix: `/panel/api/:botKey/...`
-- Legacy compatibility: `/panel/api/bot/:botKey/...` is rewritten to the canonical form.
-- All UI v2 pages use the shared HTML generator and call panel APIs via `window.panelFetchJson()` (consistent JSON errors, auth handling, and `PANEL_BASE` support).
 
 ### Panel Pages
 
 | Page | Description |
 |------|-------------|
 | **Dashboard** | Server stats overview, message graphs, top users |
-| **Bot Control** | Quick actions, feature toggles, configuration |
-| **Messages** | Create/edit/send rich embeds to channels |
-| **AI Engagement** | Enable/disable AI, set frequency, channel config |
-| **Rate Limiter** | Per-channel/role limits and time windows |
-| **Channels** | Bulk channel operations with safety confirmation |
-| **Holidays** | Manage custom holidays, view upcoming |
-| **Statistics** | Advanced analytics, date ranges, CSV export |
-| **Accuracy** | Message counting accuracy & reconciliation |
-| **Commands** | Auto-generated command documentation |
-| **User Management** | Create/delete users, roles, password resets (Admin) |
+| **Messages** | Create/edit/send rich Discord embeds to channels |
+| **Discord Tools** | Load and edit existing Discord messages |
+| **Statistics** | Advanced user analytics, date ranges, search |
+| **Analytics** | 7/30/90-day breakdowns, channel heatmaps, peak hours |
+| **Verification** | Message counting accuracy, per-user trace debugging |
+| **Moderation** | Automod, whitelist, rate limits per channel/role, strike controls |
+| **Automation** | Command toggles, holidays, countdown, AI engagement config |
+| **Operations** | History/undo, debug reports, accuracy reconcile & trace |
 | **SA-MP Servers** | Live SA-MP server status monitoring |
-| **Automod** | Banned words, security pipeline config |
+| **Gameplay Systems** | Levels, badges (definitions + user grants), perk rules, XP multipliers, trivia, wanted stars, radio votes, SA-MP Life economy |
+| **User Management** | Create/delete panel users, role assignment, password resets *(Admin only)* |
+
+### API Design
+
+- Canonical prefix: `GET|POST|DELETE /panel/api/:botKey/...`
+- Backward-compatible: `/panel/api/bot/:botKey/...` is rewritten transparently at middleware
+- All endpoints return `{ ok: true, ... }` on success or `{ ok: false, error: "..." }` on failure
+- Error responses include a `traceId` for log correlation
+- Set `PANEL_LEGACY_PAGES=1` to force server-rendered pages during rollback
 
 ---
 
 ## 🤖 Bot Commands
 
-> All slash command descriptions and responses are in Russian. The table below shows English descriptions for reference.
+> All slash command descriptions and responses are in Russian. English descriptions shown for reference.
 
 ### User Commands
 
@@ -340,6 +371,9 @@ node src/panel-only.js
 | `/streak [@user]` | View message streak |
 | `/reactions [type]` | Reaction leaderboard (given/received) |
 | `/mystrikes` | Your rate-limit violations & strikes |
+| `/level` | Your XP, level, and rank |
+| `/levels-top` | XP leaderboard |
+| `/trivia` | Start a trivia question |
 | `/countdown` | Countdown to New Year |
 | `/history` | Your message history summary |
 
@@ -361,28 +395,26 @@ node src/panel-only.js
 | `/work` | Earn money (cooldown-based) |
 | `/rob @user` | Attempt to rob another player |
 | `/car` | View/buy cars |
-| `/level` | View your level & XP |
-| `/levels-top` | XP leaderboard |
-| `/trivia` | Start a trivia question |
-| `/trivia-stats` | Your trivia statistics |
-| `/trivia-top` | Trivia leaderboard |
 | `/radio <song>` | Vote for a song |
 | `/radio-top` | Top voted songs |
 | `/awards` | View weekly awards |
 | `/sampstatus` | SA-MP server status |
-| `/whitelist` | Whitelist management |
-| `/automod` | Automod config *(Admin)* |
 
 ### Admin / Owner Commands
 
 | Command | Description | Permission |
 |---------|-------------|------------|
-| `/backfill` | Load message history | Owner |
+| `/backfill` | Load message history (`enhanced`, `resume` options) | Owner |
 | `/synccommands` | Re-register slash commands | Owner |
 | `/sync-missing` | Sync missing messages | Owner |
 | `/export` | Export stats to CSV | Owner |
-| `/demoembed` | Send example embed | Admin |
+| `/whitelist` | Channel whitelist management | Admin |
+| `/automod` | Banned word management | Admin |
 | `/undo` | Undo last operation | Owner |
+
+Notes:
+- `/backfill enhanced:true` runs the improved backfill (thread support, progress reporting, batched DB writes, idempotent indexing).
+- `/backfill resume:true` resumes the enhanced backfill from `data/checkpoint_<GUILD_ID>.json`.
 
 ---
 
@@ -392,11 +424,13 @@ node src/panel-only.js
 |-------|-------|
 | **Runtime** | Node.js 20+, PM2 |
 | **Discord** | discord.js v14 |
-| **Web** | Express 4, EJS, express-session, connect-sqlite3 |
-| **Database** | SQLite3 (WAL mode) |
-| **Auth** | bcryptjs, role-based access (Admin/User) |
-| **AI/ML** | Markov chains, keyword-based sentiment analysis |
-| **Frontend** | Vanilla JS, CSS3 glassmorphism, `window.panelFetchJson()` wrapper |
+| **API** | Express 4, express-session, connect-sqlite3, Helmet (CSP) |
+| **Auth** | bcryptjs, role-based access control (Admin/User) |
+| **Database** | SQLite3 (WAL mode), 45+ tables |
+| **AI/ML** | Markov chains (order-2), keyword-based sentiment analysis |
+| **Frontend** | React 19, React Router 7, Vite, CSS variables theme system |
+| **Logging** | Custom structured logger, per-request trace IDs |
+| **Testing** | Node.js built-in test runner, 26 unit tests + integration suite |
 
 ---
 
@@ -405,50 +439,50 @@ node src/panel-only.js
 ### Running Locally
 
 ```bash
-# Development mode
+# Development mode (bot + panel)
 npm run dev
 
-# With PM2 (auto-restart on changes)
+# Panel SPA dev server (hot-reload, proxies API)
+npm run ui:dev
+
+# With PM2 auto-restart
 pm2 start ecosystem.config.js --watch
 ```
 
-### NPM Scripts (Command Guide)
+### NPM Scripts
 
 | Command | What it does |
 |--------:|--------------|
 | `npm run dev` | Start in development mode |
 | `npm start` | Start in production mode |
-| `npm run check` | Syntax-check entrypoint (`node --check src/index.js`) |
+| `npm run ui:dev` | Start Vite dev server for panel SPA |
+| `npm run ui:build` | Build panel SPA into `public/panel` |
+| `npm run build` | Alias for `ui:build` |
+| `npm run check` | Syntax-check entrypoint (`node --check`) |
 | `npm test` | Run unit tests (`node --test`) |
-| `npm run test:integration` | Run DB/query integration checks (expects server running for HTTP checks) |
+| `npm run test:integration` | Run DB/query integration checks |
 | `npm run test:all` | Run unit + integration tests |
-| `npm run make:hash` | Generate a password hash helper for panel users |
-| `npm run audit:user` | Audit a user by id (wraps `scripts/audit-user.js`) |
+| `npm run make:hash` | Generate bcrypt password hash |
+| `npm run audit:user` | Audit a specific user by ID |
 
 ### Testing
 
 ```bash
-# Run all unit tests
+# Unit tests
 npm test
 
-# Or directly:
-node --test src/features/*.test.js
-
-# Run a specific suite
+# Specific suite
 node --test src/features/robust-message-counting.test.js
 node --test src/features/samp-life.test.js
-node --test src/features/new-features.test.js
 
-# Integration tests (DB + endpoints)
+# Integration tests (requires server running)
 npm run test:integration
 
-# Everything
+# Full suite
 npm run test:all
 ```
 
 ### Debug Logging
-
-Structured logging via the built-in logger:
 
 | Variable | Values | Default |
 |----------|--------|---------|
@@ -470,19 +504,8 @@ node scripts/backfill-daily-stats.js              # Backfill daily_channel_stats
 node scripts/migrate-analytics-schema.js          # Apply analytics schema migrations
 node scripts/verify-counts-from-search.js         # Verify from Discord search
 node scripts/verify-analytics.js                  # Verify analytics data quality
-node scripts/verify-single-user.js <id> --guild <gid>    # Verify a single user
-node scripts/verify-channel-user.js --guild <gid> --channel <cid> --user <uid> # Verify channel+user
 node scripts/trace-message-counting.js user <id> --guild <gid>   # Trace user
 node scripts/trace-message-counting.js message <id> --guild <gid> # Trace message
-```
-
-### Debug APIs (Panel)
-
-When logged into the panel:
-
-```
-GET /api/accuracy/trace/message?guildId=...&messageId=...&limit=50
-GET /api/accuracy/trace/user?guildId=...&userId=...&limit=50
 ```
 
 ---
@@ -496,7 +519,7 @@ npm install -g pm2
 
 pm2 start ecosystem.config.js
 pm2 save
-pm2 startup   # auto-restart on boot
+pm2 startup   # auto-restart on reboot
 ```
 
 ### Deploy Script
@@ -506,7 +529,7 @@ chmod +x deploy.sh
 ./deploy.sh
 ```
 
-Pulls latest changes → installs deps → restarts PM2 → shows status.
+Pulls latest changes → installs deps → builds SPA → health-checks port and `/api/status` → restarts PM2.
 
 ### Reverse Proxy (Nginx)
 
@@ -533,9 +556,7 @@ sudo apt install certbot python3-certbot-nginx
 sudo certbot --nginx -d example.com
 ```
 
----
-
-## 📊 Monitoring
+### Monitoring
 
 ```bash
 pm2 status                    # Process status
@@ -545,8 +566,6 @@ pm2 monit                     # Resource monitor
 
 ### Database Backups
 
-Automatic backups are stored in `backups/`. Manual backup:
-
 ```bash
 sqlite3 data/stats.db ".backup 'backups/stats_$(date +%Y%m%d_%H%M%S).db'"
 ```
@@ -555,13 +574,14 @@ sqlite3 data/stats.db ".backup 'backups/stats_$(date +%Y%m%d_%H%M%S).db'"
 
 ## 🔒 Security
 
-- **`.env` is gitignored** — never commit tokens or secrets
-- **Session secrets** — use a strong random string (32+ chars)
-- **Default passwords** — change immediately after `init-panel-users.js`
-- **Rate limiting** — built-in on both bot and web endpoints
-- **Input validation** — all user inputs sanitized
-- **HTTPS** — always use TLS in production
-- **Dependencies** — run `npm audit fix` regularly
+- **`.env` is gitignored** — tokens and secrets never committed
+- **bcrypt password hashing** — cost factor 10 for panel user passwords
+- **Session hardening** — HTTPOnly, SameSite=Lax cookies; SQLite-backed session store
+- **Content Security Policy** — Helmet CSP restricts script/style/image sources
+- **Rate limiting** — login endpoint (10 req/min) and API endpoints (40 req/10s)
+- **Role-based access control** — admin-only routes enforced server-side
+- **Input validation** — all user inputs validated before DB writes
+- **HTTPS** — always use TLS in production via Nginx + Let's Encrypt
 
 ---
 
@@ -585,8 +605,7 @@ This project is licensed under the MIT License — see [LICENSE](LICENSE) for de
 
 - [Discord.js](https://discord.js.org/) community
 - [Calend.ru](https://calend.ru/) for Russian holiday data
-- Contributors and testers
 
 ---
 
-<p align="center"><strong>Made with ❤️ for the SA-MP RP Community</strong></p>
+<p align="center"><strong>Built end-to-end as a solo full-stack project for the SA-MP RP Community</strong></p>

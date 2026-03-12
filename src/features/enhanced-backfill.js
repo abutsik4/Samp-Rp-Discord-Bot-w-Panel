@@ -20,7 +20,12 @@ const { dbRun, dbGet, dbAll } = require("../utils/db-helpers");
 // CONFIGURATION
 // ============================================================================
 
-const BATCH_SIZE = 5000;
+// SQLite has a bind-parameter limit (commonly 999). We stay safely below it.
+const SQLITE_MAX_BIND_PARAMS = Number.parseInt(process.env.ENHANCED_BACKFILL_SQLITE_MAX_VARS || "900", 10);
+const MESSAGE_INDEX_COLS = 5; // (guild_id, message_id, user_id, channel_id, created_at)
+const USER_STATS_COLS = 3; // (guild_id, user_id, message_count)
+const MESSAGE_INDEX_BATCH_SIZE = Math.max(1, Math.floor(SQLITE_MAX_BIND_PARAMS / MESSAGE_INDEX_COLS));
+const USER_STATS_BATCH_SIZE = Math.max(1, Math.floor(SQLITE_MAX_BIND_PARAMS / USER_STATS_COLS));
 const BASE_DELAY_MS = 100;
 const MAX_DELAY_MS = 5000;
 
@@ -139,6 +144,31 @@ class EnhancedBackfillCollector {
       startTime: Date.now(),
       errors: [],
     };
+
+    this._indexBatch = [];
+  }
+
+  async flushIndexBatch() {
+    if (this._indexBatch.length === 0) return 0;
+
+    const batch = this._indexBatch;
+    this._indexBatch = [];
+
+    const placeholders = batch.map(() => "(?, ?, ?, ?, ?)").join(",");
+    const values = batch.flatMap((b) => [b.guildId, b.messageId, b.userId, b.channelId, b.createdAt]);
+
+    try {
+      await dbRun(
+        this.db,
+        `INSERT OR IGNORE INTO message_index (guild_id, message_id, user_id, channel_id, created_at)
+         VALUES ${placeholders}`,
+        values
+      );
+      return batch.length;
+    } catch (err) {
+      console.error(`[Backfill] Index batch error: ${err.message}`);
+      return 0;
+    }
   }
 
   async collectTargets(guild) {
@@ -190,9 +220,9 @@ class EnhancedBackfillCollector {
   }
 
   async fetchMessagesFromTarget(target) {
-    const messages = [];
     let lastId = null;
     let retryCount = 0;
+    let counted = 0;
 
     while (true) {
       try {
@@ -206,13 +236,25 @@ class EnhancedBackfillCollector {
 
         for (const message of fetched.values()) {
           if (!message.author || message.author.bot) continue;
-          if (!message.guild || !message.content) continue;
+          if (!message.guild) continue;
 
-          messages.push({
+          const key = `${message.guild.id}:${message.author.id}`;
+          this.checkpoint.discordCounts.set(key, (this.checkpoint.discordCounts.get(key) || 0) + 1);
+          this.checkpoint.messagesCollected++;
+          this.stats.totalMessages += 1;
+          counted += 1;
+
+          this._indexBatch.push({
             guildId: message.guild.id,
             userId: message.author.id,
             messageId: message.id,
+            channelId: message.channelId,
+            createdAt: message.createdAt ? message.createdAt.toISOString() : new Date().toISOString(),
           });
+
+          if (this._indexBatch.length >= MESSAGE_INDEX_BATCH_SIZE) {
+            await this.flushIndexBatch();
+          }
         }
 
         this.rateLimiter.onSuccess();
@@ -229,7 +271,9 @@ class EnhancedBackfillCollector {
       }
     }
 
-    return messages;
+    // Ensure we persist any remaining indexed messages for this target.
+    await this.flushIndexBatch();
+    return counted;
   }
 
   async collectAllMessages() {
@@ -245,17 +289,9 @@ class EnhancedBackfillCollector {
       processedCount++;
 
       try {
-        const messages = await this.fetchMessagesFromTarget(target);
+        const counted = await this.fetchMessagesFromTarget(target);
 
-        // Aggregate by user
-        for (const msg of messages) {
-          const key = `${msg.guildId}:${msg.userId}`;
-          this.checkpoint.discordCounts.set(key, (this.checkpoint.discordCounts.get(key) || 0) + 1);
-          this.checkpoint.messagesCollected++;
-          this.stats.totalMessages += 1;
-        }
-
-        console.log(`[Backfill] [${processedCount}/${this.targets.length}] ${target.name}: ${messages.length} messages`);
+        console.log(`[Backfill] [${processedCount}/${this.targets.length}] ${target.name}: ${counted} messages`);
         this.checkpoint.channelsProcessed++;
         this.checkpoint.save();
 
@@ -391,7 +427,7 @@ class EnhancedBackfillCollector {
         count: Math.max(0, d.targetCount),
       });
 
-      if (batch.length >= BATCH_SIZE) {
+      if (batch.length >= USER_STATS_BATCH_SIZE) {
         fixed += await this.executeBatch(batch);
         batch.length = 0;
       }
@@ -460,12 +496,24 @@ class EnhancedBackfillCollector {
 // MAIN EXPORT
 // ============================================================================
 
-async function enhancedBackfill(db, client, guildId, progressCallback = null, resume = false) {
+async function enhancedBackfill(db, client, guildId, progressCallbackOrOptions = null, resume = false) {
   try {
     console.log(`[Backfill] Starting enhanced backfill for guild ${guildId}`);
 
+    let progressCallback = null;
+    let effectiveResume = Boolean(resume);
+    let apply = true;
+
+    if (progressCallbackOrOptions && typeof progressCallbackOrOptions === "object" && typeof progressCallbackOrOptions !== "function") {
+      progressCallback = progressCallbackOrOptions.progressCallback || null;
+      effectiveResume = Boolean(progressCallbackOrOptions.resume);
+      apply = progressCallbackOrOptions.apply !== false;
+    } else {
+      progressCallback = progressCallbackOrOptions;
+    }
+
     // Load or create checkpoint
-    let checkpoint = resume ? BackfillCheckpoint.load(guildId) : null;
+    let checkpoint = effectiveResume ? BackfillCheckpoint.load(guildId) : null;
     if (!checkpoint) {
       checkpoint = new BackfillCheckpoint(guildId);
     }
@@ -483,6 +531,12 @@ async function enhancedBackfill(db, client, guildId, progressCallback = null, re
     // Compare with database
     const comparison = await collector.compareWithDatabase();
 
+    // Apply changes (counts) if desired
+    let fixed = 0;
+    if (apply) {
+      fixed = await collector.batchInsertMessages(comparison.discrepancies || []);
+    }
+
     // Get results
     const results = collector.getResults(comparison);
 
@@ -491,6 +545,10 @@ async function enhancedBackfill(db, client, guildId, progressCallback = null, re
       comparison: {
         ...results.comparison,
         discrepancies: comparison.discrepancies,
+      },
+      applied: {
+        ok: Boolean(apply),
+        fixed,
       },
       checkpoint,
       collector,

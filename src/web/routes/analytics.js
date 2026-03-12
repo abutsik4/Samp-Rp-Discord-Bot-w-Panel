@@ -37,6 +37,16 @@ function fillDailySeries(dailyRows, startDate, days) {
   return out;
 }
 
+function apiError(res, req, status, code, message, details) {
+  const error = {
+    code,
+    message,
+    traceId: req.traceId || null,
+  };
+  if (details != null) error.details = details;
+  return res.status(status).json({ ok: false, error });
+}
+
 function createAnalyticsRouter(ctx) {
   const router = Router();
   const { PANEL_BASE, requireAuth, requireAdmin, apiLimiter, bots, client, dbGet, dbAll } = ctx;
@@ -264,10 +274,10 @@ function createAnalyticsRouter(ctx) {
 
   router.get(`${PANEL_BASE}/api/:botKey/verify/message-counted`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
-    if (!bot) return res.status(404).json({ error: "Bot not found" });
+    if (!bot) return apiError(res, req, 404, "PANEL_BOT_NOT_FOUND", "Bot not found");
 
     const messageId = String(req.query.messageId || "").trim();
-    if (!messageId) return res.status(400).json({ error: "messageId is required" });
+    if (!messageId) return apiError(res, req, 400, "PANEL_VALIDATION_MISSING_MESSAGE_ID", "messageId is required");
 
     try {
       const row = await dbGet(
@@ -280,20 +290,20 @@ function createAnalyticsRouter(ctx) {
       if (!row) return res.json({ ok: true, found: false });
       return res.json({ ok: true, found: true, message: row });
     } catch (e) {
-      return res.status(500).json({ error: e?.message || "Failed to check message" });
+      return apiError(res, req, 500, "COUNTING_VERIFY_MESSAGE_FAILED", e?.message || "Failed to check message");
     }
   });
 
   router.get(`${PANEL_BASE}/api/:botKey/verify/user-stats`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
-    if (!bot) return res.status(404).json({ error: "Bot not found" });
+    if (!bot) return apiError(res, req, 404, "PANEL_BOT_NOT_FOUND", "Bot not found");
 
     const userId = String(req.query.userId || "").trim();
-    if (!userId) return res.status(400).json({ error: "userId is required" });
+    if (!userId) return apiError(res, req, 400, "PANEL_VALIDATION_MISSING_USER_ID", "userId is required");
 
     const guildId = String(req.query.guildId || bot.guild_id);
     if (String(guildId) !== String(bot.guild_id)) {
-      return res.status(400).json({ error: "guildId must match the selected bot" });
+      return apiError(res, req, 400, "PANEL_VALIDATION_GUILD_MISMATCH", "guildId must match the selected bot");
     }
 
     try {
@@ -337,13 +347,13 @@ function createAnalyticsRouter(ctx) {
         discrepancy,
       });
     } catch (e) {
-      return res.status(500).json({ error: e?.message || "Failed to verify user" });
+      return apiError(res, req, 500, "COUNTING_VERIFY_USER_FAILED", e?.message || "Failed to verify user");
     }
   });
 
   router.get(`${PANEL_BASE}/api/:botKey/verify/results`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
-    if (!bot) return res.status(404).json({ error: "Bot not found" });
+    if (!bot) return apiError(res, req, 404, "PANEL_BOT_NOT_FOUND", "Bot not found");
 
     const limit = clampInt(req.query.limit, { min: 1, max: 200, fallback: 50 });
     const guildId = String(bot.guild_id);
@@ -406,7 +416,7 @@ function createAnalyticsRouter(ctx) {
 
       return res.json({ ok: true, results, summary: { total: results.length, perfect, discrepancies } });
     } catch (e) {
-      return res.status(500).json({ error: e?.message || "Failed to load verification results" });
+      return apiError(res, req, 500, "COUNTING_VERIFY_RESULTS_FAILED", e?.message || "Failed to load verification results");
     }
   });
 

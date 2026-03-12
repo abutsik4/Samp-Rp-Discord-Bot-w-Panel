@@ -2,6 +2,8 @@ node_modules/
 data/*.db
 data/*.db-wal
 data/*.db-shm
+data/discord-login-backoff.json
+data/discord-login-last-attempt.json
 *.db
 *.db-wal
 *.db-shm
@@ -11,6 +13,8 @@ cookies.txt
 logs/*.log
 backups/
 .env
+
+# Telegram token/chat_id should live in .env (never commit)
 .vscode/
 .vscode-root/
 *.log

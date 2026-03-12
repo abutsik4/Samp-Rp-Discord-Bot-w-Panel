@@ -51,13 +51,19 @@ function buildCommandsJson() {
 
     new SlashCommandBuilder()
       .setName("backfill")
-      .setDescription("Загрузить историю сообщений сервера (только владелец, может занять время)."),
+      .setDescription("Загрузить историю сообщений сервера (только владелец, может занять время).")
+      .addBooleanOption((o) => o.setName("enhanced").setDescription("Использовать улучшенный бэкфилл (рекомендуется)").setRequired(false))
+      .addBooleanOption((o) => o.setName("resume").setDescription("Продолжить с чекпоинта (только для enhanced)").setRequired(false)),
     new SlashCommandBuilder()
       .setName("sync-missing")
       .setDescription("Синхронизировать пропущенные сообщения (только владелец, быстрая синхронизация)."),
     new SlashCommandBuilder()
       .setName("synccommands")
       .setDescription("Перерегистрировать слеш-команды для сервера (только владелец)."),
+
+    new SlashCommandBuilder()
+      .setName("demoembed")
+      .setDescription("Демо: отправить и отредактировать embed (для тестов)."),
 
     new SlashCommandBuilder().setName("weekly").setDescription("Еженедельный рейтинг (обнуляется каждый понедельник)."),
     new SlashCommandBuilder()

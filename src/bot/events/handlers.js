@@ -11,6 +11,7 @@ const { checkAndAwardBadges } = require("../../features/badges");
 const { getUserReactionStats, incrementReactionsGiven, incrementReactionsReceived } = require("../../features/reactions");
 const { getEngagementSettings, tryEngageWithMessage } = require("../../features/ai-engagement");
 const { updateWatermark } = require("../../features/incremental-sync");
+const { applyRoleGrants } = require("../../features/perks");
 
 /**
  * Register all Discord event handlers on the client.
@@ -85,8 +86,9 @@ function registerEventHandlers(ctx) {
       await incrementWeeklyCount(db, guildId, userId);
 
       // XP/Levels
-      const levelUp = await awardMessageXP(db, guildId, userId);
-      const levelsAnnounceEnabled = process.env.LEVELS_ANNOUNCE !== "0";
+      const levelUp = await awardMessageXP(db, guildId, userId, userRoles);
+      // Announcements are opt-in to avoid accidental spam.
+      const levelsAnnounceEnabled = process.env.LEVELS_ANNOUNCE === "1";
       if (levelsAnnounceEnabled && levelUp?.leveledUp) {
         try {
           let targetChannel = message.channel;
@@ -121,6 +123,18 @@ function registerEventHandlers(ctx) {
           reactionsGiven: reactions?.given || 0,
           reactionsReceived: reactions?.received || 0,
         });
+
+        // Perks: grant Discord roles for new achievements
+        if (newBadges.length > 0 && member) {
+          await applyRoleGrants({
+            db,
+            guild: message.guild,
+            member,
+            triggers: newBadges.map((b) => ({ type: "badge", value: b.id })),
+            reason: "Achievement perk grant",
+          });
+        }
+
         if (newBadges.length > 0) {
           const badgeNames = newBadges.map((b) => `${b.emoji} **${b.name}**`).join(", ");
           try {
@@ -128,6 +142,19 @@ function registerEventHandlers(ctx) {
           } catch {}
         }
       } catch {}
+
+      // Perks: grant Discord roles for reaching a level (only on level-up to reduce calls)
+      if (levelUp?.leveledUp && member) {
+        try {
+          await applyRoleGrants({
+            db,
+            guild: message.guild,
+            member,
+            triggers: [{ type: "level", value: String(levelUp.newLevel) }],
+            reason: "Level perk grant",
+          });
+        } catch {}
+      }
 
       // Milestone celebrations
       const currentCount = await getUserMessageCount(guildId, userId);

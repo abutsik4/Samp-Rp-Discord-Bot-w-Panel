@@ -1,6 +1,16 @@
 const { Router } = require("express");
 const { EmbedBuilder, PermissionsBitField } = require("discord.js");
 
+function apiError(res, req, status, code, message, details) {
+  const error = {
+    code,
+    message,
+    traceId: req.traceId || null,
+  };
+  if (details != null) error.details = details;
+  return res.status(status).json({ ok: false, error });
+}
+
 function createMessagesRouter(ctx) {
   const router = Router();
   const {
@@ -15,13 +25,13 @@ function createMessagesRouter(ctx) {
   // -------------------------
   router.get(`${PANEL_BASE}/api/:botKey/sendable-channels`, requireAuth, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
-    if (!bot) return res.status(404).json({ error: "Bot not found" });
+    if (!bot) return apiError(res, req, 404, "PANEL_BOT_NOT_FOUND", "Bot not found");
 
     try {
       const items = await getAllSendableChannels(bot.client, isAllowedChannel);
       return res.json({ ok: true, items });
     } catch (e) {
-      return res.status(500).json({ error: "Failed to fetch channels" });
+      return apiError(res, req, 500, "DISCORD_CHANNELS_FETCH_FAILED", "Failed to fetch channels");
     }
   });
 
@@ -263,29 +273,31 @@ function createMessagesRouter(ctx) {
   // Useful for editing older bot-sent embeds/messages that are not in panel_messages.
   router.get(`${PANEL_BASE}/api/:botKey/discord-message`, requireAuth, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
-    if (!bot) return res.status(404).json({ error: "Bot not found" });
+    if (!bot) return apiError(res, req, 404, "PANEL_BOT_NOT_FOUND", "Bot not found");
 
     const channelId = String(req.query.channelId || '').trim();
     const messageId = String(req.query.messageId || '').trim();
-    if (!channelId || !messageId) return res.status(400).json({ error: "channelId and messageId are required" });
+    if (!channelId || !messageId) {
+      return apiError(res, req, 400, "PANEL_VALIDATION_MISSING_MESSAGE_REF", "channelId and messageId are required");
+    }
 
     try {
       if (!isAllowedChannel(String(channelId))) {
-        return res.status(403).json({ error: "Channel is not allow-listed for panel posting" });
+        return apiError(res, req, 403, "DISCORD_CHANNEL_NOT_ALLOWLISTED", "Channel is not allow-listed for panel posting");
       }
       const channel = await bot.client.channels.fetch(channelId);
-      if (!channel || !channel.isTextBased()) return res.status(400).json({ error: "Invalid channel" });
+      if (!channel || !channel.isTextBased()) return apiError(res, req, 400, "DISCORD_CHANNEL_INVALID", "Invalid channel");
 
       const perms = channel.permissionsFor(bot.client.user?.id || bot.client.application?.id);
       const canView = perms?.has(PermissionsBitField.Flags.ViewChannel);
-      if (!canView) return res.status(403).json({ error: "Bot lacks permission to view this channel" });
+      if (!canView) return apiError(res, req, 403, "DISCORD_PERMISSIONS_VIEW_DENIED", "Bot lacks permission to view this channel");
 
       const msg = await channel.messages.fetch(messageId);
-      if (!msg) return res.status(404).json({ error: "Message not found" });
+      if (!msg) return apiError(res, req, 404, "DISCORD_MESSAGE_NOT_FOUND", "Message not found");
 
       // Only allow editing bot's own messages
       if (msg.author?.id !== bot.client.user?.id) {
-        return res.status(403).json({ error: "Can only load/edit messages sent by this bot" });
+        return apiError(res, req, 403, "DISCORD_MESSAGE_NOT_BOT_OWNED", "Can only load/edit messages sent by this bot");
       }
 
       const firstEmbed = Array.isArray(msg.embeds) && msg.embeds.length ? msg.embeds[0] : null;
@@ -303,45 +315,47 @@ function createMessagesRouter(ctx) {
       return res.json({ ok: true, message: { id: msg.id, channelId, content: msg.content || '', embed } });
     } catch (e) {
       console.error('GET /discord-message error:', e);
-      return res.status(500).json({ error: "Failed to load message" });
+      return apiError(res, req, 500, "DISCORD_MESSAGE_LOAD_FAILED", "Failed to load message");
     }
   });
 
   router.post(`${PANEL_BASE}/api/:botKey/discord-message/edit`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
-    if (!bot) return res.status(404).json({ error: "Bot not found" });
+    if (!bot) return apiError(res, req, 404, "PANEL_BOT_NOT_FOUND", "Bot not found");
 
     const { channelId, messageId, content, embed } = req.body || {};
     const chId = String(channelId || '').trim();
     const msgId = String(messageId || '').trim();
-    if (!chId || !msgId) return res.status(400).json({ error: "channelId and messageId are required" });
+    if (!chId || !msgId) {
+      return apiError(res, req, 400, "PANEL_VALIDATION_MISSING_MESSAGE_REF", "channelId and messageId are required");
+    }
 
     try {
       // Validate lengths early
       const contentCheck = validateLength(content, 2000, "Content");
-      if (!contentCheck.ok) return res.status(400).json({ error: contentCheck.error });
+      if (!contentCheck.ok) return apiError(res, req, 400, "PANEL_VALIDATION_CONTENT_TOO_LONG", contentCheck.error);
       const titleCheck = validateLength(embed?.title, 256, "Embed title");
-      if (!titleCheck.ok) return res.status(400).json({ error: titleCheck.error });
+      if (!titleCheck.ok) return apiError(res, req, 400, "PANEL_VALIDATION_EMBED_TITLE_TOO_LONG", titleCheck.error);
       const descCheck = validateLength(embed?.description, 4096, "Embed description");
-      if (!descCheck.ok) return res.status(400).json({ error: descCheck.error });
+      if (!descCheck.ok) return apiError(res, req, 400, "PANEL_VALIDATION_EMBED_DESCRIPTION_TOO_LONG", descCheck.error);
       const footerCheck = validateLength(embed?.footer, 2048, "Embed footer");
-      if (!footerCheck.ok) return res.status(400).json({ error: footerCheck.error });
+      if (!footerCheck.ok) return apiError(res, req, 400, "PANEL_VALIDATION_EMBED_FOOTER_TOO_LONG", footerCheck.error);
 
       if (!isAllowedChannel(String(chId))) {
-        return res.status(403).json({ error: "Channel is not allow-listed for panel posting" });
+        return apiError(res, req, 403, "DISCORD_CHANNEL_NOT_ALLOWLISTED", "Channel is not allow-listed for panel posting");
       }
       const channel = await bot.client.channels.fetch(chId);
-      if (!channel || !channel.isTextBased()) return res.status(400).json({ error: "Invalid channel" });
+      if (!channel || !channel.isTextBased()) return apiError(res, req, 400, "DISCORD_CHANNEL_INVALID", "Invalid channel");
 
       const perms = channel.permissionsFor(bot.client.user?.id || bot.client.application?.id);
       const canView = perms?.has(PermissionsBitField.Flags.ViewChannel);
       const canSend = perms?.has(channel.isThread() ? PermissionsBitField.Flags.SendMessagesInThreads : PermissionsBitField.Flags.SendMessages);
-      if (!canView || !canSend) return res.status(403).json({ error: "Bot lacks permission to edit in this channel" });
+      if (!canView || !canSend) return apiError(res, req, 403, "DISCORD_PERMISSIONS_EDIT_DENIED", "Bot lacks permission to edit in this channel");
 
       const msg = await channel.messages.fetch(msgId);
-      if (!msg) return res.status(404).json({ error: "Message not found" });
+      if (!msg) return apiError(res, req, 404, "DISCORD_MESSAGE_NOT_FOUND", "Message not found");
       if (msg.author?.id !== bot.client.user?.id) {
-        return res.status(403).json({ error: "Can only edit messages sent by this bot" });
+        return apiError(res, req, 403, "DISCORD_MESSAGE_NOT_BOT_OWNED", "Can only edit messages sent by this bot");
       }
 
       const payload = {};
@@ -369,14 +383,14 @@ function createMessagesRouter(ctx) {
       }
 
       if (!payload.content && !payload.embeds) {
-        return res.status(400).json({ error: "Nothing to update (provide content and/or embed)" });
+        return apiError(res, req, 400, "PANEL_VALIDATION_EMPTY_UPDATE", "Nothing to update (provide content and/or embed)");
       }
 
       await msg.edit(payload);
       return res.json({ ok: true, discordMessageId: msg.id });
     } catch (e) {
       console.error('POST /discord-message/edit error:', e);
-      return res.status(500).json({ error: e.message || "Failed to edit message" });
+      return apiError(res, req, 500, "DISCORD_MESSAGE_EDIT_FAILED", e.message || "Failed to edit message");
     }
   });
 

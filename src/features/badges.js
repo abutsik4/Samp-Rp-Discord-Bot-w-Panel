@@ -42,6 +42,19 @@ const BADGE_DEFINITIONS = [
   { id: "recv_500",   threshold: 500,  type: "reactions_received", name: "Легенда реакций",   emoji: "🏆", description: "Получить 500 реакций" },
 ];
 
+// In-memory seed guard so we only seed defaults once per guild *per DB instance*.
+// Tests create fresh in-memory DBs, so a process-global guard would prevent seeding.
+const _seededGuildsByDb = new WeakMap();
+
+function _getSeededGuildSet(db) {
+  if (!db || (typeof db !== "object" && typeof db !== "function")) return null;
+  const existing = _seededGuildsByDb.get(db);
+  if (existing) return existing;
+  const created = new Set();
+  _seededGuildsByDb.set(db, created);
+  return created;
+}
+
 /**
  * Ensure badges table exists
  */
@@ -63,10 +76,143 @@ async function ensureBadgesTable(db) {
       db,
       `CREATE INDEX IF NOT EXISTS idx_user_badges_user ON user_badges(guild_id, user_id)`
     );
+
+    // Editable badge definitions (per guild)
+    await dbRun(
+      db,
+      `
+      CREATE TABLE IF NOT EXISTS badge_definitions (
+        guild_id TEXT NOT NULL,
+        badge_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        threshold INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        description TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+        updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+        PRIMARY KEY (guild_id, badge_id)
+      )
+    `
+    );
+    await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_badge_definitions_guild ON badge_definitions(guild_id, enabled, sort_order)`);
   } catch (err) {
     console.error("[BADGE-001] Failed to create badges table:", err);
     throw err;
   }
+}
+
+async function seedDefaultBadgeDefinitions(db, guildId) {
+  const gid = String(guildId || "").trim();
+  if (!gid) return { ok: false, seeded: 0 };
+  const seededSet = _getSeededGuildSet(db);
+  if (seededSet?.has(gid)) return { ok: true, seeded: 0 };
+
+  try {
+    const existing = await dbGet(db, `SELECT COUNT(*) as c FROM badge_definitions WHERE guild_id = ?`, [gid]);
+    if (Number(existing?.c || 0) > 0) {
+      seededSet?.add(gid);
+      return { ok: true, seeded: 0 };
+    }
+
+    let seeded = 0;
+    for (let i = 0; i < BADGE_DEFINITIONS.length; i += 1) {
+      const b = BADGE_DEFINITIONS[i];
+      await dbRun(
+        db,
+        `INSERT OR IGNORE INTO badge_definitions
+         (guild_id, badge_id, type, threshold, name, emoji, description, enabled, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+        [gid, b.id, b.type, Number(b.threshold) || 0, b.name, b.emoji, b.description, i]
+      );
+      seeded += 1;
+    }
+
+    seededSet?.add(gid);
+    return { ok: true, seeded };
+  } catch (err) {
+    console.error("[BADGE-001] Failed to seed badge definitions:", err);
+    return { ok: false, seeded: 0 };
+  }
+}
+
+async function getBadgeDefinitions(db, guildId, { includeDisabled = true } = {}) {
+  const gid = String(guildId || "").trim();
+  if (!gid) return [];
+
+  // Ensure defaults exist at least once per guild.
+  await seedDefaultBadgeDefinitions(db, gid);
+
+  const rows = await dbAll(
+    db,
+    `SELECT badge_id as id, threshold, type, name, emoji, description, enabled, sort_order
+     FROM badge_definitions
+     WHERE guild_id = ? ${includeDisabled ? "" : "AND enabled = 1"}
+     ORDER BY enabled DESC, sort_order ASC, threshold ASC`,
+    [gid]
+  );
+
+  return (rows || []).map((r) => ({
+    id: String(r.id),
+    threshold: Number(r.threshold) || 0,
+    type: String(r.type),
+    name: String(r.name),
+    emoji: String(r.emoji),
+    description: String(r.description),
+    enabled: Boolean(r.enabled),
+    sort_order: Number(r.sort_order) || 0,
+  }));
+}
+
+async function upsertBadgeDefinition(db, guildId, def) {
+  const gid = String(guildId || "").trim();
+  if (!gid) throw new Error("guildId required");
+
+  const badgeId = String(def?.id || def?.badge_id || "").trim();
+  const type = String(def?.type || "").trim();
+  const threshold = Number.parseInt(def?.threshold, 10);
+  const name = String(def?.name || "").trim();
+  const emoji = String(def?.emoji || "").trim();
+  const description = String(def?.description || "").trim();
+  const enabled = def?.enabled === undefined ? 1 : (def.enabled ? 1 : 0);
+  const sortOrder = Number.isFinite(Number(def?.sort_order)) ? Math.floor(Number(def.sort_order)) : 0;
+
+  if (!badgeId) throw new Error("id required");
+  if (!type) throw new Error("type required");
+  if (!Number.isFinite(threshold) || threshold < 0) throw new Error("threshold must be >= 0");
+  if (!name) throw new Error("name required");
+  if (!emoji) throw new Error("emoji required");
+
+  await dbRun(
+    db,
+    `INSERT INTO badge_definitions (guild_id, badge_id, type, threshold, name, emoji, description, enabled, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(guild_id, badge_id)
+     DO UPDATE SET type = excluded.type,
+                   threshold = excluded.threshold,
+                   name = excluded.name,
+                   emoji = excluded.emoji,
+                   description = excluded.description,
+                   enabled = excluded.enabled,
+                   sort_order = excluded.sort_order,
+                   updated_at = (strftime('%s','now'))`,
+    [gid, badgeId, type, threshold, name, emoji, description, enabled, sortOrder]
+  );
+
+  _getSeededGuildSet(db)?.add(gid);
+
+  return { ok: true };
+}
+
+async function deleteBadgeDefinition(db, guildId, badgeId) {
+  const gid = String(guildId || "").trim();
+  const bid = String(badgeId || "").trim();
+  if (!gid) throw new Error("guildId required");
+  if (!bid) throw new Error("badgeId required");
+  await dbRun(db, `DELETE FROM badge_definitions WHERE guild_id = ? AND badge_id = ?`, [gid, bid]);
+  return { ok: true };
 }
 
 /**
@@ -102,6 +248,7 @@ async function checkAndAwardBadges(db, guildId, userId, stats) {
   const newBadges = [];
 
   try {
+    const defs = await getBadgeDefinitions(db, guildId, { includeDisabled: false });
     const existingBadges = await dbAll(
       db,
       `SELECT badge_id FROM user_badges WHERE guild_id = ? AND user_id = ?`,
@@ -109,7 +256,7 @@ async function checkAndAwardBadges(db, guildId, userId, stats) {
     );
     const existingSet = new Set(existingBadges.map((r) => r.badge_id));
 
-    for (const badge of BADGE_DEFINITIONS) {
+    for (const badge of defs) {
       if (existingSet.has(badge.id)) continue;
 
       let currentValue = 0;
@@ -212,6 +359,10 @@ function getHighestRankBadge(badges) {
 module.exports = {
   BADGE_DEFINITIONS,
   ensureBadgesTable,
+  seedDefaultBadgeDefinitions,
+  getBadgeDefinitions,
+  upsertBadgeDefinition,
+  deleteBadgeDefinition,
   awardBadge,
   checkAndAwardBadges,
   getUserBadges,

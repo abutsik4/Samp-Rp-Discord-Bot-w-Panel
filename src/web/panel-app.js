@@ -1,6 +1,7 @@
 "use strict";
 
 const path = require("path");
+const fs = require("fs");
 const express = require("express");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
@@ -27,6 +28,7 @@ const { createAutomodRouter } = require("./routes/automod");
 const { createHistoryRouter } = require("./routes/history");
 const { createChannelsRouter } = require("./routes/channels");
 const { createSampServersRouter } = require("./routes/samp-servers");
+const { createGameplayRouter } = require("./routes/gameplay");
 
 function createPanelApp({
   client,
@@ -47,6 +49,7 @@ function createPanelApp({
   getDisabledCommands,
   enableCommand,
   disableCommand,
+  PANEL_LEGACY_PAGES,
 } = {}) {
   if (!client) throw new Error("createPanelApp: client is required");
   if (!db) throw new Error("createPanelApp: db is required");
@@ -75,14 +78,39 @@ function createPanelApp({
   const app = express();
   if (TRUST_PROXY) app.set("trust proxy", 1);
 
+  const cookieSecure = COOKIE_SECURE === "auto" ? "auto" : !!COOKIE_SECURE;
+
   const panelHttpLogger = createLogger("panel-http");
 
-  app.use(helmet({ contentSecurityPolicy: false }));
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", "data:", "https:"],
+        connectSrc: ["'self'"],
+        fontSrc: ["'self'"],
+      },
+    },
+  }));
   app.use(express.json({ limit: "300kb" }));
   app.use(express.urlencoded({ extended: false }));
 
   const publicDir = path.join(__dirname, "..", "..", "public");
   app.use(express.static(publicDir, { index: false }));
+
+  const spaDir = path.join(publicDir, "panel");
+  const spaIndexPath = path.join(spaDir, "index.html");
+  const hasSpaBuild = fs.existsSync(spaIndexPath);
+  const useLegacyPages =
+    PANEL_LEGACY_PAGES === true ||
+    process.env.PANEL_LEGACY_PAGES === "1" ||
+    !hasSpaBuild;
+
+  if (hasSpaBuild) {
+    app.use(PANEL_BASE, express.static(spaDir, { index: false }));
+  }
 
   const webPublicDir = path.join(__dirname, "public");
   app.use("/public", express.static(webPublicDir, { index: false }));
@@ -115,7 +143,7 @@ function createPanelApp({
       cookie: {
         httpOnly: true,
         sameSite: "lax",
-        secure: COOKIE_SECURE,
+        secure: cookieSecure,
       },
     })
   );
@@ -217,6 +245,7 @@ function createPanelApp({
     getDisabledCommands,
     enableCommand,
     disableCommand,
+    useLegacyPages,
   };
 
   app.use(createDebugRouter(routeCtx));
@@ -224,7 +253,9 @@ function createPanelApp({
   app.use(createMessagesRouter(routeCtx));
   app.use(createStatsRouter(routeCtx));
   app.use(createAnalyticsRouter(routeCtx));
-  app.use(createBotPagesRouter(routeCtx));
+  if (useLegacyPages) {
+    app.use(createBotPagesRouter(routeCtx));
+  }
   app.use(createCommandsRouter(routeCtx));
   app.use(createAccuracyRouter(routeCtx));
   app.use(createHolidaysRouter(routeCtx));
@@ -236,6 +267,15 @@ function createPanelApp({
   app.use(createHistoryRouter(routeCtx));
   app.use(createChannelsRouter(routeCtx));
   app.use(createSampServersRouter(routeCtx));
+  app.use(createGameplayRouter(routeCtx));
+
+  if (hasSpaBuild && !useLegacyPages) {
+    app.get(PANEL_BASE, (_req, res) => res.sendFile(spaIndexPath));
+    app.get(`${PANEL_BASE}/*`, (req, res, next) => {
+      if (req.path.startsWith(`${PANEL_BASE}/api/`)) return next();
+      return res.sendFile(spaIndexPath);
+    });
+  }
 
   app.use((err, req, res, next) => {
     try {

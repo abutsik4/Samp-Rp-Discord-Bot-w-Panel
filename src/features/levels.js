@@ -2,6 +2,7 @@
 
 const { dbRun, dbGet, dbAll } = require("../utils/db-helpers");
 const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
+const { getXpMultiplierForRoles } = require("./xp-multipliers");
 
 /**
  * XP & Levels System — GTA SA Themed Ranks
@@ -101,7 +102,7 @@ async function ensureLevelsTable(db) {
  * Award XP for a message. Enforces 60-second cooldown to prevent spam-leveling.
  * @returns {{ xpGained, newLevel, oldLevel, leveledUp, rank }} or null if on cooldown
  */
-async function awardMessageXP(db, guildId, userId) {
+async function awardMessageXP(db, guildId, userId, userRoles = []) {
   const now = Math.floor(Date.now() / 1000);
   const parsedCooldown = Number.parseInt(process.env.LEVELS_XP_COOLDOWN_SEC || "60", 10);
   const XP_COOLDOWN_SEC = Number.isFinite(parsedCooldown) && parsedCooldown >= 0 ? parsedCooldown : 60;
@@ -117,7 +118,9 @@ async function awardMessageXP(db, guildId, userId) {
       return null; // On cooldown
     }
 
-    const xpGained = generateMessageXP();
+    const baseXP = generateMessageXP();
+    const multiplier = await getXpMultiplierForRoles(db, guildId, userRoles);
+    const xpGained = Math.max(1, Math.floor(baseXP * multiplier));
     const oldXP = existing?.xp || 0;
     const oldLevel = existing?.level || 1;
     const newXP = oldXP + xpGained;

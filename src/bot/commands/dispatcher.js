@@ -14,6 +14,7 @@ const { handleLevelCommand } = require("../../features/levels");
 const { handleAwardsCommand } = require("../../features/weekly-awards");
 const { handleRadioVote, handleRadioTop } = require("../../features/radio-vote");
 const { SAMPStatusTracker } = require("../../features/samp-status");
+const { getLeaderboard } = require("../../features/leaderboard-cache");
 
 /**
  * Register the interactionCreate handler for slash command dispatch.
@@ -198,14 +199,8 @@ function registerCommandHandlers(ctx) {
         );
       } else {
         const fetchLimit = desiredLimit + 20;
-        rows = await dbAll(
-          `SELECT user_id, message_count
-           FROM user_stats
-           WHERE guild_id = ?
-           ORDER BY message_count DESC
-           LIMIT ?`,
-          [interaction.guild.id, fetchLimit]
-        );
+        const out = await getLeaderboard(db, interaction.guild.id, fetchLimit, 0);
+        rows = out?.data || [];
       }
 
       const visible = [];
@@ -254,7 +249,7 @@ function registerCommandHandlers(ctx) {
 
       await interaction.deferReply({ flags: 64 });
 
-      const { syncMissingMessages, initializeWatermark, getWatermark } = require("../features/incremental-sync");
+      const { syncMissingMessages, initializeWatermark, getWatermark } = require("../../features/incremental-sync");
 
       const watermark = await getWatermark(db, interaction.guild.id);
 
@@ -303,14 +298,73 @@ function registerCommandHandlers(ctx) {
         return interaction.reply({ content: "Эта команда доступна только владельцу бота.", flags: 64 });
       }
 
-      await interaction.reply({
-        content: "Запускаю сбор истории сообщений. Это может занять продолжительное время. Прогресс смотри в логах бота.",
-        flags: 64,
+      const enhanced = Boolean(interaction.options?.getBoolean("enhanced"));
+      const resume = Boolean(interaction.options?.getBoolean("resume"));
+
+      await interaction.deferReply({ flags: 64 });
+
+      if (enhanced) {
+        const { enhancedBackfill } = require("../../features/enhanced-backfill");
+
+        let lastUiUpdateAt = 0;
+        const progressCallback = (p) => {
+          const now = Date.now();
+          if (now - lastUiUpdateAt < 2500 && p?.step === 2) return;
+          lastUiUpdateAt = now;
+
+          const step = Number(p?.step || 0);
+          if (step === 2) {
+            const percent = p?.progress != null ? `${p.progress}%` : "";
+            const eta = p?.eta != null ? `, ETA ~${p.eta}m` : "";
+            const name = p?.message ? `\n\nТекущий: **${p.message}**` : "";
+            interaction.editReply({ content: `⏳ Enhanced backfill… ${percent}${eta}${name}` }).catch(() => {});
+            return;
+          }
+
+          if (step === 1) {
+            interaction.editReply({ content: "⏳ Enhanced backfill… собираю каналы и треды…" }).catch(() => {});
+            return;
+          }
+
+          if (step === 3) {
+            interaction.editReply({ content: "⏳ Enhanced backfill… сравниваю с базой…" }).catch(() => {});
+            return;
+          }
+
+          if (step === 4) {
+            interaction.editReply({ content: "⏳ Enhanced backfill… применяю изменения…" }).catch(() => {});
+          }
+        };
+
+        await interaction.editReply({
+          content: `⏳ Запускаю **enhanced backfill**. Это может занять продолжительное время.\nResume: **${resume ? "да" : "нет"}**`,
+        });
+
+        const result = await enhancedBackfill(db, client, interaction.guild.id, { progressCallback, resume, apply: true });
+        if (!result?.success) {
+          return interaction.editReply({ content: `❌ Enhanced backfill завершился ошибкой: ${result?.error || "unknown"}` });
+        }
+
+        const stats = result.stats || {};
+        const cmp = result.comparison || {};
+        const fixed = result.applied?.fixed ?? 0;
+
+        return interaction.editReply({
+          content:
+            `✅ Enhanced backfill завершён.\n` +
+            `Сообщений: **${stats.totalMessages || "?"}**, пользователей: **${stats.uniqueUsers || "?"}**\n` +
+            `Проверка: mismatched=**${cmp.mismatched ?? "?"}**, fixed=**${fixed}**\n` +
+            `Ошибок/пропусков: **${stats.failedTargets || 0}**`,
+        });
+      }
+
+      await interaction.editReply({
+        content: "⏳ Запускаю обычный backfill. Это может занять продолжительное время. Прогресс смотри в логах бота.",
       });
 
       await backfillGuild(interaction.guild);
 
-      await interaction.followUp({ content: "История сообщений собрана.", flags: 64 });
+      return interaction.editReply({ content: "✅ История сообщений собрана." });
     } else if (commandName === "whitelist") {
       if (interaction.user.id !== interaction.guild.ownerId) {
         return interaction.reply({ content: "❌ Только владелец сервера может управлять белым списком.", flags: 64 });
