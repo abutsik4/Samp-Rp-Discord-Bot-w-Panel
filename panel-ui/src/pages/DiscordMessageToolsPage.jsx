@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { Pencil, Hash, MessageSquare, Download, RefreshCw, Save, X, Trash2, Copy } from "lucide-react";
 import { formatApiError, panelApi } from "../lib/api";
+import { PageHeader } from "../components/PageHeader";
+import { SectionCard } from "../components/SectionCard";
+import { Alert } from "../components/Alert";
 
 const emptyForm = {
   channelId: "",
@@ -117,125 +121,186 @@ export function DiscordMessageToolsPage({ botKey, user }) {
     }
   }
 
+  const messageLoaded = result?.message != null;
+
   return (
     <div className="page">
-      <h1>Discord Message Tools</h1>
-      <p className="muted">Load and edit existing bot messages directly by channel and message ID.</p>
-      {error ? <div className="error-box">{error}</div> : null}
+      <PageHeader
+        icon={Pencil}
+        title="Discord Message Tools"
+        subtitle="Load and edit existing bot messages by ID."
+      />
 
-      <form className="card form-card" onSubmit={saveMessageEdit}>
-        <div className="grid grid-2">
-          <label>
-            Channel
-            <select
-              value={form.channelId}
-              onChange={(e) => setForm((prev) => ({ ...prev, channelId: e.target.value }))}
-              disabled={loadingChannels}
-            >
-              <option value="">Select sendable channel</option>
-              {channelOptions.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </label>
+      {error ? <Alert type="error">{error}</Alert> : null}
 
-          <label>
-            Message ID
-            <input
-              value={form.messageId}
-              onChange={(e) => setForm((prev) => ({ ...prev, messageId: e.target.value }))}
-              placeholder="Discord message ID"
-            />
-          </label>
+      <SectionCard
+        title="Select Message"
+        icon={Hash}
+        description="Choose a channel and enter the message ID to load an existing bot message."
+      >
+        <div className="form-grid">
+          <div className="form-row">
+            <label>Channel</label>
+            <div className="input-group">
+              <Hash size={14} />
+              <select
+                value={form.channelId}
+                onChange={(e) => setForm((prev) => ({ ...prev, channelId: e.target.value }))}
+                disabled={loadingChannels}
+              >
+                <option value="">Select sendable channel</option>
+                {channelOptions.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="form-row">
+            <label>Message ID</label>
+            <div className="input-group">
+              <MessageSquare size={14} />
+              <input
+                value={form.messageId}
+                onChange={(e) => setForm((prev) => ({ ...prev, messageId: e.target.value }))}
+                placeholder="Discord message ID"
+              />
+            </div>
+          </div>
         </div>
 
-        <div className="row-actions">
-          <button type="button" className="btn-secondary" onClick={loadMessage} disabled={loadingMessage}>
-            {loadingMessage ? "Loading…" : "Load message"}
-          </button>
-          <button type="button" className="btn-secondary" onClick={loadChannels} disabled={loadingChannels}>
-            Refresh channels
-          </button>
-        </div>
-
-        <label>
-          Content
-          <textarea
-            rows={4}
-            value={form.content}
-            onChange={(e) => setForm((prev) => ({ ...prev, content: e.target.value }))}
-            disabled={!isAdmin}
-          />
-        </label>
-
-        <div className="grid grid-2">
-          <label>
-            Embed title
-            <input
-              value={form.embedTitle}
-              onChange={(e) => setForm((prev) => ({ ...prev, embedTitle: e.target.value, clearEmbed: false }))}
-              disabled={!isAdmin}
-            />
-          </label>
-
-          <label>
-            Embed color
-            <input
-              type="color"
-              value={form.embedColor}
-              onChange={(e) => setForm((prev) => ({ ...prev, embedColor: e.target.value, clearEmbed: false }))}
-              disabled={!isAdmin}
-            />
-          </label>
-        </div>
-
-        <label>
-          Embed description
-          <textarea
-            rows={4}
-            value={form.embedDescription}
-            onChange={(e) => setForm((prev) => ({ ...prev, embedDescription: e.target.value, clearEmbed: false }))}
-            disabled={!isAdmin}
-          />
-        </label>
-
-        <label>
-          Embed footer
-          <input
-            value={form.embedFooter}
-            onChange={(e) => setForm((prev) => ({ ...prev, embedFooter: e.target.value, clearEmbed: false }))}
-            disabled={!isAdmin}
-          />
-        </label>
-
-        <label className="checkbox-row">
-          <input
-            type="checkbox"
-            checked={form.clearEmbed}
-            onChange={(e) => setForm((prev) => ({ ...prev, clearEmbed: e.target.checked }))}
-            disabled={!isAdmin}
-          />
-          Clear embed when saving
-        </label>
-
-        <div className="row-actions">
-          <button type="submit" disabled={!isAdmin || saving}>
-            {saving ? "Saving…" : "Save edit"}
+        <div className="row-actions" style={{ marginTop: "0.75rem" }}>
+          <button type="button" onClick={loadMessage} disabled={loadingMessage}>
+            <Download size={13} /> {loadingMessage ? "Loading…" : "Load message"}
           </button>
           <button
             type="button"
-            className="btn-secondary"
-            onClick={() => setForm(emptyForm)}
-            disabled={saving}
+            className="btn--ghost btn--sm"
+            onClick={loadChannels}
+            disabled={loadingChannels}
           >
-            Reset
+            <RefreshCw size={13} /> Refresh channels
           </button>
         </div>
+      </SectionCard>
 
-        {result ? <pre className="code-box">{JSON.stringify(result, null, 2)}</pre> : null}
-      </form>
+      {(messageLoaded || form.content || form.embedTitle || form.embedDescription || form.embedFooter) ? (
+        <SectionCard title="Edit Message" icon={Pencil}>
+          <form onSubmit={saveMessageEdit}>
+            <div className="form-row">
+              <label>Content</label>
+              <textarea
+                rows={4}
+                value={form.content}
+                onChange={(e) => setForm((prev) => ({ ...prev, content: e.target.value }))}
+                disabled={!isAdmin}
+              />
+            </div>
+
+            <div className="form-grid" style={{ marginTop: "1rem" }}>
+              <div className="form-row">
+                <label>Embed title</label>
+                <input
+                  value={form.embedTitle}
+                  onChange={(e) => setForm((prev) => ({ ...prev, embedTitle: e.target.value, clearEmbed: false }))}
+                  disabled={!isAdmin}
+                />
+              </div>
+
+              <div className="form-row">
+                <label>Embed color</label>
+                <input
+                  type="color"
+                  value={form.embedColor}
+                  onChange={(e) => setForm((prev) => ({ ...prev, embedColor: e.target.value, clearEmbed: false }))}
+                  disabled={!isAdmin}
+                />
+              </div>
+            </div>
+
+            <div className="form-row" style={{ marginTop: "0.75rem" }}>
+              <label>Embed description</label>
+              <textarea
+                rows={4}
+                value={form.embedDescription}
+                onChange={(e) => setForm((prev) => ({ ...prev, embedDescription: e.target.value, clearEmbed: false }))}
+                disabled={!isAdmin}
+              />
+            </div>
+
+            <div className="form-row" style={{ marginTop: "0.75rem" }}>
+              <label>Embed footer</label>
+              <input
+                value={form.embedFooter}
+                onChange={(e) => setForm((prev) => ({ ...prev, embedFooter: e.target.value, clearEmbed: false }))}
+                disabled={!isAdmin}
+              />
+            </div>
+
+            {(form.embedTitle || form.embedDescription || form.embedFooter) && (
+              <div
+                className="embed-preview"
+                style={{ borderLeftColor: form.embedColor || "var(--color-accent)", marginTop: "0.75rem" }}
+              >
+                {form.embedTitle && <div className="embed-preview__title">{form.embedTitle}</div>}
+                {form.embedDescription && <p>{form.embedDescription}</p>}
+                {form.embedFooter && <div className="embed-preview__footer">{form.embedFooter}</div>}
+              </div>
+            )}
+
+            <label className="checkbox-row" style={{ marginTop: "0.75rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <input
+                type="checkbox"
+                checked={form.clearEmbed}
+                onChange={(e) => setForm((prev) => ({ ...prev, clearEmbed: e.target.checked }))}
+                disabled={!isAdmin}
+              />
+              Clear embed when saving
+            </label>
+
+            <div className="row-actions" style={{ marginTop: "1rem" }}>
+              <button type="submit" disabled={!isAdmin || saving}>
+                <Save size={13} /> {saving ? "Saving…" : "Save edit"}
+              </button>
+              <button
+                type="button"
+                className="btn--ghost btn--sm"
+                onClick={() => setForm(emptyForm)}
+                disabled={saving}
+              >
+                <Trash2 size={13} /> Clear embed
+              </button>
+              <button
+                type="button"
+                className="btn--ghost btn--sm"
+                onClick={() => setForm(emptyForm)}
+                disabled={saving}
+              >
+                <X size={13} /> Reset
+              </button>
+            </div>
+          </form>
+        </SectionCard>
+      ) : null}
+
+      {result ? (
+        <SectionCard title="Result" icon={Copy}>
+          <div style={{ position: "relative" }}>
+            <pre className="code-box">{JSON.stringify(result, null, 2)}</pre>
+            <button
+              type="button"
+              className="btn--ghost btn--icon"
+              style={{ position: "absolute", top: "0.5rem", right: "0.5rem" }}
+              onClick={() => navigator.clipboard?.writeText(JSON.stringify(result, null, 2))}
+              title="Copy to clipboard"
+            >
+              <Copy size={13} />
+            </button>
+          </div>
+        </SectionCard>
+      ) : null}
     </div>
   );
 }

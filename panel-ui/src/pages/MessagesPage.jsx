@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
+import { MessageSquare, Hash, FileText, FileEdit, Plus, Save, X, Pencil, Trash2 } from "lucide-react";
 import { panelApi } from "../lib/api";
+import { PageHeader } from "../components/PageHeader";
+import { SectionCard } from "../components/SectionCard";
+import { Alert } from "../components/Alert";
+import { StatusBadge } from "../components/StatusBadge";
+import { EmptyState } from "../components/EmptyState";
 
 function parseEmbed(raw) {
   if (!raw) return null;
@@ -29,6 +35,7 @@ export function MessagesPage({ botKey, user }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [deleteConfirmId, setDeleteConfirmId] = useState(null);
 
   const isAdmin = user?.role === "admin";
 
@@ -109,13 +116,13 @@ export function MessagesPage({ botKey, user }) {
     }
   }
 
-  async function removeMessage(id) {
+  async function deleteMessage(id) {
     if (!isAdmin) return;
-    if (!window.confirm("Delete this message record?")) return;
 
     setError("");
     try {
       await panelApi.deleteMessage(botKey, id);
+      setDeleteConfirmId(null);
       await loadData();
     } catch (err) {
       setError(err.message || "Failed to delete message");
@@ -124,113 +131,131 @@ export function MessagesPage({ botKey, user }) {
 
   return (
     <div className="page">
-      <h1>Messages</h1>
-      <p className="muted">Create, edit and send panel messages.</p>
-      {error ? <div className="error-box">{error}</div> : null}
+      <PageHeader
+        icon={MessageSquare}
+        title="Messages"
+        subtitle="Create, edit and send announcements to Discord channels."
+      />
 
-      <form className="card form-card" onSubmit={submit}>
-        <h3>{form.id ? `Edit #${form.id}` : "New message"}</h3>
+      {error ? <Alert type="error">{error}</Alert> : null}
 
-        <label>
-          Channel
-          <select
-            value={form.channelId}
-            onChange={(e) => setForm((prev) => ({ ...prev, channelId: e.target.value }))}
-            required={form.status === "sent"}
-            disabled={!isAdmin}
-          >
-            <option value="">Select channel</option>
-            {channelOptions.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-        </label>
+      <SectionCard
+        title={form.id ? "Edit Message" : "New Message"}
+        icon={form.id ? FileEdit : Plus}
+      >
+        <form onSubmit={submit}>
+          <div className="form-grid">
+            <label>
+              Channel
+              <div className="input-group">
+                <Hash size={14} />
+                <select
+                  value={form.channelId}
+                  onChange={(e) => setForm((prev) => ({ ...prev, channelId: e.target.value }))}
+                  required={form.status === "sent"}
+                  disabled={!isAdmin}
+                >
+                  <option value="">Select channel</option>
+                  {channelOptions.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </label>
 
-        <label>
-          Status
-          <select
-            value={form.status}
-            onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value }))}
-            disabled={!isAdmin}
-          >
-            <option value="draft">Draft</option>
-            <option value="sent">Send now</option>
-          </select>
-        </label>
+            <label>
+              Status
+              <div className="input-group">
+                <FileText size={14} />
+                <select
+                  value={form.status}
+                  onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value }))}
+                  disabled={!isAdmin}
+                >
+                  <option value="draft">Draft</option>
+                  <option value="sent">Send now</option>
+                </select>
+              </div>
+            </label>
+          </div>
 
-        <label>
-          Content
-          <textarea
-            rows={4}
-            value={form.content}
-            onChange={(e) => setForm((prev) => ({ ...prev, content: e.target.value }))}
-            disabled={!isAdmin}
-          />
-        </label>
-
-        <div className="grid grid-2">
-          <label>
-            Embed title
-            <input
-              value={form.embedTitle}
-              onChange={(e) => setForm((prev) => ({ ...prev, embedTitle: e.target.value }))}
+          <label style={{ marginTop: 12, display: "block" }}>
+            Content
+            <textarea
+              rows={4}
+              value={form.content}
+              onChange={(e) => setForm((prev) => ({ ...prev, content: e.target.value }))}
               disabled={!isAdmin}
             />
           </label>
 
-          <label>
-            Embed color
-            <input
-              type="color"
-              value={form.embedColor}
-              onChange={(e) => setForm((prev) => ({ ...prev, embedColor: e.target.value }))}
+          <div className="grid grid-2" style={{ marginTop: 12 }}>
+            <label>
+              Embed title
+              <input
+                value={form.embedTitle}
+                onChange={(e) => setForm((prev) => ({ ...prev, embedTitle: e.target.value }))}
+                disabled={!isAdmin}
+              />
+            </label>
+
+            <label>
+              Embed color
+              <input
+                type="color"
+                value={form.embedColor}
+                onChange={(e) => setForm((prev) => ({ ...prev, embedColor: e.target.value }))}
+                disabled={!isAdmin}
+              />
+            </label>
+          </div>
+
+          <label style={{ marginTop: 12, display: "block" }}>
+            Embed description
+            <textarea
+              rows={4}
+              value={form.embedDescription}
+              onChange={(e) => setForm((prev) => ({ ...prev, embedDescription: e.target.value }))}
               disabled={!isAdmin}
             />
           </label>
-        </div>
 
-        <label>
-          Embed description
-          <textarea
-            rows={4}
-            value={form.embedDescription}
-            onChange={(e) => setForm((prev) => ({ ...prev, embedDescription: e.target.value }))}
-            disabled={!isAdmin}
-          />
-        </label>
+          <label style={{ marginTop: 12, display: "block" }}>
+            Embed footer
+            <input
+              value={form.embedFooter}
+              onChange={(e) => setForm((prev) => ({ ...prev, embedFooter: e.target.value }))}
+              disabled={!isAdmin}
+            />
+          </label>
 
-        <label>
-          Embed footer
-          <input
-            value={form.embedFooter}
-            onChange={(e) => setForm((prev) => ({ ...prev, embedFooter: e.target.value }))}
-            disabled={!isAdmin}
-          />
-        </label>
+          <div className="row-actions" style={{ marginTop: 16 }}>
+            <button type="submit" disabled={!isAdmin || saving}>
+              <Save size={13} /> {saving ? "Saving..." : form.id ? "Update" : "Create"}
+            </button>
+            <button
+              type="button"
+              className="btn--ghost btn--sm"
+              onClick={() => setForm(emptyForm)}
+              disabled={saving}
+            >
+              <X size={13} /> Clear
+            </button>
+          </div>
+        </form>
+      </SectionCard>
 
-        <div className="row-actions">
-          <button type="submit" disabled={!isAdmin || saving}>
-            {saving ? "Saving…" : form.id ? "Update" : "Create"}
-          </button>
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => setForm(emptyForm)}
-            disabled={saving}
-          >
-            Clear
-          </button>
-        </div>
-      </form>
-
-      <div className="card">
-        <h3>Saved messages</h3>
+      <SectionCard title="All Messages" icon={MessageSquare}>
         {loading ? (
-          <div className="muted">Loading…</div>
+          <p className="text-muted">Loading...</p>
         ) : messages.length === 0 ? (
-          <div className="muted">No messages yet.</div>
+          <EmptyState
+            icon={MessageSquare}
+            title="No messages yet"
+            message="Create your first announcement above."
+          />
         ) : (
           <div className="table-wrap">
             <table className="data-table">
@@ -248,23 +273,49 @@ export function MessagesPage({ botKey, user }) {
                 {messages.map((item) => (
                   <tr key={item.id}>
                     <td>{item.id}</td>
-                    <td>{item.status}</td>
+                    <td>
+                      <StatusBadge status={item.status} />
+                    </td>
                     <td>{item.channel_id || "-"}</td>
                     <td className="truncate-cell">{item.content || "(embed only)"}</td>
                     <td>{item.updated_at || item.created_at || "-"}</td>
                     <td>
                       <div className="row-actions">
-                        <button type="button" className="btn-secondary" onClick={() => editMessage(item)}>
-                          Edit
-                        </button>
                         <button
                           type="button"
-                          className="btn-danger"
-                          onClick={() => removeMessage(item.id)}
-                          disabled={!isAdmin}
+                          className="btn--icon"
+                          title="Edit"
+                          onClick={() => editMessage(item)}
                         >
-                          Delete
+                          <Pencil size={13} />
                         </button>
+                        {deleteConfirmId === item.id ? (
+                          <div className="inline-confirm">
+                            Delete?
+                            <button
+                              className="btn--sm btn--danger"
+                              onClick={() => deleteMessage(item.id)}
+                            >
+                              Yes
+                            </button>
+                            <button
+                              className="btn--ghost btn--sm"
+                              onClick={() => setDeleteConfirmId(null)}
+                            >
+                              No
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn--icon btn--danger-icon"
+                            title="Delete"
+                            disabled={!isAdmin}
+                            onClick={() => setDeleteConfirmId(item.id)}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -273,7 +324,7 @@ export function MessagesPage({ botKey, user }) {
             </table>
           </div>
         )}
-      </div>
+      </SectionCard>
     </div>
   );
 }

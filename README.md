@@ -6,6 +6,7 @@
   <img src="https://img.shields.io/badge/Node.js-20+-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js" />
   <img src="https://img.shields.io/badge/Discord.js-14-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord.js" />
   <img src="https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React" />
+  <img src="https://img.shields.io/badge/Recharts-2-22C55E?style=for-the-badge&logo=chartdotjs&logoColor=white" alt="Recharts" />
   <img src="https://img.shields.io/badge/Express-4-000000?style=for-the-badge&logo=express&logoColor=white" alt="Express" />
   <img src="https://img.shields.io/badge/SQLite-3-003B57?style=for-the-badge&logo=sqlite&logoColor=white" alt="SQLite" />
   <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License" />
@@ -120,7 +121,7 @@ These are the engineering decisions and challenges that characterise this projec
 - **AI Configuration** — Control engagement settings, channels, and model stats
 - **Gameplay Management** — Full CRUD for levels, badges, perk rules, XP multipliers, trivia, wanted stars, radio votes, SA-MP Life economy
 - **Accuracy Monitor** — Message counting accuracy, reconciliation status, per-user trace debugging
-- **Glassmorphic React SPA** — Modern dark/light theme with per-section error isolation
+- **Redesigned React SPA** — Full ground-up dark UI: lucide-react icons, recharts analytics, 8-component shared library (PageHeader, StatCard, SectionCard, DataTable, Alert, EmptyState, LoadingSkeleton, StatusBadge), page-level tab navigation throughout
 
 ---
 
@@ -187,13 +188,23 @@ The web layer uses a **parallel API + SPA** approach: the same Express app serve
 │
 ├── panel-ui/                    # React 19 + Vite SPA
 │   └── src/
-│       ├── App.jsx              # Router, auth guard, sidebar nav
+│       ├── App.jsx              # Router, auth guard, sidebar nav with icons
+│       ├── components/          # 8 shared UI components
+│       │   ├── Alert.jsx        # Error/success/warning/info banners
+│       │   ├── DataTable.jsx    # Generic table with loading/empty states
+│       │   ├── EmptyState.jsx   # Empty content placeholder
+│       │   ├── LoadingSkeleton.jsx  # Shimmer skeleton loaders
+│       │   ├── PageHeader.jsx   # Page title + icon + actions header
+│       │   ├── SectionCard.jsx  # Card with header, icon, actions slot
+│       │   ├── StatCard.jsx     # Metric card with large value display
+│       │   └── StatusBadge.jsx  # Status → badge variant mapper
 │       ├── pages/               # 13 page components
-│       │   ├── GameplayPage.jsx         # Per-section error-isolated UI
+│       │   ├── AnalyticsPage.jsx        # LineChart + BarChart via recharts
+│       │   ├── GameplayPage.jsx         # 9-tab gameplay management
 │       │   ├── UserManagementPage.jsx   # Full user CRUD panel
 │       │   └── ...
 │       ├── lib/api.js           # 70+ REST client methods
-│       └── styles.css           # CSS variables theme system (dark/light)
+│       └── styles.css           # Dark-only design system (CSS custom properties)
 │
 ├── public/panel/                # Built SPA (Vite output)
 ├── scripts/                     # 12 maintenance & debug scripts
@@ -428,7 +439,7 @@ Notes:
 | **Auth** | bcryptjs, role-based access control (Admin/User) |
 | **Database** | SQLite3 (WAL mode), 45+ tables |
 | **AI/ML** | Markov chains (order-2), keyword-based sentiment analysis |
-| **Frontend** | React 19, React Router 7, Vite, CSS variables theme system |
+| **Frontend** | React 19, React Router 7, Vite 7, lucide-react (icons), recharts (charts), dark-only CSS custom property design system |
 | **Logging** | Custom structured logger, per-request trace IDs |
 | **Testing** | Node.js built-in test runner, 26 unit tests + integration suite |
 

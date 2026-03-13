@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
+import { Bot, Terminal, Cpu, Play, Brain, Calendar, Timer, Save, Trash2, Send, Plus } from "lucide-react";
 import { panelApi } from "../lib/api";
+import { PageHeader } from "../components/PageHeader";
+import { SectionCard } from "../components/SectionCard";
+import { Alert } from "../components/Alert";
 
 export function AutomationPage({ bot }) {
   const guildId = bot?.guild_id;
@@ -42,76 +46,139 @@ export function AutomationPage({ bot }) {
     loadAll();
   }, [bot.key, holidaysDate]);
 
+  async function toggleCommand(name, currentEnabled) {
+    await panelApi.toggleCommand(bot.key, { commandName: name, enabled: !currentEnabled });
+    loadAll();
+  }
+
   return (
     <div className="page">
-      <h1>Automation & Features</h1>
-      {error ? <div className="error-box">{error}</div> : null}
+      <PageHeader
+        icon={Bot}
+        title="Automation & Features"
+        subtitle="Commands, AI engagement, holidays and countdown configuration."
+      />
 
-      <div className="card form-card">
-        <h3>Commands</h3>
+      {error ? <Alert type="error">{error}</Alert> : null}
+
+      <SectionCard title="Slash Commands" icon={Terminal}>
         <div className="table-wrap">
           <table className="data-table">
-            <thead><tr><th>Command</th><th>Category</th><th>Status</th><th /></tr></thead>
             <tbody>
               {commands.map((cmd) => (
                 <tr key={cmd.name}>
-                  <td>/{cmd.name}</td>
-                  <td>{cmd.category}</td>
-                  <td>{cmd.enabled ? "Enabled" : "Disabled"}</td>
                   <td>
-                    <button
-                      className={cmd.enabled ? "btn-danger" : ""}
-                      onClick={async () => {
-                        await panelApi.toggleCommand(bot.key, { commandName: cmd.name, enabled: !cmd.enabled });
-                        loadAll();
-                      }}
-                    >
-                      {cmd.enabled ? "Disable" : "Enable"}
-                    </button>
+                    <Terminal size={13} style={{ marginRight: 6, color: "var(--color-text-tertiary)" }} />
+                    {cmd.name}
+                  </td>
+                  <td>{cmd.description}</td>
+                  <td>
+                    <label className="toggle-switch">
+                      <input
+                        type="checkbox"
+                        checked={cmd.enabled !== false}
+                        onChange={() => toggleCommand(cmd.name, cmd.enabled !== false)}
+                      />
+                      <div className="toggle-track">
+                        <div className="toggle-thumb"></div>
+                      </div>
+                      <span className="toggle-label">{cmd.enabled !== false ? "Enabled" : "Disabled"}</span>
+                    </label>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      </div>
+      </SectionCard>
 
       <div className="grid grid-2">
-        <div className="card form-card">
-          <h3>AI Engagement</h3>
+        <SectionCard title="AI Engagement" icon={Cpu}>
           {aiSettings ? (
             <>
-              <label>Enabled
-                <select value={aiSettings.enabled ? "1" : "0"} onChange={(e) => setAiSettings((p) => ({ ...p, enabled: e.target.value === "1" }))}>
-                  <option value="1">Enabled</option>
-                  <option value="0">Disabled</option>
-                </select>
-              </label>
-              <label>Response Chance (%)
-                <input type="number" value={Math.round((aiSettings.response_chance || 0) * 100)} onChange={(e) => setAiSettings((p) => ({ ...p, response_chance: Number(e.target.value) / 100 }))} />
-              </label>
-              <button onClick={async () => {
-                await panelApi.aiSaveSettings(bot.key, { guildId, settings: aiSettings });
-                loadAll();
-              }}>Save AI settings</button>
-              <div className="row-actions">
-                <button className="btn-secondary" onClick={async () => { await panelApi.aiTest(bot.key, { guildId }); }}>Run test response</button>
-                <button className="btn-secondary" onClick={async () => {
-                  const channelId = sendChannels[0]?.id;
-                  if (channelId) await panelApi.aiTrain(bot.key, { channelId, messageLimit: 500 });
-                  loadAll();
-                }}>Train model</button>
+              <div className="form-row" style={{ marginBottom: 12 }}>
+                <label className="toggle-switch">
+                  <input
+                    type="checkbox"
+                    checked={!!aiSettings.enabled}
+                    onChange={(e) => setAiSettings((p) => ({ ...p, enabled: e.target.checked }))}
+                  />
+                  <div className="toggle-track">
+                    <div className="toggle-thumb"></div>
+                  </div>
+                  <span className="toggle-label">AI Engagement Enabled</span>
+                </label>
               </div>
-              <p className="muted">Model stats: {aiStats?.model ? JSON.stringify(aiStats.model) : "n/a"}</p>
+
+              <div className="form-grid">
+                <label>
+                  Response Chance (%)
+                  <input
+                    type="number"
+                    value={Math.round((aiSettings.response_chance || 0) * 100)}
+                    onChange={(e) =>
+                      setAiSettings((p) => ({ ...p, response_chance: Number(e.target.value) / 100 }))
+                    }
+                  />
+                </label>
+              </div>
+
+              {aiStats?.model && (
+                <div className="grid grid-2" style={{ marginTop: 12 }}>
+                  {Object.entries(aiStats.model).map(([k, v]) => (
+                    <div key={k} className="card" style={{ padding: "8px 12px" }}>
+                      <div className="text-muted" style={{ fontSize: 11, marginBottom: 2 }}>{k}</div>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>{String(v)}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {!aiStats?.model && (
+                <p className="text-muted" style={{ fontSize: 12, marginTop: 8 }}>Model stats: n/a</p>
+              )}
+
+              <div className="row-actions" style={{ marginTop: 12 }}>
+                <button
+                  className="btn--ghost btn--sm"
+                  onClick={async () => {
+                    await panelApi.aiSaveSettings(bot.key, { guildId, settings: aiSettings });
+                    loadAll();
+                  }}
+                >
+                  <Save size={13} /> Save AI Settings
+                </button>
+                <button
+                  className="btn--ghost btn--sm"
+                  onClick={async () => { await panelApi.aiTest(bot.key, { guildId }); }}
+                >
+                  <Play size={13} /> Test
+                </button>
+                <button
+                  className="btn--ghost btn--sm"
+                  onClick={async () => {
+                    const channelId = sendChannels[0]?.id;
+                    if (channelId) await panelApi.aiTrain(bot.key, { channelId, messageLimit: 500 });
+                    loadAll();
+                  }}
+                >
+                  <Brain size={13} /> Train
+                </button>
+              </div>
             </>
           ) : null}
-        </div>
+        </SectionCard>
 
-        <div className="card form-card">
-          <h3>AI History</h3>
+        <SectionCard title="AI History" icon={Cpu}>
           <div className="table-wrap">
             <table className="data-table">
-              <thead><tr><th>Time</th><th>Input</th><th>Output</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Input</th>
+                  <th>Output</th>
+                </tr>
+              </thead>
               <tbody>
                 {aiHistory.map((row, idx) => (
                   <tr key={`${row.timestamp || idx}`}>
@@ -123,57 +190,140 @@ export function AutomationPage({ bot }) {
               </tbody>
             </table>
           </div>
-        </div>
+        </SectionCard>
       </div>
 
       <div className="grid grid-2">
-        <div className="card form-card">
-          <h3>Holidays</h3>
-          <label>View date
-            <input type="date" value={holidaysDate} onChange={(e) => setHolidaysDate(e.target.value)} />
-          </label>
-          <div className="table-wrap">
+        <SectionCard title="Holidays" icon={Calendar}>
+          <div className="form-grid" style={{ marginBottom: 12 }}>
+            <label>
+              View date
+              <input type="date" value={holidaysDate} onChange={(e) => setHolidaysDate(e.target.value)} />
+            </label>
+          </div>
+
+          <div className="table-wrap" style={{ marginBottom: 12 }}>
             <table className="data-table">
-              <thead><tr><th>ID</th><th>Title</th><th>Note</th><th /></tr></thead>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Title</th>
+                  <th>Note</th>
+                  <th />
+                </tr>
+              </thead>
               <tbody>
                 {holidays.map((item) => (
                   <tr key={item.id}>
                     <td>{item.id}</td>
                     <td>{item.title}</td>
                     <td>{item.note || "-"}</td>
-                    <td><button className="btn-danger" onClick={async () => { await panelApi.deleteHoliday(bot.key, item.id); loadAll(); }}>Delete</button></td>
+                    <td>
+                      <button
+                        className="btn--icon btn--danger-icon"
+                        title="Delete"
+                        onClick={async () => {
+                          await panelApi.deleteHoliday(bot.key, item.id);
+                          loadAll();
+                        }}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <div className="inline-form">
-            <input type="date" value={holidayForm.date} onChange={(e) => setHolidayForm((p) => ({ ...p, date: e.target.value }))} />
-            <input placeholder="Title" value={holidayForm.title} onChange={(e) => setHolidayForm((p) => ({ ...p, title: e.target.value }))} />
-            <input placeholder="Note" value={holidayForm.note} onChange={(e) => setHolidayForm((p) => ({ ...p, note: e.target.value }))} />
-            <button onClick={async () => { await panelApi.addHoliday(bot.key, holidayForm); setHolidayForm((p) => ({ ...p, title: "", note: "" })); loadAll(); }}>Add</button>
-          </div>
-        </div>
 
-        <div className="card form-card">
-          <h3>Countdown</h3>
-          <label>Channel
-            <select value={countdownConfig.channel_id || ""} onChange={(e) => setCountdownConfig((p) => ({ ...p, channel_id: e.target.value }))}>
-              <option value="">Select channel</option>
-              {sendChannels.map((ch) => <option key={ch.id} value={ch.id}>{ch.name}</option>)}
-            </select>
-          </label>
-          <label>Title template
-            <input value={countdownConfig.template_title || ""} onChange={(e) => setCountdownConfig((p) => ({ ...p, template_title: e.target.value }))} />
-          </label>
-          <label>Text template
-            <textarea rows={3} value={countdownConfig.template_text || ""} onChange={(e) => setCountdownConfig((p) => ({ ...p, template_text: e.target.value }))} />
-          </label>
-          <div className="row-actions">
-            <button onClick={async () => { await panelApi.saveCountdownConfig(bot.key, { guildId, config: countdownConfig }); loadAll(); }}>Save countdown</button>
-            <button className="btn-secondary" onClick={async () => { await panelApi.testCountdown(bot.key, { guildId }); }}>Send test countdown</button>
+          <div className="form-grid">
+            <label>
+              Date
+              <input
+                type="date"
+                value={holidayForm.date}
+                onChange={(e) => setHolidayForm((p) => ({ ...p, date: e.target.value }))}
+              />
+            </label>
+            <label>
+              Title
+              <input
+                placeholder="Holiday title"
+                value={holidayForm.title}
+                onChange={(e) => setHolidayForm((p) => ({ ...p, title: e.target.value }))}
+              />
+            </label>
+            <label>
+              Note
+              <input
+                placeholder="Optional note"
+                value={holidayForm.note}
+                onChange={(e) => setHolidayForm((p) => ({ ...p, note: e.target.value }))}
+              />
+            </label>
           </div>
-        </div>
+          <div className="row-actions" style={{ marginTop: 10 }}>
+            <button
+              className="btn--ghost btn--sm"
+              onClick={async () => {
+                await panelApi.addHoliday(bot.key, holidayForm);
+                setHolidayForm((p) => ({ ...p, title: "", note: "" }));
+                loadAll();
+              }}
+            >
+              <Plus size={13} /> Add Holiday
+            </button>
+          </div>
+        </SectionCard>
+
+        <SectionCard title="Countdown Timer" icon={Timer}>
+          <div className="form-grid">
+            <label>
+              Channel
+              <select
+                value={countdownConfig.channel_id || ""}
+                onChange={(e) => setCountdownConfig((p) => ({ ...p, channel_id: e.target.value }))}
+              >
+                <option value="">Select channel</option>
+                {sendChannels.map((ch) => (
+                  <option key={ch.id} value={ch.id}>{ch.name}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Title template
+              <input
+                value={countdownConfig.template_title || ""}
+                onChange={(e) => setCountdownConfig((p) => ({ ...p, template_title: e.target.value }))}
+              />
+            </label>
+          </div>
+          <label style={{ marginTop: 10, display: "block" }}>
+            Text template
+            <textarea
+              rows={3}
+              value={countdownConfig.template_text || ""}
+              onChange={(e) => setCountdownConfig((p) => ({ ...p, template_text: e.target.value }))}
+            />
+          </label>
+          <div className="row-actions" style={{ marginTop: 12 }}>
+            <button
+              className="btn--ghost btn--sm"
+              onClick={async () => {
+                await panelApi.saveCountdownConfig(bot.key, { guildId, config: countdownConfig });
+                loadAll();
+              }}
+            >
+              <Save size={13} /> Save
+            </button>
+            <button
+              className="btn--ghost btn--sm"
+              onClick={async () => { await panelApi.testCountdown(bot.key, { guildId }); }}
+            >
+              <Send size={13} /> Send test countdown
+            </button>
+          </div>
+        </SectionCard>
       </div>
     </div>
   );

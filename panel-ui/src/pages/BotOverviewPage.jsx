@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import {
+  LayoutDashboard, Wifi, WifiOff, Activity, Clock,
+  MessageSquare, Users, AlertTriangle, Terminal, Server,
+  RefreshCw, Download, RotateCcw, Shield, Bot, BarChart2, History,
+} from "lucide-react";
 import { formatApiError, panelApi } from "../lib/api";
+import { PageHeader } from "../components/PageHeader";
+import { StatCard } from "../components/StatCard";
+import { SectionCard } from "../components/SectionCard";
+import { Alert } from "../components/Alert";
+import { LoadingSkeleton } from "../components/LoadingSkeleton";
 
 function asNumber(value) {
   const n = Number(value || 0);
@@ -79,111 +89,146 @@ export function BotOverviewPage({ bot, botKey, user }) {
   }, [botKey, guildId]);
 
   const base = `/bot/${botKey}`;
+  const isOnline = status?.online;
 
   return (
-    <div className="page">
-      <h1>{bot.name || bot.key} Control Center</h1>
-      <p className="muted">Guild ID: {bot.guild_id || "n/a"}</p>
-      {error ? <div className="error-box">{error}</div> : null}
+    <div>
+      <PageHeader
+        icon={LayoutDashboard}
+        title={`${bot.name || bot.key}`}
+        subtitle="Bot overview and quick actions"
+        actions={
+          <button
+            type="button"
+            className="btn--ghost btn--sm"
+            onClick={loadOverview}
+            disabled={busyAction !== ""}
+          >
+            <RotateCcw size={13} />
+            Refresh
+          </button>
+        }
+      />
+
+      {error && <Alert type="error">{error}</Alert>}
 
       {loading ? (
-        <div className="muted">Loading bot status…</div>
+        <div className="mb-6">
+          <LoadingSkeleton type="grid" rows={8} />
+        </div>
       ) : (
         <>
-        <div className="grid">
-          <div className="card">
-            <h3>Connection</h3>
-            <p>{status?.online ? "Online" : "Offline"}</p>
-          </div>
-          <div className="card">
-            <h3>Ping</h3>
-            <p>{status?.ping ?? "n/a"} ms</p>
-          </div>
-          <div className="card">
-            <h3>Uptime</h3>
-            <p>{status?.uptime || "n/a"}</p>
-          </div>
-          <div className="card">
-            <h3>7d Messages</h3>
-            <p>{asNumber(analytics?.totalMessages).toLocaleString()}</p>
-          </div>
-          <div className="card">
-            <h3>7d Active Users</h3>
-            <p>{asNumber(analytics?.activeUsers).toLocaleString()}</p>
-          </div>
-          <div className="card">
-            <h3>Active Strikes</h3>
-            <p>{asNumber(strikes?.length).toLocaleString()}</p>
-          </div>
-          <div className="card">
-            <h3>Disabled Commands</h3>
-            <p>{disabledCommands}</p>
-          </div>
-          <div className="card">
-            <h3>SA-MP Trackers</h3>
-            <p>{asNumber(servers?.length).toLocaleString()}</p>
-          </div>
-        </div>
-
-        <div className="grid grid-2">
-          <div className="card form-card">
-            <h3>Quick Actions</h3>
-            <div className="row-actions">
-              <Link className="subnav-link" to={`${base}/messages`}>Announcements</Link>
-              <Link className="subnav-link" to={`${base}/moderation`}>Moderation</Link>
-              <Link className="subnav-link" to={`${base}/automation`}>Automation</Link>
-              <Link className="subnav-link" to={`${base}/stats`}>Stats</Link>
-              <Link className="subnav-link" to={`${base}/samp-servers`}>SA-MP</Link>
-              <Link className="subnav-link" to={`${base}/operations`}>Operations</Link>
-            </div>
-            <div className="row-actions">
-              <button
-                type="button"
-                onClick={() => runOpsAction("reconcile")}
-                disabled={!isAdmin || busyAction !== ""}
-              >
-                {busyAction === "reconcile" ? "Running…" : "Reconcile Guild"}
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => runOpsAction("fullsync")}
-                disabled={!isAdmin || busyAction !== ""}
-              >
-                {busyAction === "fullsync" ? "Running…" : "Full Sync"}
-              </button>
-              <button type="button" className="btn-secondary" onClick={loadOverview} disabled={busyAction !== ""}>
-                Refresh
-              </button>
-            </div>
+          <div className="grid mb-6">
+            <StatCard
+              icon={isOnline ? Wifi : WifiOff}
+              label="Connection"
+              value={isOnline ? "Online" : "Offline"}
+              accentColor={isOnline ? "var(--color-success)" : "var(--color-danger)"}
+              iconBg={isOnline ? "var(--color-success-subtle)" : "var(--color-danger-subtle)"}
+            />
+            <StatCard icon={Activity} label="Ping" value={`${status?.ping ?? "—"} ms`} />
+            <StatCard icon={Clock} label="Uptime" value={status?.uptime || "—"} />
+            <StatCard
+              icon={MessageSquare}
+              label="7d Messages"
+              value={asNumber(analytics?.totalMessages).toLocaleString()}
+            />
+            <StatCard
+              icon={Users}
+              label="7d Active Users"
+              value={asNumber(analytics?.activeUsers).toLocaleString()}
+            />
+            <StatCard
+              icon={AlertTriangle}
+              label="Active Strikes"
+              value={asNumber(strikes?.length).toLocaleString()}
+              accentColor={strikes?.length > 0 ? "var(--color-warning)" : undefined}
+              iconBg={strikes?.length > 0 ? "var(--color-warning-subtle)" : undefined}
+            />
+            <StatCard icon={Terminal} label="Disabled Commands" value={disabledCommands} />
+            <StatCard icon={Server} label="SA-MP Trackers" value={asNumber(servers?.length).toLocaleString()} />
           </div>
 
-          <div className="card form-card">
-            <h3>Recent Operations</h3>
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Type</th>
-                    <th>Scope</th>
-                    <th>When</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(history || []).slice(0, 8).map((op) => (
-                    <tr key={op.id}>
-                      <td>{op.id}</td>
-                      <td>{op.operation}</td>
-                      <td>{op.scope || "-"}</td>
-                      <td>{op.timestamp ? new Date(op.timestamp).toLocaleString() : "-"}</td>
+          <div className="grid-2 grid mb-6">
+            <SectionCard title="Quick Actions" icon={LayoutDashboard}>
+              <div className="row-actions mb-3">
+                <Link className="btn--ghost btn--sm flex items-center gap-2" to={`${base}/messages`}>
+                  <MessageSquare size={13} /> Announcements
+                </Link>
+                <Link className="btn--ghost btn--sm flex items-center gap-2" to={`${base}/moderation`}>
+                  <Shield size={13} /> Moderation
+                </Link>
+                <Link className="btn--ghost btn--sm flex items-center gap-2" to={`${base}/automation`}>
+                  <Bot size={13} /> Automation
+                </Link>
+                <Link className="btn--ghost btn--sm flex items-center gap-2" to={`${base}/stats`}>
+                  <BarChart2 size={13} /> Stats
+                </Link>
+                <Link className="btn--ghost btn--sm flex items-center gap-2" to={`${base}/samp-servers`}>
+                  <Server size={13} /> SA-MP
+                </Link>
+                <Link className="btn--ghost btn--sm flex items-center gap-2" to={`${base}/operations`}>
+                  <History size={13} /> Operations
+                </Link>
+              </div>
+              {isAdmin && (
+                <div className="row-actions">
+                  <button
+                    type="button"
+                    onClick={() => runOpsAction("reconcile")}
+                    disabled={busyAction !== ""}
+                    className="btn--sm"
+                  >
+                    <RefreshCw size={13} />
+                    {busyAction === "reconcile" ? "Running…" : "Reconcile Guild"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn--ghost btn--sm"
+                    onClick={() => runOpsAction("fullsync")}
+                    disabled={busyAction !== ""}
+                  >
+                    <Download size={13} />
+                    {busyAction === "fullsync" ? "Running…" : "Full Sync"}
+                  </button>
+                </div>
+              )}
+            </SectionCard>
+
+            <SectionCard title="Recent Operations" icon={History}>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Type</th>
+                      <th>Scope</th>
+                      <th>When</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {(history || []).slice(0, 8).map((op) => (
+                      <tr key={op.id}>
+                        <td className="text-muted text-sm">{op.id}</td>
+                        <td>{op.operation}</td>
+                        <td className="text-muted">{op.scope || "—"}</td>
+                        <td className="text-muted text-sm">
+                          {op.timestamp ? new Date(op.timestamp).toLocaleString() : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                    {history.length === 0 && (
+                      <tr>
+                        <td colSpan={4} style={{ padding: "24px", textAlign: "center" }} className="text-muted">
+                          No recent operations
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </SectionCard>
           </div>
-        </div>
         </>
       )}
     </div>

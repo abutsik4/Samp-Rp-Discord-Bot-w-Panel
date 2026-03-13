@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
+import { BarChart2, ChevronLeft, ChevronRight, Search, Sliders, X } from "lucide-react";
 import { panelApi } from "../lib/api";
+import { Alert } from "../components/Alert";
+import { LoadingSkeleton } from "../components/LoadingSkeleton";
+import { PageHeader } from "../components/PageHeader";
+import { SectionCard } from "../components/SectionCard";
 
 export function StatsPage({ bot, botKey, user }) {
   const [rows, setRows] = useState([]);
@@ -11,6 +16,7 @@ export function StatsPage({ bot, botKey, user }) {
   const [error, setError] = useState("");
   const [adjustUserId, setAdjustUserId] = useState("");
   const [adjustDelta, setAdjustDelta] = useState("");
+  const [adjustSuccess, setAdjustSuccess] = useState("");
   const [busy, setBusy] = useState(false);
 
   const canEdit = user?.role === "admin";
@@ -51,6 +57,11 @@ export function StatsPage({ bot, botKey, user }) {
     await load();
   }
 
+  function clearSearch() {
+    setSearch("");
+    setOffset(0);
+  }
+
   async function applyAdjust(event) {
     event.preventDefault();
     if (!canEdit) return;
@@ -63,6 +74,7 @@ export function StatsPage({ bot, botKey, user }) {
 
     setBusy(true);
     setError("");
+    setAdjustSuccess("");
     try {
       await panelApi.adjustUserStats(botKey, {
         guildId: bot.guild_id,
@@ -70,6 +82,7 @@ export function StatsPage({ bot, botKey, user }) {
         delta,
       });
       setAdjustDelta("");
+      setAdjustSuccess("Adjustment applied successfully.");
       await load();
     } catch (err) {
       setError(err.message || "Failed to apply adjustment");
@@ -78,93 +91,140 @@ export function StatsPage({ bot, botKey, user }) {
     }
   }
 
-  const pageFrom = total === 0 ? 0 : offset + 1;
-  const pageTo = Math.min(offset + limit, total);
-
   return (
     <div className="page">
-      <h1>Statistics</h1>
-      <p className="muted">User message leaderboard and manual adjustments.</p>
-      {error ? <div className="error-box">{error}</div> : null}
+      <PageHeader
+        icon={BarChart2}
+        title="Statistics"
+        subtitle="User message leaderboard and manual adjustments."
+      />
 
-      <div className="card">
-        <form className="inline-form" onSubmit={runSearch}>
+      {error && <Alert type="error">{error}</Alert>}
+      {adjustSuccess && <Alert type="success">{adjustSuccess}</Alert>}
+
+      <form className="flex items-center gap-2 mb-4" onSubmit={runSearch}>
+        <div className="input-group" style={{ flex: 1, maxWidth: 320 }}>
+          <Search size={14} />
           <input
-            placeholder="Search username or user ID"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search username or ID…"
           />
-          <button type="submit">Search</button>
-        </form>
-
-        <div className="muted table-meta">
-          Showing {pageFrom}–{pageTo} of {total}
         </div>
+        <button type="submit" className="btn--sm">
+          <Search size={13} />
+          Search
+        </button>
+        {search && (
+          <button type="button" className="btn--ghost btn--sm" onClick={clearSearch}>
+            <X size={13} />
+            Clear
+          </button>
+        )}
+      </form>
+
+      <SectionCard title="Leaderboard" icon={BarChart2}>
+        <div className="table-meta">{total.toLocaleString()} users</div>
 
         {loading ? (
-          <div className="muted">Loading…</div>
+          <LoadingSkeleton type="table" rows={15} />
         ) : (
           <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
+                  <th>#</th>
                   <th>User</th>
                   <th>User ID</th>
-                  <th>Messages</th>
+                  <th className="col-num">Messages</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
-                  <tr key={row.user_id}>
-                    <td>{row.username}</td>
-                    <td>{row.user_id}</td>
-                    <td>{row.message_count}</td>
-                  </tr>
-                ))}
+                {rows.map((row, i) => {
+                  const rank = offset + i + 1;
+                  return (
+                    <tr key={row.user_id}>
+                      <td
+                        className={
+                          rank === 1
+                            ? "rank-1"
+                            : rank === 2
+                            ? "rank-2"
+                            : rank === 3
+                            ? "rank-3"
+                            : "text-muted text-sm"
+                        }
+                      >
+                        {rank === 1 ? "🏆" : rank}
+                      </td>
+                      <td>{row.username || "Unknown"}</td>
+                      <td className="text-muted text-sm font-mono">{row.user_id}</td>
+                      <td className="col-num font-medium">
+                        {Number(row.message_count || 0).toLocaleString()}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
 
-        <div className="row-actions">
+        <div className="flex items-center gap-2 mt-3">
           <button
-            type="button"
-            className="btn-secondary"
-            disabled={offset <= 0 || loading}
+            className="btn--ghost btn--sm"
             onClick={() => setOffset((prev) => Math.max(0, prev - limit))}
+            disabled={offset === 0 || loading}
           >
+            <ChevronLeft size={13} />
             Prev
           </button>
+          <span className="text-muted text-sm">
+            {Math.floor(offset / limit) + 1} of {Math.max(1, Math.ceil(total / limit))}
+          </span>
           <button
-            type="button"
-            className="btn-secondary"
-            disabled={offset + limit >= total || loading}
+            className="btn--ghost btn--sm"
             onClick={() => setOffset((prev) => prev + limit)}
+            disabled={offset + limit >= total || loading}
           >
             Next
+            <ChevronRight size={13} />
           </button>
         </div>
-      </div>
+      </SectionCard>
 
-      <form className="card inline-form" onSubmit={applyAdjust}>
-        <h3>Admin adjustment</h3>
-        <input
-          placeholder="User ID"
-          value={adjustUserId}
-          onChange={(e) => setAdjustUserId(e.target.value)}
-          disabled={!canEdit || busy}
-        />
-        <input
-          type="number"
-          placeholder="Delta (e.g. -10 or 50)"
-          value={adjustDelta}
-          onChange={(e) => setAdjustDelta(e.target.value)}
-          disabled={!canEdit || busy}
-        />
-        <button type="submit" disabled={!canEdit || busy}>
-          {busy ? "Applying…" : "Apply"}
-        </button>
-      </form>
+      {canEdit && (
+        <SectionCard title="Manual Adjustment" icon={Sliders}>
+          <form className="form-grid" onSubmit={applyAdjust}>
+            <div className="form-row">
+              <label>
+                User ID
+                <input
+                  placeholder="User ID"
+                  value={adjustUserId}
+                  onChange={(e) => setAdjustUserId(e.target.value)}
+                  disabled={busy}
+                />
+              </label>
+              <label>
+                Delta
+                <input
+                  type="number"
+                  placeholder="e.g. -10 or 50"
+                  value={adjustDelta}
+                  onChange={(e) => setAdjustDelta(e.target.value)}
+                  disabled={busy}
+                />
+              </label>
+            </div>
+            <div className="row-actions">
+              <button type="submit" className="btn--sm" disabled={busy}>
+                {busy ? "Applying…" : "Apply"}
+              </button>
+            </div>
+          </form>
+        </SectionCard>
+      )}
     </div>
   );
 }

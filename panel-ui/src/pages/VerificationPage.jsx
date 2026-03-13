@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
+import { CheckCircle2, ShieldOff, MessageSquare, User, Search, RefreshCw, AlertTriangle } from "lucide-react";
 import { formatApiError, panelApi } from "../lib/api";
+import { PageHeader } from "../components/PageHeader";
+import { SectionCard } from "../components/SectionCard";
+import { Alert } from "../components/Alert";
 
 export function VerificationPage({ bot, user }) {
   const [messageId, setMessageId] = useState("");
@@ -71,100 +75,133 @@ export function VerificationPage({ bot, user }) {
   if (!isAdmin) {
     return (
       <div className="page">
-        <h1>Verification</h1>
-        <div className="error-box">Access denied. Admin role required.</div>
+        <PageHeader
+          icon={CheckCircle2}
+          title="Verification"
+          subtitle="Data integrity checks and discrepancy detection."
+        />
+        <Alert type="error">
+          <ShieldOff size={14} /> Access denied. Administrator role required.
+        </Alert>
       </div>
     );
   }
 
   return (
     <div className="page">
-      <h1>Verification</h1>
-      <p className="muted">Verify message counting integrity and top-user consistency for this bot.</p>
-      {error ? <div className="error-box">{error}</div> : null}
+      <PageHeader
+        icon={CheckCircle2}
+        title="Verification"
+        subtitle="Data integrity checks and discrepancy detection."
+      />
 
-      <div className="grid grid-2">
-        <form className="card form-card" onSubmit={checkMessageCounted}>
-          <h3>Message counted check</h3>
-          <label>
-            Message ID
-            <input
-              value={messageId}
-              onChange={(e) => setMessageId(e.target.value)}
-              placeholder="Discord message ID"
-            />
-          </label>
-          <div className="row-actions">
-            <button type="submit">Check message</button>
+      {error ? <Alert type="error">{error}</Alert> : null}
+
+      {summary ? (
+        <div className="grid">
+          <div className="card">
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.25rem" }}>
+              <CheckCircle2 size={14} className="text-accent" />
+              <span style={{ fontSize: "0.75rem", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Total Checked</span>
+            </div>
+            <p style={{ fontSize: "1.5rem", fontWeight: 700, margin: 0 }}>{summary.total || 0}</p>
           </div>
-
-          {messageResult ? (
-            <pre className="code-box">{JSON.stringify(messageResult, null, 2)}</pre>
-          ) : null}
-        </form>
-
-        <form className="card form-card" onSubmit={checkUserStats}>
-          <h3>User stats cross-check</h3>
-          <label>
-            User ID
-            <input
-              value={userId}
-              onChange={(e) => setUserId(e.target.value)}
-              placeholder="Discord user ID"
-            />
-          </label>
-          <div className="row-actions">
-            <button type="submit">Check user</button>
+          <div className="card">
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.25rem" }}>
+              <CheckCircle2 size={14} style={{ color: "var(--color-success)" }} />
+              <span style={{ fontSize: "0.75rem", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Perfect Matches</span>
+            </div>
+            <p style={{ fontSize: "1.5rem", fontWeight: 700, margin: 0 }}>{summary.perfect || 0}</p>
           </div>
+          <div className="card">
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.25rem" }}>
+              <AlertTriangle size={14} style={{ color: "var(--color-danger)" }} />
+              <span style={{ fontSize: "0.75rem", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Discrepancies</span>
+            </div>
+            <p style={{ fontSize: "1.5rem", fontWeight: 700, margin: 0 }}>{summary.discrepancies || 0}</p>
+          </div>
+        </div>
+      ) : null}
 
-          {userResult ? (
-            <pre className="code-box">{JSON.stringify(userResult, null, 2)}</pre>
-          ) : null}
-        </form>
+      <div className="grid-2">
+        <SectionCard title="Message Counted Check" icon={MessageSquare}>
+          <form onSubmit={checkMessageCounted}>
+            <div className="form-row">
+              <label>Message ID</label>
+              <div className="input-group">
+                <MessageSquare size={14} />
+                <input
+                  value={messageId}
+                  onChange={(e) => setMessageId(e.target.value)}
+                  placeholder="Discord message ID"
+                />
+              </div>
+            </div>
+            <div className="row-actions" style={{ marginTop: "0.75rem" }}>
+              <button type="submit">
+                <Search size={13} /> Check message
+              </button>
+            </div>
+            {messageResult ? (
+              <pre className="code-box" style={{ marginTop: "0.75rem" }}>{JSON.stringify(messageResult, null, 2)}</pre>
+            ) : null}
+          </form>
+        </SectionCard>
+
+        <SectionCard title="User Stats Cross-Check" icon={User}>
+          <form onSubmit={checkUserStats}>
+            <div className="form-row">
+              <label>User ID</label>
+              <div className="input-group">
+                <User size={14} />
+                <input
+                  value={userId}
+                  onChange={(e) => setUserId(e.target.value)}
+                  placeholder="Discord user ID"
+                />
+              </div>
+            </div>
+            <div className="row-actions" style={{ marginTop: "0.75rem" }}>
+              <button type="submit">
+                <Search size={13} /> Check user
+              </button>
+            </div>
+            {userResult ? (
+              <pre className="code-box" style={{ marginTop: "0.75rem" }}>{JSON.stringify(userResult, null, 2)}</pre>
+            ) : null}
+          </form>
+        </SectionCard>
       </div>
 
-      <div className="card form-card">
-        <h3>Top users verification snapshot</h3>
-        <div className="row-actions">
-          <label>
-            Limit
-            <select
-              value={resultsLimit}
-              onChange={(e) => setResultsLimit(Number(e.target.value) || 50)}
+      <SectionCard
+        title="Top Users Verification Snapshot"
+        icon={CheckCircle2}
+        actions={
+          <>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.8rem" }}>
+              Limit
+              <select
+                value={resultsLimit}
+                onChange={(e) => setResultsLimit(Number(e.target.value) || 50)}
+                style={{ fontSize: "0.8rem" }}
+              >
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+                <option value={200}>200</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              className="btn--ghost btn--sm"
+              onClick={() => loadResults(resultsLimit)}
+              disabled={loadingResults}
             >
-              <option value={25}>25</option>
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-              <option value={200}>200</option>
-            </select>
-          </label>
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => loadResults(resultsLimit)}
-            disabled={loadingResults}
-          >
-            {loadingResults ? "Loading…" : "Refresh"}
-          </button>
-        </div>
-
-        {summary ? (
-          <div className="grid">
-            <div className="card">
-              <h3>Total checked</h3>
-              <p>{summary.total || 0}</p>
-            </div>
-            <div className="card">
-              <h3>Perfect matches</h3>
-              <p>{summary.perfect || 0}</p>
-            </div>
-            <div className="card">
-              <h3>Discrepancies</h3>
-              <p>{summary.discrepancies || 0}</p>
-            </div>
-          </div>
-        ) : null}
-
+              <RefreshCw size={13} /> {loadingResults ? "Loading…" : "Refresh"}
+            </button>
+          </>
+        }
+      >
         <div className="table-wrap">
           <table className="data-table">
             <thead>
@@ -176,8 +213,15 @@ export function VerificationPage({ bot, user }) {
               </tr>
             </thead>
             <tbody>
+              {results.length === 0 ? (
+                <tr>
+                  <td colSpan={4} style={{ textAlign: "center", color: "var(--muted)" }}>
+                    No results — run a refresh to load data.
+                  </td>
+                </tr>
+              ) : null}
               {results.map((item) => (
-                <tr key={item.user_id}>
+                <tr key={item.user_id} className={item.difference !== 0 ? "row-danger" : ""}>
                   <td>{item.username || item.user_id}</td>
                   <td>{item.stored_count}</td>
                   <td>{item.indexed_count}</td>
@@ -187,7 +231,7 @@ export function VerificationPage({ bot, user }) {
             </tbody>
           </table>
         </div>
-      </div>
+      </SectionCard>
     </div>
   );
 }

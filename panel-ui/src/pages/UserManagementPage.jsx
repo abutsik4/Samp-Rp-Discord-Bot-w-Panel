@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
+import { Users, Key, Trash2, UserPlus, Lock, Save, X, Shield } from "lucide-react";
 import { authApi, formatApiError } from "../lib/api";
+import { PageHeader } from "../components/PageHeader";
+import { SectionCard } from "../components/SectionCard";
+import { Alert } from "../components/Alert";
 
 export function UserManagementPage({ user }) {
   const [users, setUsers] = useState([]);
@@ -22,6 +26,9 @@ export function UserManagementPage({ user }) {
   const [selfCurrentPw, setSelfCurrentPw] = useState("");
   const [selfNewPw, setSelfNewPw] = useState("");
   const [changingOwnPw, setChangingOwnPw] = useState(false);
+
+  // Inline delete confirm state
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
 
   if (user?.role !== "admin") {
     return <Navigate to="/" replace />;
@@ -65,11 +72,11 @@ export function UserManagementPage({ user }) {
   }
 
   async function handleDelete(username) {
-    if (!confirm(`Delete user "${username}"? This cannot be undone.`)) return;
     setError("");
     try {
       await authApi.deleteUser(username);
       flash(`User "${username}" deleted.`);
+      setDeleteConfirm(null);
       await loadUsers();
     } catch (e) {
       setError(formatApiError(e, "Failed to delete user"));
@@ -120,36 +127,63 @@ export function UserManagementPage({ user }) {
     }
   }
 
+  function openModal(u) {
+    setResetTarget(u.username);
+    setResetPassword("");
+  }
+
+  function closeModal() {
+    setResetTarget(null);
+    setResetPassword("");
+  }
+
   return (
     <div className="page">
-      <h1>User Management</h1>
-      <p className="muted">Manage panel admin and user accounts.</p>
+      <PageHeader
+        icon={Users}
+        title="User Management"
+        subtitle="Manage panel accounts and access levels."
+      />
 
-      {error ? <div className="error-box">{error}</div> : null}
-      {success ? <div className="success-box">{success}</div> : null}
+      {error ? <Alert type="error">{error}</Alert> : null}
+      {success ? <Alert type="success">{success}</Alert> : null}
 
       {/* Reset Password Modal */}
       {resetTarget ? (
-        <div className="modal-overlay" onClick={() => setResetTarget(null)}>
+        <div className="modal-overlay" onClick={closeModal}>
           <div className="modal-box" onClick={(e) => e.stopPropagation()}>
-            <h3>Reset Password: {resetTarget}</h3>
+            <div className="modal-header">
+              <div className="modal-title">
+                <Key size={16} /> Reset Password: {resetTarget}
+              </div>
+              <button className="btn--icon" onClick={closeModal}>
+                <X size={13} />
+              </button>
+            </div>
             <form onSubmit={handleResetPassword}>
               <div className="form-row">
                 <label>New Password</label>
-                <input
-                  type="password"
-                  value={resetPassword}
-                  onChange={(e) => setResetPassword(e.target.value)}
-                  placeholder="Min 8 characters"
-                  minLength={8}
-                  required
-                />
+                <div className="input-group">
+                  <Lock size={14} />
+                  <input
+                    type="password"
+                    value={resetPassword}
+                    onChange={(e) => setResetPassword(e.target.value)}
+                    placeholder="Min 8 characters"
+                    minLength={8}
+                    required
+                  />
+                </div>
               </div>
-              <div className="inline-form" style={{ marginTop: "0.75rem" }}>
+              <div className="row-actions" style={{ marginTop: "0.75rem" }}>
                 <button type="submit" disabled={resetting}>
-                  {resetting ? "Resetting…" : "Reset Password"}
+                  <Key size={13} /> {resetting ? "Resetting…" : "Reset Password"}
                 </button>
-                <button type="button" className="btn-secondary" onClick={() => { setResetTarget(null); setResetPassword(""); }}>
+                <button
+                  type="button"
+                  className="btn--ghost btn--sm"
+                  onClick={closeModal}
+                >
                   Cancel
                 </button>
               </div>
@@ -159,12 +193,12 @@ export function UserManagementPage({ user }) {
       ) : null}
 
       {/* User list */}
-      <div className="card">
-        <h3>Panel Users</h3>
+      <SectionCard title="Panel Users" icon={Users}>
         <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
+                <th style={{ width: "2rem" }}></th>
                 <th>Username</th>
                 <th>Role</th>
                 <th>Actions</th>
@@ -172,22 +206,32 @@ export function UserManagementPage({ user }) {
             </thead>
             <tbody>
               {users.length === 0 ? (
-                <tr><td colSpan={3} style={{ textAlign: "center", color: "var(--muted)" }}>No users found</td></tr>
+                <tr>
+                  <td colSpan={4} style={{ textAlign: "center", color: "var(--muted)" }}>
+                    No users found
+                  </td>
+                </tr>
               ) : null}
               {users.map((u) => (
                 <tr key={u.username}>
                   <td>
+                    <div className="avatar">{u.username[0].toUpperCase()}</div>
+                  </td>
+                  <td>
                     {u.username}
-                    {u.username === user.username ? <span className="badge" style={{ marginLeft: "0.5rem" }}>you</span> : null}
+                    {u.username === user.username ? (
+                      <span className="badge badge--accent" style={{ marginLeft: "0.5rem" }}>you</span>
+                    ) : null}
                   </td>
                   <td>
                     {u.username === user.username ? (
-                      <span className={`badge ${u.role === "admin" ? "badge-admin" : ""}`}>{u.role}</span>
+                      <span className={`badge ${u.role === "admin" ? "badge--admin" : ""}`}>
+                        {u.role}
+                      </span>
                     ) : (
                       <select
                         value={u.role}
                         onChange={(e) => handleRoleChange(u.username, e.target.value)}
-                        className="role-select"
                       >
                         <option value="admin">admin</option>
                         <option value="user">user</option>
@@ -195,17 +239,40 @@ export function UserManagementPage({ user }) {
                     )}
                   </td>
                   <td>
-                    <div className="inline-form">
+                    <div className="row-actions">
                       <button
-                        className="btn-secondary"
-                        onClick={() => { setResetTarget(u.username); setResetPassword(""); }}
+                        className="btn--icon"
+                        onClick={() => openModal(u)}
+                        title="Reset Password"
                       >
-                        Reset PW
+                        <Key size={13} />
                       </button>
                       {u.username !== user.username ? (
-                        <button className="btn-danger" onClick={() => handleDelete(u.username)}>
-                          Delete
-                        </button>
+                        deleteConfirm === u.username ? (
+                          <span className="inline-confirm">
+                            Delete?{" "}
+                            <button
+                              className="btn--sm btn--danger"
+                              onClick={() => handleDelete(u.username)}
+                            >
+                              Yes
+                            </button>
+                            <button
+                              className="btn--sm btn--ghost"
+                              onClick={() => setDeleteConfirm(null)}
+                            >
+                              No
+                            </button>
+                          </span>
+                        ) : (
+                          <button
+                            className="btn--icon btn--danger-icon"
+                            onClick={() => setDeleteConfirm(u.username)}
+                            title="Delete user"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )
                       ) : null}
                     </div>
                   </td>
@@ -214,75 +281,93 @@ export function UserManagementPage({ user }) {
             </tbody>
           </table>
         </div>
-      </div>
+      </SectionCard>
 
       {/* Create User */}
-      <div className="card form-card">
-        <h3>Create New User</h3>
+      <SectionCard title="Create New User" icon={UserPlus}>
         <form onSubmit={handleCreate}>
-          <div className="form-row">
-            <label>Username</label>
-            <input
-              value={newUsername}
-              onChange={(e) => setNewUsername(e.target.value)}
-              placeholder="Letters, digits, _ and -"
-              pattern="[a-zA-Z0-9_-]+"
-              required
-            />
+          <div className="form-grid">
+            <div className="form-row">
+              <label>Username</label>
+              <input
+                value={newUsername}
+                onChange={(e) => setNewUsername(e.target.value)}
+                placeholder="Letters, digits, _ and -"
+                pattern="[a-zA-Z0-9_-]+"
+                required
+              />
+            </div>
+            <div className="form-row">
+              <label>Password</label>
+              <div className="input-group">
+                <Lock size={14} />
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="Min 8 characters"
+                  minLength={8}
+                  required
+                />
+              </div>
+            </div>
+            <div className="form-row">
+              <label>Role</label>
+              <div className="input-group">
+                <Shield size={14} />
+                <select value={newRole} onChange={(e) => setNewRole(e.target.value)}>
+                  <option value="user">user</option>
+                  <option value="admin">admin</option>
+                </select>
+              </div>
+            </div>
           </div>
-          <div className="form-row">
-            <label>Password</label>
-            <input
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="Min 8 characters"
-              minLength={8}
-              required
-            />
+          <div className="row-actions" style={{ marginTop: "0.75rem" }}>
+            <button type="submit" disabled={creating}>
+              <UserPlus size={13} /> {creating ? "Creating…" : "Create"}
+            </button>
           </div>
-          <div className="form-row">
-            <label>Role</label>
-            <select value={newRole} onChange={(e) => setNewRole(e.target.value)}>
-              <option value="user">user</option>
-              <option value="admin">admin</option>
-            </select>
-          </div>
-          <button type="submit" disabled={creating} style={{ marginTop: "0.5rem" }}>
-            {creating ? "Creating…" : "Create User"}
-          </button>
         </form>
-      </div>
+      </SectionCard>
 
       {/* Change own password */}
-      <div className="card form-card">
-        <h3>Change Your Password</h3>
+      <SectionCard title="Change Your Password" icon={Lock}>
         <form onSubmit={handleChangeSelfPassword}>
-          <div className="form-row">
-            <label>Current Password</label>
-            <input
-              type="password"
-              value={selfCurrentPw}
-              onChange={(e) => setSelfCurrentPw(e.target.value)}
-              required
-            />
+          <div className="form-grid">
+            <div className="form-row">
+              <label>Current Password</label>
+              <div className="input-group">
+                <Lock size={14} />
+                <input
+                  type="password"
+                  value={selfCurrentPw}
+                  onChange={(e) => setSelfCurrentPw(e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+            <div className="form-row">
+              <label>New Password</label>
+              <div className="input-group">
+                <Lock size={14} />
+                <input
+                  type="password"
+                  value={selfNewPw}
+                  onChange={(e) => setSelfNewPw(e.target.value)}
+                  placeholder="Min 8 characters"
+                  minLength={8}
+                  required
+                />
+              </div>
+            </div>
           </div>
-          <div className="form-row">
-            <label>New Password</label>
-            <input
-              type="password"
-              value={selfNewPw}
-              onChange={(e) => setSelfNewPw(e.target.value)}
-              placeholder="Min 8 characters"
-              minLength={8}
-              required
-            />
+          <div className="row-actions" style={{ marginTop: "0.75rem" }}>
+            <button type="submit" disabled={changingOwnPw}>
+              <Save size={13} /> {changingOwnPw ? "Saving…" : "Save"}
+            </button>
           </div>
-          <button type="submit" disabled={changingOwnPw} style={{ marginTop: "0.5rem" }}>
-            {changingOwnPw ? "Saving…" : "Change Password"}
-          </button>
         </form>
-      </div>
+      </SectionCard>
     </div>
   );
 }
