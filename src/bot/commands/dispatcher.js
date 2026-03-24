@@ -2,7 +2,7 @@ const { EmbedBuilder } = require("discord.js");
 
 // Direct imports – no pass-through from index.js
 const { handleHolidayCommand } = require("../../features/holidays");
-const { handleSampLifeCommand } = require("../../features/samp-life");
+const { handleSampLifeCommand, handleSampLifeAutocomplete } = require("../../features/samp-life");
 const { getUserAnalytics, getFunFact, exportStatsToCSV } = require("../../features/analytics");
 const { getStreak } = require("../../features/streaks");
 const { getUserWeeklyStats, getWeeklyTopUsers } = require("../../features/weekly-stats");
@@ -12,7 +12,8 @@ const { getWantedLevel, formatWantedDisplay } = require("../../features/wanted-s
 const { handleTriviaCommand } = require("../../features/trivia");
 const { handleLevelCommand } = require("../../features/levels");
 const { handleAwardsCommand } = require("../../features/weekly-awards");
-const { handleRadioVote, handleRadioTop } = require("../../features/radio-vote");
+const { handleRadioVote, handleRadioTop, handleRadioInfo, handleRadioFans } = require("../../features/radio-vote");
+const { getUserBadges, getBadgeDefinitions } = require("../../features/badges");
 const { SAMPStatusTracker } = require("../../features/samp-status");
 const { getLeaderboard } = require("../../features/leaderboard-cache");
 
@@ -32,6 +33,18 @@ function registerCommandHandlers(ctx) {
   } = ctx;
 
   client.on("interactionCreate", async (interaction) => {
+    // Handle autocomplete for SAMP Life commands
+    if (interaction.isAutocomplete()) {
+      if (["buy", "weapon", "sellcar"].includes(interaction.commandName)) {
+        try {
+          await handleSampLifeAutocomplete(interaction);
+        } catch (e) {
+          console.error("[samp-life] autocomplete error", e);
+        }
+      }
+      return;
+    }
+
     if (!interaction.isChatInputCommand()) return;
 
     const { commandName } = interaction;
@@ -72,8 +85,9 @@ function registerCommandHandlers(ctx) {
     if (
       [
         "reg", "balance", "work", "truck", "rob",
-        "dealership", "buy", "race", "duel",
+        "dealership", "weaponshop", "buy", "race", "duel",
         "sellcar", "buycar", "weapon",
+        "bail", "richest", "daily",
       ].includes(commandName)
     ) {
       await handleSampLifeCommand({ interaction, db });
@@ -918,7 +932,7 @@ function registerCommandHandlers(ctx) {
 
       // --- D-track: Trivia commands ---
     } else if (commandName === "trivia" || commandName === "trivia-top" || commandName === "trivia-stats") {
-      await handleTriviaCommand(interaction, db);
+      await handleTriviaCommand({ interaction, db });
 
       // --- D-track: Level commands ---
     } else if (commandName === "level" || commandName === "levels-top") {
@@ -933,6 +947,59 @@ function registerCommandHandlers(ctx) {
       await handleRadioVote(interaction, db);
     } else if (commandName === "radio-top") {
       await handleRadioTop(interaction, db);
+    } else if (commandName === "radio-info") {
+      await handleRadioInfo(interaction, db);
+    } else if (commandName === "radio-fans") {
+      await handleRadioFans(interaction, db);
+
+      // --- Badges / achievements command ---
+    } else if (commandName === "badges") {
+      const targetUser = interaction.options.getUser("user") || interaction.user;
+
+      const badges = await getUserBadges(db, interaction.guild.id, targetUser.id);
+      const allDefs = await getBadgeDefinitions(db, interaction.guild.id, { includeDisabled: false });
+
+      if (!allDefs || allDefs.length === 0) {
+        await interaction.reply({ content: "Значки ещё не настроены на этом сервере.", ephemeral: true });
+        return;
+      }
+
+      const earnedSet = new Set(badges.map((b) => b.badge_id));
+
+      // Group by type
+      const groups = {
+        messages: { label: "💬 Сообщения", items: [] },
+        streak: { label: "🔥 Стрики", items: [] },
+        reactions_given: { label: "👍 Реакции (отправлено)", items: [] },
+        reactions_received: { label: "❤️ Реакции (получено)", items: [] },
+      };
+
+      for (const def of allDefs) {
+        const earned = earnedSet.has(def.id);
+        const icon = earned ? def.emoji : "⬜";
+        const line = `${icon} **${def.name}** — ${def.description}${earned ? " ✅" : ""}`;
+        if (groups[def.type]) {
+          groups[def.type].items.push(line);
+        }
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle(`🏅 Значки — ${targetUser.tag}`)
+        .setDescription(`Получено: **${badges.length}** из **${allDefs.length}**`)
+        .setColor(0xf59e0b)
+        .setTimestamp();
+
+      for (const [, group] of Object.entries(groups)) {
+        if (group.items.length > 0) {
+          embed.addFields({
+            name: group.label,
+            value: group.items.join("\n"),
+            inline: false,
+          });
+        }
+      }
+
+      await interaction.reply({ embeds: [embed] });
     }
   });
 }

@@ -140,6 +140,21 @@ function buildCommandsJson() {
     ...getLevelsCommandBuilders(),
     ...getWeeklyAwardsCommandBuilders(),
     ...getRadioCommandBuilders(),
+
+    // Badges / achievements
+    new SlashCommandBuilder()
+      .setName("badges")
+      .setDescription("Показать заработанные значки (свои или другого пользователя)")
+      .addUserOption((o) => o.setName("user").setDescription("Пользователь (необязательно)").setRequired(false)),
+
+    // SAMP Life: richest leaderboard
+    new SlashCommandBuilder().setName("richest").setDescription("SAMP Life: рейтинг самых богатых игроков"),
+
+    // SAMP Life: bail out of jail
+    new SlashCommandBuilder().setName("bail").setDescription("SAMP Life: откупиться от тюрьмы (стоимость зависит от оставшегося времени)"),
+
+    // SAMP Life: daily login bonus
+    new SlashCommandBuilder().setName("daily").setDescription("SAMP Life: ежедневный бонус (зависит от стрика)"),
   ].map((cmd) => cmd.toJSON());
 }
 

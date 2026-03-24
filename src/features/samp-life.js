@@ -10,16 +10,125 @@ const START_MONEY = 500;
 const DEFAULT_CAR_ID = "bicycle";
 
 const CARS = {
+  // --- Бесплатный старт ---
   bicycle: { name: "Велосипед", price: 0, speed: 5 },
+
+  // --- Эконом ($5k–$25k) ---
+  perennial: { name: "Perennial", price: 5_000, speed: 35 },
+  glendale: { name: "Glendale", price: 6_000, speed: 40 },
+  manana: { name: "Manana", price: 7_000, speed: 42 },
+  tampa: { name: "Tampa", price: 8_000, speed: 45 },
+  greenwood: { name: "Greenwood", price: 9_000, speed: 46 },
+  willard: { name: "Willard", price: 10_000, speed: 48 },
+  previon: { name: "Previon", price: 11_000, speed: 50 },
+  bravura: { name: "Bravura", price: 12_000, speed: 50 },
+  esperanto: { name: "Esperanto", price: 13_000, speed: 52 },
+  majestic: { name: "Majestic", price: 14_000, speed: 53 },
+  buccaneer: { name: "Buccaneer", price: 15_000, speed: 55 },
+  clover: { name: "Clover", price: 16_000, speed: 56 },
+  sabre: { name: "Sabre", price: 18_000, speed: 58 },
+  virgo: { name: "Virgo", price: 19_000, speed: 55 },
+  picador: { name: "Picador", price: 20_000, speed: 54 },
+  broadway: { name: "Broadway", price: 22_000, speed: 52 },
+  remington: { name: "Remington", price: 23_000, speed: 57 },
+  blade: { name: "Blade", price: 25_000, speed: 60 },
+
+  // --- Средний ($30k–$75k) ---
+  premier: { name: "Premier", price: 30_000, speed: 62 },
+  sentinel: { name: "Sentinel", price: 32_000, speed: 63 },
+  nebula: { name: "Nebula", price: 33_000, speed: 60 },
+  cadrona: { name: "Cadrona", price: 35_000, speed: 61 },
+  washington: { name: "Washington", price: 38_000, speed: 62 },
+  intruder: { name: "Intruder", price: 40_000, speed: 64 },
+  merit: { name: "Merit", price: 42_000, speed: 65 },
+  elegant: { name: "Elegant", price: 45_000, speed: 68 },
   sultan: { name: "Sultan RS", price: 50_000, speed: 80 },
+  flash: { name: "Flash", price: 52_000, speed: 78 },
+  stratum: { name: "Stratum", price: 55_000, speed: 75 },
+  jester: { name: "Jester", price: 60_000, speed: 82 },
+  uranus: { name: "Uranus", price: 62_000, speed: 80 },
+  zr350: { name: "ZR-350", price: 68_000, speed: 85 },
+  alpha: { name: "Alpha", price: 70_000, speed: 84 },
+  euros: { name: "Euros", price: 75_000, speed: 86 },
+
+  // --- Спорт ($80k–$200k) ---
   elegy: { name: "Elegy", price: 100_000, speed: 95 },
+  sultan_klass: { name: "Sultan (Klass)", price: 110_000, speed: 92 },
+  comet: { name: "Comet", price: 120_000, speed: 100 },
+  buffalo: { name: "Buffalo", price: 130_000, speed: 98 },
+  phoenix: { name: "Phoenix", price: 140_000, speed: 96 },
+  banshee: { name: "Banshee", price: 160_000, speed: 105 },
+  hotknife: { name: "Hotknife", price: 180_000, speed: 102 },
+  super_gt: { name: "Super GT", price: 190_000, speed: 108 },
+  cheetah: { name: "Cheetah", price: 200_000, speed: 110 },
+
+  // --- Суперкары ($250k–$600k) ---
+  turismo: { name: "Turismo", price: 250_000, speed: 112 },
+  bullet: { name: "Bullet", price: 300_000, speed: 115 },
+  hotring: { name: "Hotring Racer", price: 350_000, speed: 118 },
   infernus: { name: "Infernus", price: 500_000, speed: 120 },
+
+  // --- Люкс / Особые ($600k–$2M) ---
+  stretch: { name: "Stretch (Лимузин)", price: 600_000, speed: 65 },
+  stafford: { name: "Stafford", price: 650_000, speed: 68 },
+  huntley: { name: "Huntley", price: 700_000, speed: 72 },
+  nrg500: { name: "NRG-500", price: 800_000, speed: 125 },
+  fcr900: { name: "FCR-900", price: 400_000, speed: 110 },
+  pcj600: { name: "PCJ-600", price: 200_000, speed: 100 },
+  sanchez: { name: "Sanchez", price: 80_000, speed: 85 },
+
+  // --- Внедорожники / Грузовики ---
+  rancher: { name: "Rancher", price: 45_000, speed: 55 },
+  landstalker: { name: "Landstalker", price: 55_000, speed: 58 },
+  bobcat: { name: "Bobcat", price: 28_000, speed: 52 },
+  sadler: { name: "Sadler", price: 30_000, speed: 50 },
+  yosemite: { name: "Yosemite", price: 35_000, speed: 53 },
+  mesa: { name: "Mesa", price: 42_000, speed: 58 },
+  bf_injection: { name: "BF Injection", price: 38_000, speed: 55 },
+  bandito: { name: "Bandito", price: 85_000, speed: 78 },
+  monster: { name: "Monster Truck", price: 1_000_000, speed: 60 },
 };
 
 const ITEMS = {
-  pistol: { name: "Пистолет", price: 15_000, dmg: [10, 18] },
-  shotgun: { name: "Дробовик", price: 70_000, dmg: [18, 30] },
-  ak47: { name: "AK-47", price: 160_000, dmg: [22, 36] },
+  // --- Холодное оружие ---
+  knife: { name: "Нож", price: 2_000, dmg: [8, 14] },
+  bat: { name: "Бита", price: 3_000, dmg: [10, 16] },
+  shovel: { name: "Лопата", price: 2_500, dmg: [9, 15] },
+  katana: { name: "Катана", price: 8_000, dmg: [14, 22] },
+  chainsaw: { name: "Бензопила", price: 15_000, dmg: [18, 28] },
+
+  // --- Пистолеты ---
+  pistol: { name: "Colt 45", price: 15_000, dmg: [10, 18] },
+  silenced: { name: "Silenced Pistol", price: 22_000, dmg: [12, 20] },
+  deagle: { name: "Desert Eagle", price: 50_000, dmg: [24, 36] },
+
+  // --- Дробовики ---
+  shotgun: { name: "Дробовик", price: 35_000, dmg: [18, 30] },
+  sawnoff: { name: "Обрез", price: 55_000, dmg: [22, 34] },
+  combat_shotgun: { name: "SPAS-12", price: 90_000, dmg: [26, 38] },
+
+  // --- Пистолеты-пулемёты ---
+  tec9: { name: "Tec-9", price: 25_000, dmg: [12, 20] },
+  micro_smg: { name: "Micro SMG (Uzi)", price: 30_000, dmg: [14, 22] },
+  smg: { name: "SMG (MP5)", price: 65_000, dmg: [18, 28] },
+
+  // --- Автоматы ---
+  ak47: { name: "AK-47", price: 120_000, dmg: [22, 36] },
+  m4: { name: "M4", price: 150_000, dmg: [24, 38] },
+
+  // --- Винтовки ---
+  rifle: { name: "Country Rifle", price: 70_000, dmg: [30, 42] },
+  sniper: { name: "Sniper Rifle", price: 200_000, dmg: [40, 55] },
+
+  // --- Тяжёлое вооружение ---
+  rpg: { name: "RPG", price: 500_000, dmg: [50, 70] },
+  heatseeker: { name: "Heat-Seeking RPG", price: 650_000, dmg: [55, 75] },
+  minigun: { name: "Minigun", price: 1_000_000, dmg: [35, 50] },
+  flamethrower: { name: "Огнемёт", price: 400_000, dmg: [28, 45] },
+
+  // --- Взрывчатка ---
+  grenade: { name: "Граната", price: 10_000, dmg: [30, 50] },
+  molotov: { name: "Коктейль Молотова", price: 5_000, dmg: [20, 35] },
 };
 
 const COOLDOWNS_MS = {
@@ -332,7 +441,7 @@ function getSampLifeCommandBuilders() {
             { name: "Оружие", value: "weapon" }
           )
       )
-      .addStringOption((o) => o.setName("id").setDescription("ID (например sultan / shotgun)").setRequired(true)),
+      .addStringOption((o) => o.setName("id").setDescription("ID (начни вводить для поиска)").setRequired(true).setAutocomplete(true)),
 
     new SlashCommandBuilder()
       .setName("race")
@@ -355,6 +464,7 @@ function getSampLifeCommandBuilders() {
           .setName("car")
           .setDescription("ID тачки")
           .setRequired(true)
+          .setAutocomplete(true)
       )
       .addIntegerOption((o) => o.setName("price").setDescription("Цена").setRequired(true).setMinValue(1)),
 
@@ -366,7 +476,9 @@ function getSampLifeCommandBuilders() {
     new SlashCommandBuilder()
       .setName("weapon")
       .setDescription("SAMP Life: выбрать активное оружие")
-      .addStringOption((o) => o.setName("id").setDescription("ID оружия").setRequired(true)),
+      .addStringOption((o) => o.setName("id").setDescription("ID оружия").setRequired(true).setAutocomplete(true)),
+
+    new SlashCommandBuilder().setName("weaponshop").setDescription("SAMP Life: магазин оружия Ammu-Nation (цены/урон)"),
   ];
 }
 
@@ -494,21 +606,59 @@ async function handleRob(interaction, db) {
 }
 
 async function handleDealership(interaction) {
-  const embed = new EmbedBuilder()
+  const entries = Object.entries(CARS);
+  const embeds = [];
+  let current = new EmbedBuilder()
     .setTitle("🚗 Автосалон Otto's Autos")
     .setDescription("Тачки, которые поднимут твой статус в SA")
     .setTimestamp(new Date());
+  let fieldCount = 0;
 
-  for (const [id, car] of Object.entries(CARS)) {
-    embed.addFields({
+  for (const [id, car] of entries) {
+    if (fieldCount >= 25) {
+      embeds.push(current);
+      current = new EmbedBuilder().setTimestamp(new Date());
+      fieldCount = 0;
+    }
+    current.addFields({
       name: `${car.name}  (${id})`,
-      value: `Цена: **${fmtMoney(car.price)}**\nСкорость: **${car.speed}**`,
-      inline: false,
+      value: `Цена: **${fmtMoney(car.price)}** | Скорость: **${car.speed}**`,
+      inline: true,
     });
+    fieldCount++;
   }
 
-  embed.setFooter({ text: "Покупка: /buy type:car id:<carId>" });
-  await interaction.reply({ embeds: [embed] });
+  current.setFooter({ text: "Покупка: /buy type:car id:<carId>" });
+  embeds.push(current);
+  await interaction.reply({ embeds: embeds.slice(0, 10) });
+}
+
+async function handleWeaponShop(interaction) {
+  const entries = Object.entries(ITEMS);
+  const embeds = [];
+  let current = new EmbedBuilder()
+    .setTitle("🔫 Ammu-Nation")
+    .setDescription("Пушки и клинки для настоящих OG")
+    .setTimestamp(new Date());
+  let fieldCount = 0;
+
+  for (const [id, item] of entries) {
+    if (fieldCount >= 25) {
+      embeds.push(current);
+      current = new EmbedBuilder().setTimestamp(new Date());
+      fieldCount = 0;
+    }
+    current.addFields({
+      name: `${item.name}  (${id})`,
+      value: `Цена: **${fmtMoney(item.price)}** | Урон: **${item.dmg[0]}–${item.dmg[1]}**`,
+      inline: true,
+    });
+    fieldCount++;
+  }
+
+  current.setFooter({ text: "Покупка: /buy type:weapon id:<weaponId>" });
+  embeds.push(current);
+  await interaction.reply({ embeds: embeds.slice(0, 10) });
 }
 
 async function handleBuy(interaction, db) {
@@ -545,7 +695,7 @@ async function handleBuy(interaction, db) {
   if (type === "weapon") {
     const weapon = ITEMS[id];
     if (!weapon) {
-      await interaction.reply({ content: "Такого оружия нет. Доступно: pistol, shotgun, ak47", ephemeral: true });
+      await interaction.reply({ content: "Такого оружия нет. Смотри /weaponshop для списка.", ephemeral: true });
       return;
     }
 
@@ -573,7 +723,7 @@ async function handleWeapon(interaction, db) {
   const weaponId = String(interaction.options.getString("id", true)).toLowerCase();
   const weapon = ITEMS[weaponId];
   if (!weapon) {
-    await interaction.reply({ content: "Такого оружия нет. Доступно: pistol, shotgun, ak47", ephemeral: true });
+    await interaction.reply({ content: "Такого оружия нет. Смотри /weaponshop для списка.", ephemeral: true });
     return;
   }
 
@@ -858,22 +1008,142 @@ async function handleBuyCar(interaction, db) {
   await interaction.reply(`✅ Покупка успешна. Ты получил **${car.name}** за **${fmtMoney(offer.price)}**.`);
 }
 
+async function handleBail(interaction, db) {
+  const userId = interaction.user.id;
+  const user = await getOrCreateUser(db, userId);
+
+  const until = Number(user.jail_until || 0);
+  if (until <= nowMs()) {
+    await interaction.reply({ content: "✅ Ты и так на свободе, братан.", ephemeral: true });
+    return;
+  }
+
+  const remainingMs = until - nowMs();
+  // Bail cost: $1,000 per minute remaining (min $500, max $10,000)
+  const bailCost = Math.min(10_000, Math.max(500, Math.ceil(remainingMs / 60_000) * 1000));
+
+  if (user.money < bailCost) {
+    await interaction.reply({
+      content: `💸 Залог стоит **${fmtMoney(bailCost)}**, а у тебя **${fmtMoney(user.money)}**. Сиди.`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await withTransaction(db, async () => {
+    await adjustMoney(db, userId, -bailCost);
+    await dbRun(db, `UPDATE samp_users SET jail_until = 0 WHERE user_id = ?`, [String(userId)]);
+    await addLedger(db, "bail", userId, null, bailCost, { remaining_ms: remainingMs });
+  });
+
+  const after = await getUserRow(db, userId);
+  await interaction.reply(
+    `🔓 Ты откупился от тюрьмы за **${fmtMoney(bailCost)}**! Добро пожаловать на волю.\n` +
+      `Баланс: **${fmtMoney(after.money)}**`
+  );
+}
+
+async function handleRichest(interaction, db) {
+  const rows = await dbAll(
+    db,
+    `SELECT user_id, money FROM samp_users WHERE money > 0 ORDER BY money DESC LIMIT 10`,
+    []
+  );
+
+  if (!rows || rows.length === 0) {
+    await interaction.reply({ content: "Пока никто не зарегистрировался в SAMP Life.", ephemeral: true });
+    return;
+  }
+
+  const lines = [];
+  const medals = ["🥇", "🥈", "🥉"];
+  for (let i = 0; i < rows.length; i++) {
+    const prefix = medals[i] || `\`${i + 1}.\``;
+    lines.push(`${prefix} <@${rows[i].user_id}> — **${fmtMoney(rows[i].money)}**`);
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle("💰 Самые богатые игроки San Andreas")
+    .setDescription(lines.join("\n"))
+    .setColor(0xf1c40f)
+    .setTimestamp();
+
+  await interaction.reply({ embeds: [embed] });
+}
+
+// Daily bonus amounts by streak tier
+const DAILY_BONUS_TIERS = [
+  { minStreak: 30, bonus: 50_000, label: "30+ дней" },
+  { minStreak: 14, bonus: 15_000, label: "14+ дней" },
+  { minStreak: 7, bonus: 5_000, label: "7+ дней" },
+  { minStreak: 3, bonus: 2_000, label: "3+ дня" },
+  { minStreak: 1, bonus: 1_000, label: "1+ день" },
+];
+
+async function handleDaily(interaction, db) {
+  const userId = interaction.user.id;
+  const guildId = interaction.guild?.id;
+
+  const user = await getOrCreateUser(db, userId);
+  if (!(await ensureNotJailed(interaction, user))) return;
+
+  // Check daily cooldown (24h)
+  const cd = await getCooldown(db, userId, "daily");
+  if (cd > nowMs()) {
+    await interaction.reply({ content: `⏳ Ежедневный бонус уже получен. Следующий через **${msToHuman(cd - nowMs())}**.`, ephemeral: true });
+    return;
+  }
+
+  // Get streak from user_streaks table (if guild context available)
+  let currentStreak = 0;
+  if (guildId) {
+    const streakRow = await dbGet(
+      db,
+      `SELECT current_streak FROM user_streaks WHERE guild_id = ? AND user_id = ?`,
+      [guildId, userId]
+    );
+    if (streakRow) currentStreak = streakRow.current_streak || 0;
+  }
+
+  // Find bonus tier
+  const tier = DAILY_BONUS_TIERS.find((t) => currentStreak >= t.minStreak) || { bonus: 500, label: "новичок" };
+
+  await withTransaction(db, async () => {
+    await adjustMoney(db, userId, tier.bonus);
+    await setCooldown(db, userId, "daily", nowMs() + 24 * 60 * 60_000);
+    await addLedger(db, "daily_bonus", null, userId, tier.bonus, { streak: currentStreak, tier: tier.label });
+  });
+
+  const after = await getUserRow(db, userId);
+  const streakInfo = currentStreak > 0 ? `\n🔥 Стрик: **${currentStreak}** дней (бонус: ${tier.label})` : "";
+
+  await interaction.reply(
+    `🎁 Ежедневный бонус: **+${fmtMoney(tier.bonus)}**!${streakInfo}\n` +
+      `Баланс: **${fmtMoney(after.money)}**\n` +
+      `_Чем дольше стрик — тем больше бонус!_`
+  );
+}
+
 async function handleSampLifeCommand({ interaction, db }) {
   const name = interaction.commandName;
 
   try {
-    if (name === "reg") return handleReg(interaction, db);
-    if (name === "balance") return handleBalance(interaction, db);
-    if (name === "work") return handleWork(interaction, db);
-    if (name === "truck") return handleTruck(interaction, db);
-    if (name === "rob") return handleRob(interaction, db);
-    if (name === "dealership") return handleDealership(interaction);
-    if (name === "buy") return handleBuy(interaction, db);
-    if (name === "race") return handleRace(interaction, db);
-    if (name === "duel") return handleDuel(interaction, db);
-    if (name === "sellcar") return handleSellCar(interaction, db);
-    if (name === "buycar") return handleBuyCar(interaction, db);
-    if (name === "weapon") return handleWeapon(interaction, db);
+    if (name === "reg") return await handleReg(interaction, db);
+    if (name === "balance") return await handleBalance(interaction, db);
+    if (name === "work") return await handleWork(interaction, db);
+    if (name === "truck") return await handleTruck(interaction, db);
+    if (name === "rob") return await handleRob(interaction, db);
+    if (name === "dealership") return await handleDealership(interaction);
+    if (name === "weaponshop") return await handleWeaponShop(interaction);
+    if (name === "buy") return await handleBuy(interaction, db);
+    if (name === "race") return await handleRace(interaction, db);
+    if (name === "duel") return await handleDuel(interaction, db);
+    if (name === "sellcar") return await handleSellCar(interaction, db);
+    if (name === "buycar") return await handleBuyCar(interaction, db);
+    if (name === "weapon") return await handleWeapon(interaction, db);
+    if (name === "bail") return await handleBail(interaction, db);
+    if (name === "richest") return await handleRichest(interaction, db);
+    if (name === "daily") return await handleDaily(interaction, db);
 
     await interaction.reply({ content: "Неизвестная команда SAMP Life.", ephemeral: true });
   } catch (e) {
@@ -891,10 +1161,68 @@ async function handleSampLifeCommand({ interaction, db }) {
   }
 }
 
+async function handleSampLifeAutocomplete(interaction) {
+  const commandName = interaction.commandName;
+  const focused = interaction.options.getFocused(true);
+  const query = String(focused.value || "").toLowerCase();
+
+  let choices = [];
+
+  if (commandName === "buy") {
+    const type = interaction.options.getString("type");
+    if (focused.name === "id") {
+      if (type === "car") {
+        choices = Object.entries(CARS).map(([id, c]) => ({
+          name: `${c.name} — ${fmtMoney(c.price)} (скор.: ${c.speed})`,
+          value: id,
+        }));
+      } else if (type === "weapon") {
+        choices = Object.entries(ITEMS).map(([id, w]) => ({
+          name: `${w.name} — ${fmtMoney(w.price)} (урон: ${w.dmg[0]}–${w.dmg[1]})`,
+          value: id,
+        }));
+      } else {
+        // type not yet selected — show both
+        choices = [
+          ...Object.entries(CARS).map(([id, c]) => ({
+            name: `🚗 ${c.name} — ${fmtMoney(c.price)}`,
+            value: id,
+          })),
+          ...Object.entries(ITEMS).map(([id, w]) => ({
+            name: `🔫 ${w.name} — ${fmtMoney(w.price)}`,
+            value: id,
+          })),
+        ];
+      }
+    }
+  } else if (commandName === "weapon") {
+    choices = Object.entries(ITEMS).map(([id, w]) => ({
+      name: `${w.name} — урон: ${w.dmg[0]}–${w.dmg[1]}`,
+      value: id,
+    }));
+  } else if (commandName === "sellcar") {
+    choices = Object.entries(CARS)
+      .filter(([id]) => id !== "bicycle")
+      .map(([id, c]) => ({
+        name: `${c.name} (${id})`,
+        value: id,
+      }));
+  }
+
+  if (query) {
+    choices = choices.filter(
+      (c) => c.name.toLowerCase().includes(query) || c.value.includes(query)
+    );
+  }
+
+  await interaction.respond(choices.slice(0, 25));
+}
+
 module.exports = {
   ensureSampLifeTables,
   getSampLifeCommandBuilders,
   handleSampLifeCommand,
+  handleSampLifeAutocomplete,
   CARS,
   ITEMS,
 };

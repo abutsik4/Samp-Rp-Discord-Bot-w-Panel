@@ -13,6 +13,7 @@ const { reconcileAllGuilds, selfHealingReconcile } = require("../features/reconc
 const { cleanupOldMessageIndex } = require("../features/message-index-cleanup");
 const { syncMissingMessages, getWatermark, initializeWatermark } = require("../features/incremental-sync");
 const { SAMPStatusTracker } = require("../features/samp-status");
+const { postWeeklyAwards, rotateWeeklyRoles, grantWeeklyRewards, getWeekStart } = require("../features/weekly-awards");
 
 /**
  * Start all schedulers. Call once inside `client.once("ready")`.
@@ -246,6 +247,82 @@ async function startSchedulers(ctx) {
     minute: Number.parseInt(process.env.HOLIDAYS_POST_MINUTE || "0", 10),
     tzOffsetMinutes: Number.parseInt(process.env.HOLIDAYS_TZ_OFFSET_MINUTES || "180", 10),
   });
+
+  // ── Weekly awards auto-posting (Mondays at 10:00 AM server time) ──
+  const scheduleWeeklyAwards = () => {
+    const AWARDS_CHANNEL_ID = process.env.WEEKLY_AWARDS_CHANNEL_ID;
+    const AWARDS_TZ_OFFSET = Number.parseInt(process.env.HOLIDAYS_TZ_OFFSET_MINUTES || "180", 10);
+    const AWARDS_HOUR = 10; // 10:00 AM local time
+
+    if (!AWARDS_CHANNEL_ID) {
+      console.log("[WeeklyAwards] WEEKLY_AWARDS_CHANNEL_ID not set — auto-posting disabled");
+      return;
+    }
+
+    const getNextMonday10AM = () => {
+      const now = new Date();
+      const offsetMs = AWARDS_TZ_OFFSET * 60 * 1000;
+      const local = new Date(now.getTime() + offsetMs);
+      const day = local.getUTCDay(); // 0=Sun,1=Mon,...
+      let daysUntilMonday = (1 - day + 7) % 7;
+      if (daysUntilMonday === 0 && local.getUTCHours() >= AWARDS_HOUR) {
+        daysUntilMonday = 7; // already past 10 AM Monday — schedule next week
+      }
+      const next = new Date(local);
+      next.setUTCDate(next.getUTCDate() + daysUntilMonday);
+      next.setUTCHours(AWARDS_HOUR, 0, 0, 0);
+      // Convert back to UTC
+      return new Date(next.getTime() - offsetMs);
+    };
+
+    const scheduleNext = () => {
+      const nextMonday = getNextMonday10AM();
+      const ms = nextMonday.getTime() - Date.now();
+      console.log(`[WeeklyAwards] Next auto-post scheduled for ${nextMonday.toISOString()} (in ${Math.round(ms / 3600000)}h)`);
+
+      setTimeout(async () => {
+        try {
+          // Resolve channel first, then post only for its guild (not all guilds)
+          const channel = await client.channels.fetch(AWARDS_CHANNEL_ID).catch(() => null);
+          if (!channel || !channel.guildId) {
+            console.error("[WeeklyAwards] Could not resolve awards channel or channel has no guild");
+          } else {
+            const guild = client.guilds.cache.get(channel.guildId);
+            if (guild) {
+              const result = await postWeeklyAwards(db, client, guild.id, AWARDS_CHANNEL_ID);
+              if (result.posted) {
+                console.log(`[WeeklyAwards] Posted ${result.awards} awards for ${guild.name}`);
+                // Grant SAMP money + XP rewards to winners
+                if (result.awardsList && result.awardsList.length > 0) {
+                  const rewardResult = await grantWeeklyRewards(db, guild.id, result.awardsList);
+                  console.log(`[WeeklyAwards] Rewards granted: ${rewardResult.rewarded} winners`);
+                }
+                // Rotate weekly spotlight roles
+                const TOP_CHATTER_ROLE_ID = process.env.WEEKLY_TOP_CHATTER_ROLE_ID;
+                const NIGHT_OWL_ROLE_ID = process.env.WEEKLY_NIGHT_OWL_ROLE_ID;
+                if (TOP_CHATTER_ROLE_ID || NIGHT_OWL_ROLE_ID) {
+                  const rotateResult = await rotateWeeklyRoles(db, guild, {
+                    topChatterRoleId: TOP_CHATTER_ROLE_ID,
+                    nightOwlRoleId: NIGHT_OWL_ROLE_ID,
+                  });
+                  console.log(`[WeeklyAwards] Role rotation: ${JSON.stringify(rotateResult)}`);
+                }
+              } else {
+                console.log(`[WeeklyAwards] Skipped ${guild.name}: ${result.reason}`);
+              }
+            }
+          }
+        } catch (err) {
+          console.error("[WeeklyAwards] Auto-post failed:", err);
+        }
+        // Schedule next Monday
+        scheduleNext();
+      }, ms);
+    };
+
+    scheduleNext();
+  };
+  scheduleWeeklyAwards();
 
   // ── Countdown auto-posting (every minute) ───────────────────────
   console.log("[Bot] Starting countdown scheduler...");

@@ -92,14 +92,19 @@ These are the engineering decisions and challenges that characterise this projec
 - **Holiday Commands** — `/holiday today`, `/holiday date`, `/holiday list`
 
 ### 🎮 Game & Economy (SA-MP RP)
-- **SA-MP Life** — Roleplay economy (`/reg`, `/work`, `/rob`, `/car`, `/house`)
+- **SA-MP Life** — Roleplay economy (`/reg`, `/work`, `/truck`, `/rob`, `/balance`)
+- **Dealership & Arsenal** — Buy cars and weapons (`/dealership`, `/buy`, `/weapon`)
+- **PvP & Trading** — Races, duels, and car sales (`/race`, `/duel`, `/sellcar`)
+- **Daily Bonus** — Streak-based daily rewards up to $50K (`/daily`)
+- **Bail System** — Pay to leave jail early (`/bail`)
+- **Richest Players** — Top 10 wealthiest leaderboard (`/richest`)
 - **Levels & XP** — Experience system with rank tiers and role-based XP multipliers
-- **Badges** — 24 collectible achievement badges (message count, streaks, reactions)
+- **Badges** — 24 collectible achievement badges with `/badges` viewer
 - **Perk Rules** — Automatic Discord role grants on badge/level milestones
 - **Wanted Stars** — GTA-style wanted system with decay
 - **Trivia** — Interactive quiz game with streaks
 - **Radio Vote** — Song voting system
-- **Weekly Awards** — Automated leaderboard posts
+- **Weekly Awards** — Automated leaderboard posts with SAMP money & XP rewards
 - **SA-MP Server Status** — Live server monitoring
 
 ### ⚙️ Advanced Systems
@@ -381,12 +386,15 @@ node src/panel-only.js
 | `/weekly` | Weekly leaderboard (resets Monday) |
 | `/streak [@user]` | View message streak |
 | `/reactions [type]` | Reaction leaderboard (given/received) |
+| `/badges [@user]` | View earned and available badges |
 | `/mystrikes` | Your rate-limit violations & strikes |
 | `/level` | Your XP, level, and rank |
 | `/levels-top` | XP leaderboard |
 | `/trivia` | Start a trivia question |
+| `/trivia-top` | Trivia leaderboard |
+| `/trivia-stats [@user]` | Trivia statistics |
 | `/countdown` | Countdown to New Year |
-| `/history` | Your message history summary |
+| `/awards` | View weekly awards |
 
 ### Holiday Commands
 
@@ -403,29 +411,31 @@ node src/panel-only.js
 | Command | Description |
 |---------|-------------|
 | `/reg` | Register SA-MP Life profile |
-| `/work` | Earn money (cooldown-based) |
-| `/rob @user` | Attempt to rob another player |
-| `/car` | View/buy cars |
-| `/radio <song>` | Vote for a song |
-| `/radio-top` | Top voted songs |
-| `/awards` | View weekly awards |
-| `/sampstatus` | SA-MP server status |
+| `/balance` | View your profile (money, car, weapon, status) |
+| `/work` | Quick job (100–500$) |
+| `/truck` | Trucking run (2.5–6.5K$, risk of crash) |
+| `/rob` | Robbery attempt (2–10K$, risk of jail) |
+| `/daily` | Claim daily bonus (streak-based, up to $50K) |
+| `/bail` | Pay bail to leave jail early |
+| `/dealership` | Browse available cars and prices |
+| `/buy type:(car\|weapon) id:<id>` | Purchase a car or weapon |
+| `/weapon id:<id>` | Equip a weapon |
+| `/race @user bet:<amount>` | Street race for money |
+| `/duel @user bet:<amount>` | Armed duel for money |
+| `/sellcar user:@user car:<id> price:<$>` | Sell a car to another player |
+| `/buycar offer:<id>` | Accept a car purchase offer |
+| `/richest` | Top 10 wealthiest players |
 
-### Admin / Owner Commands
+### Radio Commands
 
-| Command | Description | Permission |
-|---------|-------------|------------|
-| `/backfill` | Load message history (`enhanced`, `resume` options) | Owner |
-| `/synccommands` | Re-register slash commands | Owner |
-| `/sync-missing` | Sync missing messages | Owner |
-| `/export` | Export stats to CSV | Owner |
-| `/whitelist` | Channel whitelist management | Admin |
-| `/automod` | Banned word management | Admin |
-| `/undo` | Undo last operation | Owner |
+| Command | Description |
+|---------|-------------|
+| `/radio station:<station>` | Vote for a radio station |
+| `/radio-top` | Radio station leaderboard |
+| `/radio-info station:<station>` | Station info: DJ, tracks, description |
+| `/radio-fans station:<station>` | Who listens to a station |
 
-Notes:
-- `/backfill enhanced:true` runs the improved backfill (thread support, progress reporting, batched DB writes, idempotent indexing).
-- `/backfill resume:true` resumes the enhanced backfill from `data/checkpoint_<GUILD_ID>.json`.
+
 
 ---
 
@@ -441,7 +451,7 @@ Notes:
 | **AI/ML** | Markov chains (order-2), keyword-based sentiment analysis |
 | **Frontend** | React 19, React Router 7, Vite 7, lucide-react (icons), recharts (charts), dark-only CSS custom property design system |
 | **Logging** | Custom structured logger, per-request trace IDs |
-| **Testing** | Node.js built-in test runner, 26 unit tests + integration suite |
+| **Testing** | Node.js built-in test runner, 33 unit tests + integration suite |
 
 ---
 

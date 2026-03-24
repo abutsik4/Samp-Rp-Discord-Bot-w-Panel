@@ -19,17 +19,25 @@ const AWARD_CATEGORIES = [
     title: "🏆 Самый активный",
     description: "Больше всех сообщений за неделю",
     emoji: "💬",
-    query: `SELECT user_id, COUNT(*) AS val FROM message_counts
-            WHERE date >= date('now', '-7 days') GROUP BY user_id ORDER BY val DESC LIMIT 1`,
+    queryFn: (guildId, weekStart) => ({
+      sql: `SELECT user_id, message_count AS val FROM weekly_stats
+            WHERE guild_id = ? AND week_start = ? AND message_count > 0
+            ORDER BY message_count DESC LIMIT 1`,
+      params: [guildId, weekStart],
+    }),
     format: (v) => `${v} сообщений`,
   },
   {
     id: "top_reactor",
     title: "❤️ Самый щедрый на реакции",
-    description: "Больше всех реакций за неделю",
+    description: "Больше всех реакций на сервере",
     emoji: "👍",
-    query: `SELECT user_id, SUM(reactions_given) AS val FROM daily_stats
-            WHERE date >= date('now', '-7 days') GROUP BY user_id ORDER BY val DESC LIMIT 1`,
+    queryFn: (guildId) => ({
+      sql: `SELECT user_id, reactions_given AS val FROM user_reactions
+            WHERE guild_id = ? AND reactions_given > 0
+            ORDER BY reactions_given DESC LIMIT 1`,
+      params: [guildId],
+    }),
     format: (v) => `${v} реакций`,
   },
   {
@@ -37,29 +45,39 @@ const AWARD_CATEGORIES = [
     title: "🔥 Серийный писатель",
     description: "Самая длинная серия активных дней",
     emoji: "🔥",
-    query: `SELECT user_id, current_streak AS val FROM streaks
-            WHERE guild_id IS NOT NULL ORDER BY current_streak DESC LIMIT 1`,
+    queryFn: (guildId) => ({
+      sql: `SELECT user_id, current_streak AS val FROM user_streaks
+            WHERE guild_id = ? AND current_streak > 0
+            ORDER BY current_streak DESC LIMIT 1`,
+      params: [guildId],
+    }),
     format: (v) => `${v} дней подряд`,
   },
   {
-    id: "night_owl",
-    title: "🦉 Сова недели",
-    description: "Больше всех сообщений с 00:00 до 06:00",
-    emoji: "🌙",
-    query: `SELECT user_id, COUNT(*) AS val FROM message_counts
-            WHERE date >= date('now', '-7 days') AND hour BETWEEN 0 AND 5
-            GROUP BY user_id ORDER BY val DESC LIMIT 1`,
-    format: (v) => `${v} ночных сообщений`,
+    id: "trivia_master",
+    title: "🧠 Мастер викторины",
+    description: "Больше всех правильных ответов за неделю",
+    emoji: "🧠",
+    queryFn: (guildId) => ({
+      sql: `SELECT user_id, total_points AS val FROM trivia_scores
+            WHERE guild_id = ? AND total_points > 0
+            ORDER BY total_points DESC LIMIT 1`,
+      params: [guildId],
+    }),
+    format: (v) => `${v} очков`,
   },
   {
-    id: "early_bird",
-    title: "🐦 Жаворонок недели",
-    description: "Больше всех сообщений с 06:00 до 10:00",
-    emoji: "☀️",
-    query: `SELECT user_id, COUNT(*) AS val FROM message_counts
-            WHERE date >= date('now', '-7 days') AND hour BETWEEN 6 AND 9
-            GROUP BY user_id ORDER BY val DESC LIMIT 1`,
-    format: (v) => `${v} утренних сообщений`,
+    id: "street_legend",
+    title: "💰 Уличная легенда",
+    description: "Самый богатый игрок в SAMP Life",
+    emoji: "💰",
+    queryFn: () => ({
+      sql: `SELECT user_id, money AS val FROM samp_users
+            WHERE money > 0
+            ORDER BY money DESC LIMIT 1`,
+      params: [],
+    }),
+    format: (v) => `${Number(v).toLocaleString("ru-RU")} $`,
   },
 ];
 
@@ -111,7 +129,8 @@ async function generateWeeklyAwards(db, guildId) {
 
   for (const cat of AWARD_CATEGORIES) {
     try {
-      const row = await dbGet(db, cat.query);
+      const { sql, params } = cat.queryFn(guildId, weekStart);
+      const row = await dbGet(db, sql, params);
       if (row && row.user_id && row.val > 0) {
         // Save to DB
         await dbRun(
@@ -157,9 +176,13 @@ function buildWeeklyAwardsEmbed(awards, weekStart) {
   }
 
   for (const award of awards) {
+    const reward = AWARD_REWARDS[award.category];
+    const rewardText = reward
+      ? `\n🎁 +${Number(reward.money).toLocaleString("ru-RU")} $ | +${reward.xp} XP`
+      : "";
     embed.addFields({
       name: `${award.title}`,
-      value: `<@${award.userId}> — ${award.formatted}`,
+      value: `<@${award.userId}> — ${award.formatted}${rewardText}`,
       inline: false,
     });
   }
@@ -194,8 +217,18 @@ async function postWeeklyAwards(db, client, guildId, channelId) {
       return { posted: false, reason: "Channel not found" };
     }
 
+    // If no awards were generated, insert a sentinel row so we don't post again
+    if (awards.length === 0) {
+      await dbRun(
+        db,
+        `INSERT INTO weekly_awards (guild_id, week_start, category, user_id, value)
+         VALUES (?, ?, '_no_data', '_none', 0)`,
+        [guildId, weekStart]
+      );
+    }
+
     await channel.send({ embeds: [embed] });
-    return { posted: true, awards: awards.length };
+    return { posted: true, awards: awards.length, awardsList: awards };
   } catch (err) {
     console.error("[AWARDS-004] Weekly post failed:", err);
     return { posted: false, reason: err.message };
@@ -251,7 +284,8 @@ async function handleAwardsCommand(interaction, db) {
       const awards = [];
       for (const cat of AWARD_CATEGORIES) {
         try {
-          const row = await dbGet(db, cat.query);
+          const { sql, params } = cat.queryFn(guildId, weekStart);
+          const row = await dbGet(db, sql, params);
           if (row && row.user_id && row.val > 0) {
             awards.push({
               category: cat.id,
@@ -297,6 +331,143 @@ async function handleAwardsCommand(interaction, db) {
   }
 }
 
+/**
+ * Rotate weekly spotlight roles: remove from previous holder, grant to new winner.
+ * Call after postWeeklyAwards() on Mondays.
+ *
+ * @param {object} db - Database instance
+ * @param {object} guild - Discord guild object
+ * @param {object} roleConfig
+ * @param {string} [roleConfig.topChatterRoleId] - Role ID for "Чемпион Недели"
+ * @param {string} [roleConfig.nightOwlRoleId] - Role ID for "Ночная Сова"
+ * @returns {object} { topChatter: { removed, granted }, nightOwl: { removed, granted } }
+ */
+async function rotateWeeklyRoles(db, guild, roleConfig = {}) {
+  const weekStart = getWeekStart();
+  const result = { topChatter: null, nightOwl: null };
+
+  const roleMap = [
+    { category: "top_chatter", roleId: roleConfig.topChatterRoleId, key: "topChatter" },
+    { category: "night_owl", roleId: roleConfig.nightOwlRoleId, key: "nightOwl" },
+  ];
+
+  for (const { category, roleId, key } of roleMap) {
+    if (!roleId) continue;
+
+    try {
+      // Find this week's winner
+      const winner = await dbGet(
+        db,
+        `SELECT user_id FROM weekly_awards
+         WHERE guild_id = ? AND week_start = ? AND category = ?`,
+        [guild.id, weekStart, category]
+      );
+
+      // Remove role from all current holders (previous winner)
+      const role = await guild.roles.fetch(roleId).catch(() => null);
+      if (!role) {
+        result[key] = { error: "Role not found" };
+        continue;
+      }
+
+      let removed = 0;
+      for (const [, member] of role.members) {
+        if (!winner || member.id !== winner.user_id) {
+          try {
+            await member.roles.remove(roleId, "Weekly award rotation");
+            removed++;
+          } catch (e) {
+            console.error(`[WeeklyRoles] Failed to remove role from ${member.id}:`, e.message);
+          }
+        }
+      }
+
+      // Grant to new winner
+      let granted = false;
+      if (winner?.user_id) {
+        try {
+          const winnerMember = await guild.members.fetch(winner.user_id);
+          if (!winnerMember.roles.cache.has(roleId)) {
+            await winnerMember.roles.add(roleId, `Weekly ${category} award`);
+            granted = true;
+          }
+        } catch (e) {
+          console.error(`[WeeklyRoles] Failed to grant role to ${winner.user_id}:`, e.message);
+        }
+      }
+
+      result[key] = { removed, granted };
+    } catch (err) {
+      console.error(`[WeeklyRoles] Error rotating ${category}:`, err);
+      result[key] = { error: err.message };
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Reward category config — SAMP money and XP granted per category.
+ */
+const AWARD_REWARDS = {
+  top_chatter:    { money: 25_000, xp: 2000 },
+  top_reactor:    { money: 10_000, xp: 1000 },
+  longest_streak: { money: 15_000, xp: 1500 },
+  trivia_master:  { money: 15_000, xp: 1500 },
+  street_legend:  { money: 5_000,  xp: 500  },
+};
+
+/**
+ * Grant SAMP money and XP rewards to weekly award winners.
+ * Call after postWeeklyAwards() succeeds.
+ *
+ * @param {object} db - Database instance
+ * @param {string} guildId - Guild ID
+ * @param {Array} awards - Array of { category, userId, ... } from generateWeeklyAwards
+ * @returns {object} { rewarded: number, details: Array }
+ */
+async function grantWeeklyRewards(db, guildId, awards) {
+  const details = [];
+
+  for (const award of awards) {
+    const reward = AWARD_REWARDS[award.category];
+    if (!reward) continue;
+
+    try {
+      // Grant SAMP money (only if user has a SAMP account)
+      const sampUser = await dbGet(db, `SELECT user_id FROM samp_users WHERE user_id = ?`, [award.userId]);
+      if (sampUser && reward.money > 0) {
+        await dbRun(
+          db,
+          `UPDATE samp_users SET money = money + ?, updated_at = datetime('now') WHERE user_id = ?`,
+          [reward.money, award.userId]
+        );
+        await dbRun(
+          db,
+          `INSERT INTO samp_ledger(type, from_user, to_user, amount, meta_json)
+           VALUES('weekly_award', NULL, ?, ?, ?)`,
+          [award.userId, reward.money, JSON.stringify({ category: award.category, week: getWeekStart() })]
+        );
+      }
+
+      // Grant XP
+      if (reward.xp > 0) {
+        await dbRun(
+          db,
+          `UPDATE user_levels SET xp = xp + ? WHERE guild_id = ? AND user_id = ?`,
+          [reward.xp, guildId, award.userId]
+        );
+      }
+
+      details.push({ userId: award.userId, category: award.category, money: reward.money, xp: reward.xp });
+    } catch (err) {
+      console.error(`[AWARDS-005] Failed to reward ${award.userId} for ${award.category}:`, err);
+    }
+  }
+
+  return { rewarded: details.length, details };
+}
+
 module.exports = {
   AWARD_CATEGORIES,
   ensureWeeklyAwardsTable,
@@ -307,4 +478,7 @@ module.exports = {
   getPastAwards,
   getWeeklyAwardsCommandBuilders,
   handleAwardsCommand,
+  rotateWeeklyRoles,
+  grantWeeklyRewards,
+  AWARD_REWARDS,
 };
