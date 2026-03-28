@@ -17,6 +17,18 @@ function parseEmbed(raw) {
   }
 }
 
+/** Build a short preview string from content + embed for the table */
+function messagePreview(item) {
+  if (item.content) return item.content;
+  const embed = parseEmbed(item.embed);
+  if (!embed) return "-";
+  const parts = [embed.title, embed.description].filter(Boolean);
+  if (!parts.length) return "-";
+  // Take first meaningful line
+  const firstLine = parts.join(" — ").split("\n")[0];
+  return firstLine.length > 100 ? firstLine.slice(0, 100) + "…" : firstLine;
+}
+
 const emptyForm = {
   id: null,
   channelId: "",
@@ -65,6 +77,13 @@ export function MessagesPage({ botKey, user }) {
     [channels]
   );
 
+  /** Resolve channel name from ID, falling back to the raw ID */
+  function channelName(channelId) {
+    if (!channelId) return "-";
+    const found = channelOptions.find((c) => c.id === channelId);
+    return found ? `#${found.name}` : channelId;
+  }
+
   function editMessage(item) {
     const embed = parseEmbed(item.embed);
     setForm({
@@ -77,6 +96,8 @@ export function MessagesPage({ botKey, user }) {
       embedFooter: embed?.footer || "",
       embedColor: embed?.color || "#00aeff",
     });
+    // Scroll to the form
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   async function submit(event) {
@@ -161,6 +182,10 @@ export function MessagesPage({ botKey, user }) {
                       {item.name}
                     </option>
                   ))}
+                  {/* Keep current channel visible even if not in sendable list */}
+                  {form.channelId && !channelOptions.some((c) => c.id === form.channelId) && (
+                    <option value={form.channelId}>{form.channelId} (current)</option>
+                  )}
                 </select>
               </div>
             </label>
@@ -261,10 +286,9 @@ export function MessagesPage({ botKey, user }) {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>ID</th>
-                  <th>Status</th>
                   <th>Channel</th>
-                  <th>Content</th>
+                  <th>Preview</th>
+                  <th>Status</th>
                   <th>Updated</th>
                   <th>Actions</th>
                 </tr>
@@ -272,13 +296,14 @@ export function MessagesPage({ botKey, user }) {
               <tbody>
                 {messages.map((item) => (
                   <tr key={item.id}>
-                    <td>{item.id}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>{channelName(item.channel_id)}</td>
+                    <td className="truncate-cell" title={messagePreview(item)}>
+                      {messagePreview(item)}
+                    </td>
                     <td>
                       <StatusBadge status={item.status} />
                     </td>
-                    <td>{item.channel_id || "-"}</td>
-                    <td className="truncate-cell">{item.content || "(embed only)"}</td>
-                    <td>{item.updated_at || item.created_at || "-"}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>{item.updated_at || item.created_at || "-"}</td>
                     <td>
                       <div className="row-actions">
                         <button

@@ -536,6 +536,8 @@ async function handleWork(interaction, db) {
   if (!(await ensureNotJailed(interaction, user))) return;
   if (!(await checkAndConsumeCooldown(interaction, db, userId, "work"))) return;
 
+  await interaction.deferReply();
+
   const jobs = ["разносил пиццу", "мыл тачку босса", "грузил ящики в порту", "таскал колёса на шинке"]; 
   const job = pick(jobs);
   const earnings = randInt(100, 500);
@@ -544,7 +546,7 @@ async function handleWork(interaction, db) {
   await addLedger(db, "work", null, userId, earnings, { job });
 
   const after = await getUserRow(db, userId);
-  await interaction.reply(`🛠 Ты ${job} и поднял **${fmtMoney(earnings)}**. Баланс: **${fmtMoney(after.money)}**`);
+  await interaction.editReply(`🛠 Ты ${job} и поднял **${fmtMoney(earnings)}**. Баланс: **${fmtMoney(after.money)}**`);
 }
 
 async function handleTruck(interaction, db) {
@@ -554,6 +556,8 @@ async function handleTruck(interaction, db) {
   if (!(await ensureNotJailed(interaction, user))) return;
   if (!(await checkAndConsumeCooldown(interaction, db, userId, "truck"))) return;
 
+  await interaction.deferReply();
+
   // Risk model: 18% crash
   const crash = Math.random() < 0.18;
   if (crash) {
@@ -561,7 +565,7 @@ async function handleTruck(interaction, db) {
     await adjustMoney(db, userId, -fine);
     await addLedger(db, "truck_crash", userId, null, fine, {});
     const after = await getUserRow(db, userId);
-    await interaction.reply(`🚚💥 Ты улетел в кювет. Штраф/ремонт: **-${fmtMoney(fine)}**. Баланс: **${fmtMoney(after.money)}**`);
+    await interaction.editReply(`🚚💥 Ты улетел в кювет. Штраф/ремонт: **-${fmtMoney(fine)}**. Баланс: **${fmtMoney(after.money)}**`);
     return;
   }
 
@@ -569,7 +573,7 @@ async function handleTruck(interaction, db) {
   await adjustMoney(db, userId, earnings);
   await addLedger(db, "truck", null, userId, earnings, {});
   const after = await getUserRow(db, userId);
-  await interaction.reply(`🚚 Ты отработал дальнобой и привёз бабки: **${fmtMoney(earnings)}**. Баланс: **${fmtMoney(after.money)}**`);
+  await interaction.editReply(`🚚 Ты отработал дальнобой и привёз бабки: **${fmtMoney(earnings)}**. Баланс: **${fmtMoney(after.money)}**`);
 }
 
 async function handleRob(interaction, db) {
@@ -578,6 +582,8 @@ async function handleRob(interaction, db) {
 
   if (!(await ensureNotJailed(interaction, user))) return;
   if (!(await checkAndConsumeCooldown(interaction, db, userId, "rob"))) return;
+
+  await interaction.deferReply();
 
   // 35% jail chance. On success: win 2k-10k. On fail: jail 5 min + fine 1k-4k.
   const caught = Math.random() < 0.35;
@@ -591,7 +597,7 @@ async function handleRob(interaction, db) {
     });
 
     const after = await getUserRow(db, userId);
-    await interaction.reply(
+    await interaction.editReply(
       `🚔 Тебя приняли у 24/7. Тюрьма: **5 минут**. Штраф: **-${fmtMoney(fine)}**.\n` +
         `Баланс: **${fmtMoney(after.money)}**`
     );
@@ -602,7 +608,7 @@ async function handleRob(interaction, db) {
   await adjustMoney(db, userId, loot);
   await addLedger(db, "rob", null, userId, loot, {});
   const after = await getUserRow(db, userId);
-  await interaction.reply(`🕶️ Ты вынес кассу 24/7: **${fmtMoney(loot)}**. Баланс: **${fmtMoney(after.money)}**`);
+  await interaction.editReply(`🕶️ Ты вынес кассу 24/7: **${fmtMoney(loot)}**. Баланс: **${fmtMoney(after.money)}**`);
 }
 
 async function handleDealership(interaction) {
@@ -771,6 +777,8 @@ async function handleRace(interaction, db) {
   const p1Car = carInfo(p1.car_id);
   const p2Car = carInfo(p2.car_id);
 
+  await interaction.deferReply();
+
   const p1Total = randInt(1, 50) + p1Car.speed;
   const p2Total = randInt(1, 50) + p2Car.speed;
 
@@ -789,17 +797,17 @@ async function handleRace(interaction, db) {
 
   if (winner === userId) {
     await transferMoney(db, opponent.id, userId, bet, "race", { loser: opponent.id });
-    await interaction.reply(text + `\n\n💰 Ты поднял **${fmtMoney(bet)}**.`);
+    await interaction.editReply(text + `\n\n💰 Ты поднял **${fmtMoney(bet)}**.`);
     return;
   }
   if (winner === opponent.id) {
     await transferMoney(db, userId, opponent.id, bet, "race", { loser: userId });
-    await interaction.reply(text + `\n\n💸 Ты отдал **${fmtMoney(bet)}**.`);
+    await interaction.editReply(text + `\n\n💸 Ты отдал **${fmtMoney(bet)}**.`);
     return;
   }
 
   await addLedger(db, "race_draw", userId, opponent.id, 0, { bet });
-  await interaction.reply(text);
+  await interaction.editReply(text);
 }
 
 async function handleDuel(interaction, db) {
@@ -830,6 +838,8 @@ async function handleDuel(interaction, db) {
     await interaction.reply({ content: "У кого-то нет денег на ставку.", ephemeral: true });
     return;
   }
+
+  await interaction.deferReply();
 
   const p1WeaponId = await getActiveWeapon(db, userId);
   const p2WeaponId = await getActiveWeapon(db, opponent.id);
@@ -863,18 +873,18 @@ async function handleDuel(interaction, db) {
 
   if (!winner) {
     await addLedger(db, "duel_draw", userId, opponent.id, 0, { bet, p1Hp, p2Hp });
-    await interaction.reply(text + "\n\n🤝 Ничья. Разошлись живыми.");
+    await interaction.editReply(text + "\n\n🤝 Ничья. Разошлись живыми.");
     return;
   }
 
   if (winner === userId) {
     await transferMoney(db, opponent.id, userId, bet, "duel", { p1Hp, p2Hp });
-    await interaction.reply(text + `\n\n🏆 Победил <@${userId}> и поднял **${fmtMoney(bet)}**.`);
+    await interaction.editReply(text + `\n\n🏆 Победил <@${userId}> и поднял **${fmtMoney(bet)}**.`);
     return;
   }
 
   await transferMoney(db, userId, opponent.id, bet, "duel", { p1Hp, p2Hp });
-  await interaction.reply(text + `\n\n💀 Победил <@${opponent.id}>. Ты потерял **${fmtMoney(bet)}**.`);
+  await interaction.editReply(text + `\n\n💀 Победил <@${opponent.id}>. Ты потерял **${fmtMoney(bet)}**.`);
 }
 
 async function handleSellCar(interaction, db) {
@@ -913,6 +923,8 @@ async function handleSellCar(interaction, db) {
     return;
   }
 
+  await interaction.deferReply();
+
   const offerId = await withTransaction(db, async () => {
     const res = await dbRun(
       db,
@@ -924,7 +936,7 @@ async function handleSellCar(interaction, db) {
     return res.lastID;
   });
 
-  await interaction.reply(
+  await interaction.editReply(
     `📝 Оффер создан (#${offerId}).\n` +
       `Продавец: <@${sellerId}> | Покупатель: <@${buyer.id}>\n` +
       `Тачка: **${car.name}** | Цена: **${fmtMoney(price)}**\n\n` +
@@ -965,6 +977,8 @@ async function handleBuyCar(interaction, db) {
     return;
   }
 
+  await interaction.deferReply();
+
   try {
     await withTransaction(db, async () => {
       const freshOffer = await dbGet(db, "SELECT status FROM samp_car_offers WHERE id = ?", [Number(offerId)]);
@@ -994,18 +1008,18 @@ async function handleBuyCar(interaction, db) {
     });
   } catch (e) {
     if (String(e.message) === "INSUFFICIENT") {
-      await interaction.reply({ content: "Не хватает виртов.", ephemeral: true });
+      await interaction.editReply({ content: "Не хватает виртов." });
       return;
     }
     if (String(e.message) === "SELLER_NO_CAR") {
-      await interaction.reply({ content: "Продавец уже не владеет этой тачкой.", ephemeral: true });
+      await interaction.editReply({ content: "Продавец уже не владеет этой тачкой." });
       return;
     }
-    await interaction.reply({ content: "Не удалось купить тачку (оффер мог закрыться).", ephemeral: true });
+    await interaction.editReply({ content: "Не удалось купить тачку (оффер мог закрыться)." });
     return;
   }
 
-  await interaction.reply(`✅ Покупка успешна. Ты получил **${car.name}** за **${fmtMoney(offer.price)}**.`);
+  await interaction.editReply(`✅ Покупка успешна. Ты получил **${car.name}** за **${fmtMoney(offer.price)}**.`);
 }
 
 async function handleBail(interaction, db) {
@@ -1094,6 +1108,9 @@ async function handleDaily(interaction, db) {
     return;
   }
 
+  // Defer reply early to avoid interaction token expiry during DB work
+  await interaction.deferReply();
+
   // Get streak from user_streaks table (if guild context available)
   let currentStreak = 0;
   if (guildId) {
@@ -1117,7 +1134,7 @@ async function handleDaily(interaction, db) {
   const after = await getUserRow(db, userId);
   const streakInfo = currentStreak > 0 ? `\n🔥 Стрик: **${currentStreak}** дней (бонус: ${tier.label})` : "";
 
-  await interaction.reply(
+  await interaction.editReply(
     `🎁 Ежедневный бонус: **+${fmtMoney(tier.bonus)}**!${streakInfo}\n` +
       `Баланс: **${fmtMoney(after.money)}**\n` +
       `_Чем дольше стрик — тем больше бонус!_`

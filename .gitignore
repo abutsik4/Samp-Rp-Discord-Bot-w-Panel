@@ -4,6 +4,9 @@ data/*.db-wal
 data/*.db-shm
 data/discord-login-backoff.json
 data/discord-login-last-attempt.json
+data/telegram-notify-state.json
+tmp/
+-
 *.db
 *.db-wal
 *.db-shm
