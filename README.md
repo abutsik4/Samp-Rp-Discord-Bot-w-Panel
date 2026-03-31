@@ -19,6 +19,13 @@ A production-grade, full-stack Discord bot platform for a Russian SA-MP roleplay
 
 > **🇷🇺 Весь интерфейс бота на русском языке** — команды, описания, уведомления и эмбеды полностью переведены на русский.
 
+## 🆕 Recent Updates (31 Mar 2026)
+
+- Added new feature modules: `src/features/samp-extended.js` and `src/features/seasonal-events.js`.
+- Expanded SA-MP gameplay logic and command flow updates in dispatcher/registration.
+- Updated automation and engagement paths: schedulers, perks, reactions, streaks, trivia, and weekly awards.
+- Refreshed runtime assets/configuration including Markov model data and PM2 ecosystem settings.
+
 ---
 
 ## 🔑 Technical Highlights
