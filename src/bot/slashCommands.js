@@ -18,6 +18,8 @@ const { getTriviaCommandBuilders } = require("../features/trivia");
 const { getLevelsCommandBuilders } = require("../features/levels");
 const { getWeeklyAwardsCommandBuilders } = require("../features/weekly-awards");
 const { getRadioCommandBuilders } = require("../features/radio-vote");
+const { getSampExtendedCommandBuilders } = require("../features/samp-extended");
+const { getSeasonalEventCommandBuilders } = require("../features/seasonal-events");
 
 // -- DRY helper for top5/top10 ------------------------------------------------
 
@@ -140,6 +142,8 @@ function buildCommandsJson() {
     ...getLevelsCommandBuilders(),
     ...getWeeklyAwardsCommandBuilders(),
     ...getRadioCommandBuilders(),
+    ...getSampExtendedCommandBuilders(),
+    ...getSeasonalEventCommandBuilders(),
 
     // Badges / achievements
     new SlashCommandBuilder()

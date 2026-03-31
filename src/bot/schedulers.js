@@ -13,7 +13,8 @@ const { reconcileAllGuilds, selfHealingReconcile } = require("../features/reconc
 const { cleanupOldMessageIndex } = require("../features/message-index-cleanup");
 const { syncMissingMessages, getWatermark, initializeWatermark } = require("../features/incremental-sync");
 const { SAMPStatusTracker } = require("../features/samp-status");
-const { postWeeklyAwards, rotateWeeklyRoles, grantWeeklyRewards, getWeekStart } = require("../features/weekly-awards");
+const { postWeeklyAwards, rotateWeeklyRoles, grantWeeklyRewards, resetWeeklyCounters, getWeekStart } = require("../features/weekly-awards");
+const { drawLottery } = require("../features/samp-extended");
 
 /**
  * Start all schedulers. Call once inside `client.once("ready")`.
@@ -296,6 +297,19 @@ async function startSchedulers(ctx) {
                 if (result.awardsList && result.awardsList.length > 0) {
                   const rewardResult = await grantWeeklyRewards(db, guild.id, result.awardsList);
                   console.log(`[WeeklyAwards] Rewards granted: ${rewardResult.rewarded} winners`);
+                  // Reset weekly counters after awards
+                  await resetWeeklyCounters(db);
+                  // Draw weekly lottery
+                  try {
+                    const lotteryResult = await drawLottery(db);
+                    if (lotteryResult?.winner) {
+                      console.log(`[WeeklyAwards] Lottery drawn: winner=${lotteryResult.winner}, prize=${lotteryResult.prize}`);
+                    } else {
+                      console.log("[WeeklyAwards] Lottery drawn: no winner (rollover)");
+                    }
+                  } catch (e) {
+                    console.error("[WeeklyAwards] Lottery draw failed:", e);
+                  }
                 }
                 // Rotate weekly spotlight roles
                 const TOP_CHATTER_ROLE_ID = process.env.WEEKLY_TOP_CHATTER_ROLE_ID;

@@ -58,6 +58,8 @@ const { initLeaderboardCache } = require("./features/leaderboard-cache");
 
 const { ensurePerksTables } = require("./features/perks");
 const { ensureXpMultipliersTable } = require("./features/xp-multipliers");
+const { ensureSampExtendedTables } = require("./features/samp-extended");
+const { ensureSeasonalEventsTables } = require("./features/seasonal-events");
 
 // -------------------------
 // CONFIG / ENV
@@ -166,6 +168,8 @@ async function initDb() {
 
   await ensurePerksTables(db);
   await ensureXpMultipliersTable(db);
+  await ensureSampExtendedTables(db);
+  await ensureSeasonalEventsTables(db);
 }
 
 initDb().catch((e) => {

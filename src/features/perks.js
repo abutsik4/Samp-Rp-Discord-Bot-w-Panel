@@ -11,7 +11,7 @@ async function ensurePerksTables(db) {
       guild_id TEXT NOT NULL,
       trigger_type TEXT NOT NULL CHECK (trigger_type IN ('badge', 'level')),
       trigger_value TEXT NOT NULL,
-      action_type TEXT NOT NULL CHECK (action_type IN ('grant_role')),
+      action_type TEXT NOT NULL CHECK (action_type IN ('grant_role', 'grant_money', 'grant_xp')),
       action_value TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
@@ -53,7 +53,7 @@ async function upsertPerkRule(db, guildId, rule) {
     const n = Number.parseInt(triggerValue, 10);
     if (!Number.isFinite(n) || String(n) !== triggerValue || n < 1) throw new Error("trigger_value must be a positive integer for 'level'");
   }
-  if (!actionType || !["grant_role"].includes(actionType)) throw new Error("action_type must be 'grant_role'");
+  if (!actionType || !["grant_role", "grant_money", "grant_xp"].includes(actionType)) throw new Error("action_type must be 'grant_role', 'grant_money', or 'grant_xp'");
   if (!actionValue) throw new Error("action_value required");
 
   const id = rule?.id != null ? Number(rule.id) : null;
@@ -154,7 +154,94 @@ async function applyRoleGrants({ db, guild, member, triggers, reason }) {
     }
   }
 
-  return { granted, skipped, errors };
+  // Also apply money/XP grants
+  const moneyXpResults = await applyMoneyXpGrants(db, guildId, member.id, triggers);
+
+  return { granted, skipped, errors, ...moneyXpResults };
+}
+
+/**
+ * Apply money and XP grants based on triggers.
+ * Only grants once per trigger (uses samp_ledger to track).
+ */
+async function applyMoneyXpGrants(db, guildId, userId, triggers) {
+  if (!triggers || triggers.length === 0) return { moneyGranted: 0, xpGranted: 0 };
+
+  let moneyGranted = 0;
+  let xpGranted = 0;
+
+  for (const t of triggers) {
+    const type = String(t?.type || "").trim();
+    const value = String(t?.value || "").trim();
+    if (!type || !value) continue;
+
+    // Get money grants
+    const moneyRules = await dbAll(
+      db,
+      `SELECT action_value FROM perk_rules
+       WHERE guild_id = ? AND enabled = 1 AND action_type = 'grant_money'
+       AND trigger_type = ? AND trigger_value = ?`,
+      [guildId, type, value]
+    );
+
+    for (const rule of moneyRules || []) {
+      const amount = Number(rule.action_value);
+      if (!amount || amount <= 0) continue;
+
+      // Check if already granted via ledger
+      const key = `perk_money_${type}_${value}`;
+      const already = await dbGet(
+        db,
+        `SELECT 1 FROM samp_ledger WHERE type = 'perk_grant' AND to_user = ? AND meta_json LIKE ?`,
+        [userId, `%"key":"${key}"%`]
+      );
+      if (already) continue;
+
+      try {
+        await dbRun(db, `UPDATE samp_users SET money = money + ? WHERE user_id = ?`, [amount, userId]);
+        await dbRun(
+          db,
+          `INSERT INTO samp_ledger(type, from_user, to_user, amount, meta_json) VALUES('perk_grant', NULL, ?, ?, ?)`,
+          [userId, amount, JSON.stringify({ key, trigger: type, value })]
+        );
+        moneyGranted += amount;
+      } catch (_) {}
+    }
+
+    // Get XP grants
+    const xpRules = await dbAll(
+      db,
+      `SELECT action_value FROM perk_rules
+       WHERE guild_id = ? AND enabled = 1 AND action_type = 'grant_xp'
+       AND trigger_type = ? AND trigger_value = ?`,
+      [guildId, type, value]
+    );
+
+    for (const rule of xpRules || []) {
+      const amount = Number(rule.action_value);
+      if (!amount || amount <= 0) continue;
+
+      const key = `perk_xp_${type}_${value}`;
+      const already = await dbGet(
+        db,
+        `SELECT 1 FROM samp_ledger WHERE type = 'perk_grant_xp' AND to_user = ? AND meta_json LIKE ?`,
+        [userId, `%"key":"${key}"%`]
+      );
+      if (already) continue;
+
+      try {
+        await dbRun(db, `UPDATE user_levels SET xp = xp + ? WHERE guild_id = ? AND user_id = ?`, [amount, guildId, userId]);
+        await dbRun(
+          db,
+          `INSERT INTO samp_ledger(type, from_user, to_user, amount, meta_json) VALUES('perk_grant_xp', NULL, ?, ?, ?)`,
+          [userId, amount, JSON.stringify({ key, trigger: type, value })]
+        );
+        xpGranted += amount;
+      } catch (_) {}
+    }
+  }
+
+  return { moneyGranted, xpGranted };
 }
 
 async function getRolesToGrantForLevelAtOrBelow(db, guildId, level) {

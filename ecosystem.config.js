@@ -25,7 +25,7 @@ module.exports = {
       // Auto-restart settings
       watch: false,
       ignore_watch: ["node_modules", "data", ".git", ".env"],
-      max_memory_restart: "1G",
+      max_memory_restart: "512M",
       
       // Logging
       error_file: "logs/err.log",

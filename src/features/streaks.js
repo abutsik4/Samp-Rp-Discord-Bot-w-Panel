@@ -27,10 +27,20 @@ async function ensureStreakTable(db) {
 }
 
 /**
+ * Get today's date string in the configured timezone (default: MSK/UTC+3)
+ */
+const STREAK_TZ_OFFSET_MIN = Number.parseInt(process.env.STREAK_TIMEZONE_OFFSET || "180", 10);
+
+function getLocalDateStr(date = new Date()) {
+  const local = new Date(date.getTime() + STREAK_TZ_OFFSET_MIN * 60 * 1000);
+  return local.toISOString().split("T")[0];
+}
+
+/**
  * Update user streak when they send a message
  */
 async function updateStreak(db, guildId, userId) {
-  const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+  const today = getLocalDateStr();
 
   const existing = await dbGet(
     db,
@@ -54,7 +64,7 @@ async function updateStreak(db, guildId, userId) {
     return { currentStreak: existing.current_streak, longestStreak: existing.longest_streak };
   }
 
-  const yesterday = new Date();
+  const yesterday = new Date(new Date().getTime() + STREAK_TZ_OFFSET_MIN * 60 * 1000);
   yesterday.setDate(yesterday.getDate() - 1);
   const yesterdayStr = yesterday.toISOString().split("T")[0];
 
@@ -92,8 +102,8 @@ async function getStreak(db, guildId, userId) {
   if (!row) return { currentStreak: 0, longestStreak: 0 };
 
   // Check if streak is still valid (was active yesterday or today)
-  const today = new Date().toISOString().split("T")[0];
-  const yesterday = new Date();
+  const today = getLocalDateStr();
+  const yesterday = new Date(new Date().getTime() + STREAK_TZ_OFFSET_MIN * 60 * 1000);
   yesterday.setDate(yesterday.getDate() - 1);
   const yesterdayStr = yesterday.toISOString().split("T")[0];
 

@@ -126,9 +126,9 @@ async function updateTriviaScore(db, guildId, userId, isCorrect) {
     if (!existing) {
       await dbRun(
         db,
-        `INSERT INTO trivia_scores (guild_id, user_id, correct, total, current_streak, best_streak, total_points)
-         VALUES (?, ?, ?, 1, ?, ?, ?)`,
-        [guildId, userId, isCorrect ? 1 : 0, isCorrect ? 1 : 0, isCorrect ? 1 : 0, points]
+        `INSERT INTO trivia_scores (guild_id, user_id, correct, total, current_streak, best_streak, total_points, weekly_points)
+         VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
+        [guildId, userId, isCorrect ? 1 : 0, isCorrect ? 1 : 0, isCorrect ? 1 : 0, points, points]
       );
     } else {
       const newStreak = isCorrect ? existing.current_streak + 1 : 0;
@@ -139,9 +139,10 @@ async function updateTriviaScore(db, guildId, userId, isCorrect) {
         `UPDATE trivia_scores
          SET correct = correct + ?, total = total + 1,
              current_streak = ?, best_streak = ?,
-             total_points = total_points + ?
+             total_points = total_points + ?,
+             weekly_points = weekly_points + ?
          WHERE guild_id = ? AND user_id = ?`,
-        [isCorrect ? 1 : 0, newStreak, newBest, points, guildId, userId]
+        [isCorrect ? 1 : 0, newStreak, newBest, points, points, guildId, userId]
       );
     }
 

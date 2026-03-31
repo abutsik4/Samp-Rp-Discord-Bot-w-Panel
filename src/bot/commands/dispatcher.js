@@ -13,6 +13,8 @@ const { handleTriviaCommand } = require("../../features/trivia");
 const { handleLevelCommand } = require("../../features/levels");
 const { handleAwardsCommand } = require("../../features/weekly-awards");
 const { handleRadioVote, handleRadioTop, handleRadioInfo, handleRadioFans } = require("../../features/radio-vote");
+const { handleSampExtendedCommand, handleSampExtendedAutocomplete } = require("../../features/samp-extended");
+const { handleEventsCommand } = require("../../features/seasonal-events");
 const { getUserBadges, getBadgeDefinitions } = require("../../features/badges");
 const { SAMPStatusTracker } = require("../../features/samp-status");
 const { getLeaderboard } = require("../../features/leaderboard-cache");
@@ -37,9 +39,15 @@ function registerCommandHandlers(ctx) {
     if (interaction.isAutocomplete()) {
       if (["buy", "weapon", "sellcar"].includes(interaction.commandName)) {
         try {
-          await handleSampLifeAutocomplete(interaction);
+          await handleSampLifeAutocomplete(interaction, db);
         } catch (e) {
           console.error("[samp-life] autocomplete error", e);
+        }
+      } else if (["buybiz", "tunecar", "buycosmetic"].includes(interaction.commandName)) {
+        try {
+          await handleSampExtendedAutocomplete(interaction, db);
+        } catch (e) {
+          console.error("[samp-extended] autocomplete error", e);
         }
       }
       return;
@@ -88,9 +96,35 @@ function registerCommandHandlers(ctx) {
         "dealership", "weaponshop", "buy", "race", "duel",
         "sellcar", "buycar", "weapon",
         "bail", "richest", "daily",
+        "pay", "slots", "blackjack", "roulette",
       ].includes(commandName)
     ) {
       await handleSampLifeCommand({ interaction, db });
+      return;
+    }
+
+    // SAMP Extended economy commands
+    if (
+      [
+        "businesses", "buybiz", "collectincome",
+        "tunecar", "garage",
+        "bounty", "bountylist",
+        "heist",
+        "jobs", "dojob",
+        "gang",
+        "shopcosmetics", "buycosmetic",
+        "repair",
+        "lottery",
+        "blackmarket",
+      ].includes(commandName)
+    ) {
+      await handleSampExtendedCommand({ interaction, db });
+      return;
+    }
+
+    // Seasonal events command
+    if (commandName === "events") {
+      await handleEventsCommand(interaction, db);
       return;
     }
 

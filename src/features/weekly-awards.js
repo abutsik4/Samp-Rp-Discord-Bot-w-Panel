@@ -30,12 +30,12 @@ const AWARD_CATEGORIES = [
   {
     id: "top_reactor",
     title: "❤️ Самый щедрый на реакции",
-    description: "Больше всех реакций на сервере",
+    description: "Больше всех реакций за неделю",
     emoji: "👍",
-    queryFn: (guildId) => ({
-      sql: `SELECT user_id, reactions_given AS val FROM user_reactions
-            WHERE guild_id = ? AND reactions_given > 0
-            ORDER BY reactions_given DESC LIMIT 1`,
+    queryFn: (guildId, weekStart) => ({
+      sql: `SELECT user_id, reactions_given_weekly AS val FROM user_reactions
+            WHERE guild_id = ? AND reactions_given_weekly > 0
+            ORDER BY reactions_given_weekly DESC LIMIT 1`,
       params: [guildId],
     }),
     format: (v) => `${v} реакций`,
@@ -56,12 +56,12 @@ const AWARD_CATEGORIES = [
   {
     id: "trivia_master",
     title: "🧠 Мастер викторины",
-    description: "Больше всех правильных ответов за неделю",
+    description: "Больше всех очков за неделю",
     emoji: "🧠",
     queryFn: (guildId) => ({
-      sql: `SELECT user_id, total_points AS val FROM trivia_scores
-            WHERE guild_id = ? AND total_points > 0
-            ORDER BY total_points DESC LIMIT 1`,
+      sql: `SELECT user_id, weekly_points AS val FROM trivia_scores
+            WHERE guild_id = ? AND weekly_points > 0
+            ORDER BY weekly_points DESC LIMIT 1`,
       params: [guildId],
     }),
     format: (v) => `${v} очков`,
@@ -69,15 +69,19 @@ const AWARD_CATEGORIES = [
   {
     id: "street_legend",
     title: "💰 Уличная легенда",
-    description: "Самый богатый игрок в SAMP Life",
+    description: "Больше всех заработал за неделю",
     emoji: "💰",
-    queryFn: () => ({
-      sql: `SELECT user_id, money AS val FROM samp_users
-            WHERE money > 0
-            ORDER BY money DESC LIMIT 1`,
-      params: [],
+    queryFn: (guildId, weekStart) => ({
+      sql: `SELECT to_user AS user_id, SUM(amount) AS val
+            FROM samp_ledger
+            WHERE to_user IS NOT NULL
+              AND type IN ('work', 'truck', 'rob', 'race', 'duel', 'daily_bonus')
+              AND ts >= ?
+            GROUP BY to_user
+            ORDER BY val DESC LIMIT 1`,
+      params: [weekStart],
     }),
-    format: (v) => `${Number(v).toLocaleString("ru-RU")} $`,
+    format: (v) => `${Number(v).toLocaleString("ru-RU")} $ заработано`,
   },
 ];
 
@@ -102,6 +106,11 @@ async function ensureWeeklyAwardsTable(db) {
       db,
       `CREATE INDEX IF NOT EXISTS idx_weekly_awards_guild_week ON weekly_awards(guild_id, week_start)`
     );
+
+    // Add weekly tracking columns to existing tables (safe if already exist)
+    try { await dbRun(db, `ALTER TABLE user_reactions ADD COLUMN reactions_given_weekly INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
+    try { await dbRun(db, `ALTER TABLE user_reactions ADD COLUMN reactions_received_weekly INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
+    try { await dbRun(db, `ALTER TABLE trivia_scores ADD COLUMN weekly_points INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
   } catch (err) {
     console.error("[AWARDS-001] Failed to create weekly_awards table:", err);
     throw err;
@@ -468,6 +477,20 @@ async function grantWeeklyRewards(db, guildId, awards) {
   return { rewarded: details.length, details };
 }
 
+/**
+ * Reset weekly counters after awards are posted.
+ * Call after postWeeklyAwards() on Mondays.
+ */
+async function resetWeeklyCounters(db) {
+  try {
+    await dbRun(db, `UPDATE user_reactions SET reactions_given_weekly = 0, reactions_received_weekly = 0`);
+    await dbRun(db, `UPDATE trivia_scores SET weekly_points = 0`);
+    console.log("[WeeklyAwards] Weekly counters reset");
+  } catch (err) {
+    console.error("[AWARDS-006] Failed to reset weekly counters:", err);
+  }
+}
+
 module.exports = {
   AWARD_CATEGORIES,
   ensureWeeklyAwardsTable,
@@ -480,5 +503,6 @@ module.exports = {
   handleAwardsCommand,
   rotateWeeklyRoles,
   grantWeeklyRewards,
+  resetWeeklyCounters,
   AWARD_REWARDS,
 };

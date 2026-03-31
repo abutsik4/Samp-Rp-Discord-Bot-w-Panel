@@ -424,7 +424,10 @@ function getSampLifeCommandBuilders() {
 
     new SlashCommandBuilder().setName("truck").setDescription("SAMP Life: дальнобой (длинный кулдаун, риск аварии)"),
 
-    new SlashCommandBuilder().setName("rob").setDescription("SAMP Life: ограбление 24/7 (быстро, но можно присесть)"),
+    new SlashCommandBuilder()
+      .setName("rob")
+      .setDescription("SAMP Life: ограбить игрока или 24/7")
+      .addUserOption((o) => o.setName("user").setDescription("Кого грабим (необязательно — без цели грабим 24/7)").setRequired(false)),
 
     new SlashCommandBuilder().setName("dealership").setDescription("SAMP Life: автосалон (цены/скорость)"),
 
@@ -479,6 +482,32 @@ function getSampLifeCommandBuilders() {
       .addStringOption((o) => o.setName("id").setDescription("ID оружия").setRequired(true).setAutocomplete(true)),
 
     new SlashCommandBuilder().setName("weaponshop").setDescription("SAMP Life: магазин оружия Ammu-Nation (цены/урон)"),
+
+    new SlashCommandBuilder()
+      .setName("pay")
+      .setDescription("SAMP Life: перевести деньги игроку")
+      .addUserOption((o) => o.setName("user").setDescription("Кому").setRequired(true))
+      .addIntegerOption((o) => o.setName("amount").setDescription("Сумма").setRequired(true).setMinValue(1)),
+
+    new SlashCommandBuilder()
+      .setName("slots")
+      .setDescription("SAMP Life: игровые автоматы Las Venturas")
+      .addIntegerOption((o) => o.setName("bet").setDescription("Ставка").setRequired(true).setMinValue(100).setMaxValue(100000)),
+
+    new SlashCommandBuilder()
+      .setName("blackjack")
+      .setDescription("SAMP Life: блэкджек в казино Four Dragons")
+      .addIntegerOption((o) => o.setName("bet").setDescription("Ставка").setRequired(true).setMinValue(500).setMaxValue(500000)),
+
+    new SlashCommandBuilder()
+      .setName("roulette")
+      .setDescription("SAMP Life: рулетка Caligula's Palace")
+      .addStringOption((o) => o.setName("color").setDescription("Цвет").setRequired(true).addChoices(
+        { name: "🔴 Красное", value: "red" },
+        { name: "⚫ Чёрное", value: "black" },
+        { name: "🟢 Зелёное (x14)", value: "green" }
+      ))
+      .addIntegerOption((o) => o.setName("bet").setDescription("Ставка").setRequired(true).setMinValue(100).setMaxValue(500000)),
   ];
 }
 
@@ -540,7 +569,9 @@ async function handleWork(interaction, db) {
 
   const jobs = ["разносил пиццу", "мыл тачку босса", "грузил ящики в порту", "таскал колёса на шинке"]; 
   const job = pick(jobs);
-  const earnings = randInt(100, 500);
+  const levelRow = await dbGet(db, "SELECT level FROM user_levels WHERE guild_id = ? AND user_id = ?", [interaction.guild?.id, userId]);
+  const level = levelRow?.level || 1;
+  const earnings = Math.floor(randInt(100, 500) * (1 + level * 0.1));
 
   await adjustMoney(db, userId, earnings);
   await addLedger(db, "work", null, userId, earnings, { job });
@@ -561,9 +592,12 @@ async function handleTruck(interaction, db) {
   // Risk model: 18% crash
   const crash = Math.random() < 0.18;
   if (crash) {
-    const fine = randInt(800, 2500);
-    await adjustMoney(db, userId, -fine);
-    await addLedger(db, "truck_crash", userId, null, fine, {});
+    const rawFine = randInt(800, 2500);
+    const fine = Math.min(rawFine, Number(user.money));
+    if (fine > 0) {
+      await adjustMoney(db, userId, -fine);
+      await addLedger(db, "truck_crash", userId, null, fine, {});
+    }
     const after = await getUserRow(db, userId);
     await interaction.editReply(`🚚💥 Ты улетел в кювет. Штраф/ремонт: **-${fmtMoney(fine)}**. Баланс: **${fmtMoney(after.money)}**`);
     return;
@@ -585,13 +619,64 @@ async function handleRob(interaction, db) {
 
   await interaction.deferReply();
 
+  const target = interaction.options.getUser("user");
+
+  // --- PvP robbery (target specified) ---
+  if (target) {
+    if (target.bot) { await interaction.editReply("Ботов грабить нельзя."); return; }
+    if (target.id === userId) { await interaction.editReply("Сам себя? Серьёзно?"); return; }
+
+    const victim = await getUserRow(db, target.id);
+    if (!victim) { await interaction.editReply("Этот игрок не зарегистрирован в SAMP Life."); return; }
+
+    // 40% caught (higher risk PvP)
+    const caught = Math.random() < 0.40;
+    if (caught) {
+      const jailMs = 5 * 60_000;
+      const rawFine = randInt(1000, 4000);
+      const fine = Math.min(rawFine, Number(user.money));
+      await withTransaction(db, async () => {
+        if (fine > 0) await adjustMoney(db, userId, -fine);
+        await dbRun(db, `UPDATE samp_users SET jail_until = ? WHERE user_id = ?`, [nowMs() + jailMs, String(userId)]);
+        await addLedger(db, "rob_pvp_caught", userId, target.id, fine, { jail_ms: jailMs });
+      });
+
+      const after = await getUserRow(db, userId);
+      await interaction.editReply(
+        `🚔 Тебя приняли при ограблении <@${target.id}>. Тюрьма: **5 минут**. Штраф: **-${fmtMoney(fine)}**.\n` +
+          `Баланс: **${fmtMoney(after.money)}**`
+      );
+      return;
+    }
+
+    // Success: steal 5-15% of victim balance (min 500, max 50,000)
+    const pct = randInt(5, 15) / 100;
+    const rawSteal = Math.floor(Number(victim.money) * pct);
+    const loot = Math.min(50_000, Math.max(500, rawSteal));
+    const actualLoot = Math.min(loot, Number(victim.money));
+
+    if (actualLoot <= 0) { await interaction.editReply("У жертвы нет виртов — обчищать нечего."); return; }
+
+    await withTransaction(db, async () => {
+      await adjustMoney(db, target.id, -actualLoot);
+      await adjustMoney(db, userId, actualLoot);
+      await addLedger(db, "rob_pvp", userId, target.id, actualLoot, {});
+    });
+
+    const after = await getUserRow(db, userId);
+    await interaction.editReply(`🕶️ Ты обчистил <@${target.id}> на **${fmtMoney(actualLoot)}**! Баланс: **${fmtMoney(after.money)}**`);
+    return;
+  }
+
+  // --- Original 24/7 robbery (no target) ---
   // 35% jail chance. On success: win 2k-10k. On fail: jail 5 min + fine 1k-4k.
   const caught = Math.random() < 0.35;
   if (caught) {
     const jailMs = 5 * 60_000;
-    const fine = randInt(1000, 4000);
+    const rawFine = randInt(1000, 4000);
+    const fine = Math.min(rawFine, Number(user.money));
     await withTransaction(db, async () => {
-      await adjustMoney(db, userId, -fine);
+      if (fine > 0) await adjustMoney(db, userId, -fine);
       await dbRun(db, `UPDATE samp_users SET jail_until = ? WHERE user_id = ?`, [nowMs() + jailMs, String(userId)]);
       await addLedger(db, "rob_caught", userId, null, fine, { jail_ms: jailMs });
     });
@@ -687,8 +772,11 @@ async function handleBuy(interaction, db) {
       const fresh = await getOrCreateUser(db, userId);
       if (Number(fresh.money) < car.price) throw new Error("INSUFFICIENT");
 
+      const alreadyOwned = await dbGet(db, "SELECT 1 FROM samp_garage WHERE user_id = ? AND car_id = ?", [String(userId), id]);
+      if (alreadyOwned) throw new Error("ALREADY_OWNED");
+
       await adjustMoney(db, userId, -car.price);
-      await dbRun(db, `INSERT OR IGNORE INTO samp_garage(user_id, car_id) VALUES(?, ?)`, [String(userId), id]);
+      await dbRun(db, `INSERT INTO samp_garage(user_id, car_id) VALUES(?, ?)`, [String(userId), id]);
       await dbRun(db, `UPDATE samp_users SET car_id = ?, updated_at = datetime('now') WHERE user_id = ?`, [id, String(userId)]);
       await addLedger(db, "buy_car", userId, null, car.price, { car_id: id });
     });
@@ -879,12 +967,31 @@ async function handleDuel(interaction, db) {
 
   if (winner === userId) {
     await transferMoney(db, opponent.id, userId, bet, "duel", { p1Hp, p2Hp });
-    await interaction.editReply(text + `\n\n🏆 Победил <@${userId}> и поднял **${fmtMoney(bet)}**.`);
+    // Bounty collection and weapon degradation (lazy require to avoid circular dep)
+    try {
+      const { checkAndCollectBounty, degradeWeapon } = require("./samp-extended");
+      const bountyResult = await checkAndCollectBounty(db, userId, opponent.id);
+      if (p1WeaponId) await degradeWeapon(db, userId, p1WeaponId);
+      if (p2WeaponId) await degradeWeapon(db, opponent.id, p2WeaponId);
+      const bountyText = bountyResult?.collected ? `\n💀 Награда за голову: **${fmtMoney(bountyResult.amount)}**` : "";
+      await interaction.editReply(text + `\n\n🏆 Победил <@${userId}> и поднял **${fmtMoney(bet)}**.${bountyText}`);
+    } catch (_) {
+      await interaction.editReply(text + `\n\n🏆 Победил <@${userId}> и поднял **${fmtMoney(bet)}**.`);
+    }
     return;
   }
 
   await transferMoney(db, userId, opponent.id, bet, "duel", { p1Hp, p2Hp });
-  await interaction.editReply(text + `\n\n💀 Победил <@${opponent.id}>. Ты потерял **${fmtMoney(bet)}**.`);
+  try {
+    const { checkAndCollectBounty, degradeWeapon } = require("./samp-extended");
+    const bountyResult = await checkAndCollectBounty(db, opponent.id, userId);
+    if (p1WeaponId) await degradeWeapon(db, userId, p1WeaponId);
+    if (p2WeaponId) await degradeWeapon(db, opponent.id, p2WeaponId);
+    const bountyText = bountyResult?.collected ? `\n💀 Награда за голову: **${fmtMoney(bountyResult.amount)}**` : "";
+    await interaction.editReply(text + `\n\n💀 Победил <@${opponent.id}>. Ты потерял **${fmtMoney(bet)}**.${bountyText}`);
+  } catch (_) {
+    await interaction.editReply(text + `\n\n💀 Победил <@${opponent.id}>. Ты потерял **${fmtMoney(bet)}**.`);
+  }
 }
 
 async function handleSellCar(interaction, db) {
@@ -1141,6 +1248,180 @@ async function handleDaily(interaction, db) {
   );
 }
 
+async function handlePay(interaction, db) {
+  const userId = interaction.user.id;
+  const target = interaction.options.getUser("user", true);
+  const amount = interaction.options.getInteger("amount", true);
+
+  if (target.bot) { await interaction.reply({ content: "Ботам деньги не шлём.", ephemeral: true }); return; }
+  if (target.id === userId) { await interaction.reply({ content: "Самому себе? Серьёзно?", ephemeral: true }); return; }
+
+  const user = await getOrCreateUser(db, userId);
+  if (!(await ensureNotJailed(interaction, user))) return;
+
+  const amt = clampInt(amount, 1, 10_000_000);
+  if (!amt) { await interaction.reply({ content: "Некорректная сумма.", ephemeral: true }); return; }
+
+  await getOrCreateUser(db, target.id);
+
+  try {
+    await transferMoney(db, userId, target.id, amt, "transfer", { from: userId, to: target.id });
+  } catch (e) {
+    if (String(e.message) === "INSUFFICIENT") {
+      await interaction.reply({ content: "Не хватает виртов для перевода.", ephemeral: true }); return;
+    }
+    throw e;
+  }
+
+  const after = await getUserRow(db, userId);
+  await interaction.reply(`💸 Ты перевёл **${fmtMoney(amt)}** игроку <@${target.id}>.\nБаланс: **${fmtMoney(after.money)}**`);
+}
+
+async function handleSlots(interaction, db) {
+  const userId = interaction.user.id;
+  const betRaw = interaction.options.getInteger("bet", true);
+  const user = await getOrCreateUser(db, userId);
+  if (!(await ensureNotJailed(interaction, user))) return;
+
+  const bet = clampInt(betRaw, 100, 100000);
+  if (!bet || Number(user.money) < bet) {
+    await interaction.reply({ content: "Не хватает виртов.", ephemeral: true }); return;
+  }
+
+  await interaction.deferReply();
+
+  const symbols = ["🍒", "🍋", "🔔", "💎", "7️⃣", "🍀"];
+  const r1 = pick(symbols), r2 = pick(symbols), r3 = pick(symbols);
+
+  let multiplier = 0;
+  if (r1 === r2 && r2 === r3) {
+    if (r1 === "7️⃣") multiplier = 10;
+    else if (r1 === "💎") multiplier = 7;
+    else multiplier = 5;
+  } else if (r1 === r2 || r2 === r3 || r1 === r3) {
+    multiplier = 2;
+  }
+
+  const winnings = bet * multiplier;
+  const net = winnings - bet;
+
+  await withTransaction(db, async () => {
+    await adjustMoney(db, userId, net);
+    await addLedger(db, "slots", userId, null, Math.abs(net), { r1, r2, r3, bet, multiplier });
+  });
+
+  const after = await getUserRow(db, userId);
+  const result = multiplier > 0
+    ? `🎰 [ ${r1} | ${r2} | ${r3} ]\n\n🎉 Выигрыш: **${fmtMoney(winnings)}** (x${multiplier})!`
+    : `🎰 [ ${r1} | ${r2} | ${r3} ]\n\n💨 Мимо. Потерял **${fmtMoney(bet)}**.`;
+
+  await interaction.editReply(`${result}\nБаланс: **${fmtMoney(after.money)}**`);
+}
+
+async function handleBlackjack(interaction, db) {
+  const userId = interaction.user.id;
+  const betRaw = interaction.options.getInteger("bet", true);
+  const user = await getOrCreateUser(db, userId);
+  if (!(await ensureNotJailed(interaction, user))) return;
+
+  const bet = clampInt(betRaw, 500, 500000);
+  if (!bet || Number(user.money) < bet) {
+    await interaction.reply({ content: "Не хватает виртов.", ephemeral: true }); return;
+  }
+
+  await interaction.deferReply();
+
+  const cards = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"];
+  const cardVal = (c) => c === "A" ? 11 : ["J","Q","K"].includes(c) ? 10 : parseInt(c);
+  const drawCard = () => pick(cards);
+  const handVal = (hand) => {
+    let total = hand.reduce((s, c) => s + cardVal(c), 0);
+    let aces = hand.filter(c => c === "A").length;
+    while (total > 21 && aces > 0) { total -= 10; aces--; }
+    return total;
+  };
+
+  const player = [drawCard(), drawCard()];
+  const dealer = [drawCard(), drawCard()];
+
+  // Simple AI: player stands on 17+, hits below
+  while (handVal(player) < 17) player.push(drawCard());
+  while (handVal(dealer) < 17) dealer.push(drawCard());
+
+  const pVal = handVal(player);
+  const dVal = handVal(dealer);
+  let result, net;
+
+  if (pVal > 21) { result = "bust"; net = -bet; }
+  else if (dVal > 21) { result = "win"; net = bet; }
+  else if (pVal > dVal) { result = "win"; net = bet; }
+  else if (pVal < dVal) { result = "lose"; net = -bet; }
+  else { result = "push"; net = 0; }
+
+  if (pVal === 21 && player.length === 2) { net = Math.floor(bet * 1.5); result = "blackjack"; }
+
+  await withTransaction(db, async () => {
+    await adjustMoney(db, userId, net);
+    await addLedger(db, "blackjack", userId, null, Math.abs(net), { player, dealer, result, bet });
+  });
+
+  const after = await getUserRow(db, userId);
+  const emoji = { win: "🎉", blackjack: "🃏✨", lose: "💀", bust: "💥", push: "🤝" };
+  const label = { win: "Выиграл", blackjack: "БЛЭКДЖЕК", lose: "Проиграл", bust: "Перебор", push: "Ничья" };
+
+  await interaction.editReply(
+    `🃏 **Блэкджек**\n\n` +
+    `Ты: [${player.join(", ")}] = **${pVal}**\n` +
+    `Дилер: [${dealer.join(", ")}] = **${dVal}**\n\n` +
+    `${emoji[result]} **${label[result]}!** ${net > 0 ? `+${fmtMoney(net)}` : net < 0 ? `-${fmtMoney(Math.abs(net))}` : "Ставка возвращена"}\n` +
+    `Баланс: **${fmtMoney(after.money)}**`
+  );
+}
+
+async function handleRoulette(interaction, db) {
+  const userId = interaction.user.id;
+  const color = interaction.options.getString("color", true);
+  const betRaw = interaction.options.getInteger("bet", true);
+  const user = await getOrCreateUser(db, userId);
+  if (!(await ensureNotJailed(interaction, user))) return;
+
+  const bet = clampInt(betRaw, 100, 500000);
+  if (!bet || Number(user.money) < bet) {
+    await interaction.reply({ content: "Не хватает виртов.", ephemeral: true }); return;
+  }
+
+  await interaction.deferReply();
+
+  const number = randInt(0, 36);
+  const isGreen = number === 0;
+  const isRed = !isGreen && number % 2 === 1;
+  const isBlack = !isGreen && !isRed;
+  const resultColor = isGreen ? "green" : isRed ? "red" : "black";
+  const colorEmoji = { red: "🔴", black: "⚫", green: "🟢" };
+  const colorName = { red: "Красное", black: "Чёрное", green: "Зелёное" };
+
+  let net = -bet;
+  if (color === resultColor) {
+    const mult = color === "green" ? 14 : 2;
+    net = bet * mult - bet;
+  }
+
+  await withTransaction(db, async () => {
+    await adjustMoney(db, userId, net);
+    await addLedger(db, "roulette", userId, null, Math.abs(net), { color, resultColor, number, bet });
+  });
+
+  const after = await getUserRow(db, userId);
+  const won = net > 0;
+  await interaction.editReply(
+    `🎰 **Рулетка Caligula's Palace**\n\n` +
+    `Шарик: ${colorEmoji[resultColor]} **${number}** (${colorName[resultColor]})\n` +
+    `Твоя ставка: ${colorEmoji[color]} ${colorName[color]}\n\n` +
+    `${won ? `🎉 Выигрыш: **+${fmtMoney(net)}**` : net === 0 ? "🤝 Возврат ставки" : `💨 Проигрыш: **-${fmtMoney(bet)}**`}\n` +
+    `Баланс: **${fmtMoney(after.money)}**`
+  );
+}
+
 async function handleSampLifeCommand({ interaction, db }) {
   const name = interaction.commandName;
 
@@ -1161,11 +1442,19 @@ async function handleSampLifeCommand({ interaction, db }) {
     if (name === "bail") return await handleBail(interaction, db);
     if (name === "richest") return await handleRichest(interaction, db);
     if (name === "daily") return await handleDaily(interaction, db);
+    if (name === "pay") return await handlePay(interaction, db);
+    if (name === "slots") return await handleSlots(interaction, db);
+    if (name === "blackjack") return await handleBlackjack(interaction, db);
+    if (name === "roulette") return await handleRoulette(interaction, db);
 
     await interaction.reply({ content: "Неизвестная команда SAMP Life.", ephemeral: true });
   } catch (e) {
     if (String(e.message) === "INSUFFICIENT") {
       await interaction.reply({ content: "Не хватает виртов.", ephemeral: true });
+      return;
+    }
+    if (String(e.message) === "ALREADY_OWNED") {
+      await interaction.reply({ content: "У тебя уже есть эта тачка в гараже.", ephemeral: true });
       return;
     }
     // eslint-disable-next-line no-console
@@ -1178,7 +1467,7 @@ async function handleSampLifeCommand({ interaction, db }) {
   }
 }
 
-async function handleSampLifeAutocomplete(interaction) {
+async function handleSampLifeAutocomplete(interaction, db) {
   const commandName = interaction.commandName;
   const focused = interaction.options.getFocused(true);
   const query = String(focused.value || "").toLowerCase();
@@ -1218,12 +1507,14 @@ async function handleSampLifeAutocomplete(interaction) {
       value: id,
     }));
   } else if (commandName === "sellcar") {
-    choices = Object.entries(CARS)
-      .filter(([id]) => id !== "bicycle")
-      .map(([id, c]) => ({
-        name: `${c.name} (${id})`,
-        value: id,
-      }));
+    const userId = interaction.user.id;
+    const ownedCars = await dbAll(db, "SELECT car_id FROM samp_garage WHERE user_id = ?", [String(userId)]);
+    choices = (ownedCars || [])
+      .filter((r) => r.car_id !== "bicycle" && CARS[r.car_id])
+      .map((r) => {
+        const c = CARS[r.car_id];
+        return { name: `${c.name} (${r.car_id})`, value: r.car_id };
+      });
   }
 
   if (query) {

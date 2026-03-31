@@ -32,10 +32,10 @@ async function incrementReactionsGiven(db, guildId, userId) {
   await dbRun(
     db,
     `
-    INSERT INTO user_reactions (guild_id, user_id, reactions_given, reactions_received) 
-    VALUES (?, ?, 1, 0)
-    ON CONFLICT(guild_id, user_id) 
-    DO UPDATE SET reactions_given = reactions_given + 1
+    INSERT INTO user_reactions (guild_id, user_id, reactions_given, reactions_received, reactions_given_weekly, reactions_received_weekly)
+    VALUES (?, ?, 1, 0, 1, 0)
+    ON CONFLICT(guild_id, user_id)
+    DO UPDATE SET reactions_given = reactions_given + 1, reactions_given_weekly = reactions_given_weekly + 1
   `,
     [guildId, userId]
   );
@@ -48,10 +48,10 @@ async function incrementReactionsReceived(db, guildId, userId) {
   await dbRun(
     db,
     `
-    INSERT INTO user_reactions (guild_id, user_id, reactions_given, reactions_received) 
-    VALUES (?, ?, 0, 1)
-    ON CONFLICT(guild_id, user_id) 
-    DO UPDATE SET reactions_received = reactions_received + 1
+    INSERT INTO user_reactions (guild_id, user_id, reactions_given, reactions_received, reactions_given_weekly, reactions_received_weekly)
+    VALUES (?, ?, 0, 1, 0, 1)
+    ON CONFLICT(guild_id, user_id)
+    DO UPDATE SET reactions_received = reactions_received + 1, reactions_received_weekly = reactions_received_weekly + 1
   `,
     [guildId, userId]
   );

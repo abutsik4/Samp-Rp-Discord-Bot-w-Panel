@@ -189,6 +189,7 @@ function getTopUsers(guildId, limit) {
 
 const STATUS_ROTATION_ENABLED = (process.env.STATUS_ROTATION_ENABLED || "true").toLowerCase() === "true";
 const STATUS_ROTATION_INTERVAL_MINUTES = Number.parseInt(process.env.STATUS_ROTATION_INTERVAL_MINUTES || "35", 10);
+const STATUS_EMOJI_POOL = ["🚗", "🌴", "💨", "🎮", "⭐", "🔥", "🏁", "🎧", "🚓", "💚"];
 
 const STATUS_POOL = [
   // Playing — GTA SA миссии, локации, геймплей
@@ -232,11 +233,22 @@ const STATUS_POOL = [
   { type: ActivityType.Competing, name: "в гонке по шоссе" },
 ];
 
+function pickRandomStatusEmoji() {
+  return STATUS_EMOJI_POOL[Math.floor(Math.random() * STATUS_EMOJI_POOL.length)];
+}
+
+function decoratePresenceName(name) {
+  const prefixEmoji = pickRandomStatusEmoji();
+  const suffixEmoji = pickRandomStatusEmoji();
+  return `${prefixEmoji} ${name} ${suffixEmoji}`;
+}
+
 async function setRandomPresence(client) {
   if (!client?.user) return;
   const pick = STATUS_POOL[Math.floor(Math.random() * STATUS_POOL.length)];
+  const activity = { ...pick, name: decoratePresenceName(pick.name) };
   try {
-    client.user.setPresence({ status: "online", activities: [pick] });
+    client.user.setPresence({ status: "online", activities: [activity] });
   } catch (e) {
     console.warn("Presence update failed:", e?.message || e);
   }
