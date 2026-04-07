@@ -75,7 +75,7 @@ const AWARD_CATEGORIES = [
       sql: `SELECT to_user AS user_id, SUM(amount) AS val
             FROM samp_ledger
             WHERE to_user IS NOT NULL
-              AND type IN ('work', 'truck', 'rob', 'race', 'duel', 'daily_bonus')
+              AND type IN ('work', 'truck', 'rob', 'race', 'duel', 'daily_bonus', 'job', 'heist', 'property_income', 'business_run')
               AND ts >= ?
             GROUP BY to_user
             ORDER BY val DESC LIMIT 1`,

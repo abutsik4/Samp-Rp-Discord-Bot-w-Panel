@@ -60,6 +60,7 @@ const { ensurePerksTables } = require("./features/perks");
 const { ensureXpMultipliersTable } = require("./features/xp-multipliers");
 const { ensureSampExtendedTables } = require("./features/samp-extended");
 const { ensureSeasonalEventsTables } = require("./features/seasonal-events");
+const { ensureGiveawayTables } = require("./features/giveaway");
 
 // -------------------------
 // CONFIG / ENV
@@ -170,6 +171,7 @@ async function initDb() {
   await ensureXpMultipliersTable(db);
   await ensureSampExtendedTables(db);
   await ensureSeasonalEventsTables(db);
+  await ensureGiveawayTables(db);
 }
 
 initDb().catch((e) => {

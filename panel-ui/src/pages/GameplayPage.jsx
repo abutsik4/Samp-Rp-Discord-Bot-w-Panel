@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import {
   Gamepad2, TrendingUp, Award, Zap, Star, Users,
-  HelpCircle, Target, Radio, Map, Trash2, Save,
-  Pencil, RefreshCw, Plus,
+  HelpCircle, Target, Radio, Map, Trash2, Save, Building2, Shield,
+  Pencil, RefreshCw, Plus, History,
 } from "lucide-react";
 import { panelApi, formatApiError } from "../lib/api";
 import { Alert } from "../components/Alert";
@@ -84,6 +84,21 @@ export function GameplayPage({ bot }) {
   const [sampSuccess, setSampSuccess] = useState("");
   const [sampUserId, setSampUserId] = useState("");
   const [sampAdjust, setSampAdjust] = useState({ moneyDelta: 0, repDelta: 0, jailMinutes: 0 });
+  const [sampBusinessOverview, setSampBusinessOverview] = useState({ summary: {}, distribution: [], topOwners: [], atRisk: [] });
+  const [sampGangOverview, setSampGangOverview] = useState([]);
+  const [sampUserDetails, setSampUserDetails] = useState(null);
+  const [sampHistory, setSampHistory] = useState([]);
+  const [sampLiveOps, setSampLiveOps] = useState({
+    active_event_name: "",
+    active_event_message: "",
+    business_income_multiplier: 1,
+    business_run_multiplier: 1,
+    gang_support_cost_multiplier: 1,
+    rep_multiplier: 1,
+  });
+  const [sampLiveOpsPresets, setSampLiveOpsPresets] = useState([]);
+  const [sampTerritories, setSampTerritories] = useState([]);
+  const [sampPresetForm, setSampPresetForm] = useState({ name: "", preset_type: "weekend" });
 
   function flash(setFn, msg) {
     setFn(msg);
@@ -177,14 +192,45 @@ export function GameplayPage({ bot }) {
   async function loadSamp() {
     setSampError("");
     try {
-      const [su, sl] = await Promise.all([
+      const [su, sl, sh, bo, go, lo, presets, territories] = await Promise.all([
         panelApi.sampLifeUsers(bot.key, { limit: 100 }),
         panelApi.sampLifeLedger(bot.key, { limit: 100 }),
+        panelApi.sampLifeHistory(bot.key, { limit: 80 }),
+        panelApi.sampLifeBusinessOverview(bot.key),
+        panelApi.sampLifeGangOverview(bot.key),
+        panelApi.sampLifeLiveOps(bot.key),
+        panelApi.sampLifeLiveOpsPresets(bot.key),
+        panelApi.sampLifeTerritories(bot.key),
       ]);
       setSampUsers(su.items || []);
       setSampLedger(sl.items || []);
+      setSampHistory(sh.items || []);
+      setSampBusinessOverview(bo || { summary: {}, distribution: [], topOwners: [], atRisk: [] });
+      setSampGangOverview(go.items || []);
+      setSampLiveOpsPresets(presets.items || []);
+      setSampTerritories(territories.items || []);
+      setSampLiveOps(lo.config || {
+        active_event_name: "",
+        active_event_message: "",
+        business_income_multiplier: 1,
+        business_run_multiplier: 1,
+        gang_support_cost_multiplier: 1,
+        rep_multiplier: 1,
+      });
     } catch (e) {
       setSampError(formatApiError(e, "Failed to load SA-MP Life data"));
+    }
+  }
+
+  async function inspectSampUser(userId) {
+    if (!userId) return;
+    setSampError("");
+    try {
+      const data = await panelApi.sampLifeUser(bot.key, userId);
+      setSampUserDetails(data || null);
+      setSampUserId(userId);
+    } catch (e) {
+      setSampError(formatApiError(e, "Failed to inspect SA-MP user"));
     }
   }
 
@@ -847,6 +893,354 @@ export function GameplayPage({ bot }) {
       {/* SA-MP LIFE */}
       {tab === "samplife" && (
         <>
+          <SectionCard title="SA-MP Live Ops" icon={RefreshCw} description="Tune economy multipliers and announce temporary events without a code deploy.">
+            {sampLiveOps.active_event_name ? (
+              <Alert type="success">
+                Active event: <strong>{sampLiveOps.active_event_name}</strong>
+                {sampLiveOps.active_event_message ? ` - ${sampLiveOps.active_event_message}` : ""}
+              </Alert>
+            ) : null}
+            <div className="grid grid-2 mb-4">
+              <input
+                placeholder="Active event name"
+                value={sampLiveOps.active_event_name || ""}
+                onChange={(e) => setSampLiveOps((p) => ({ ...p, active_event_name: e.target.value }))}
+              />
+              <input
+                placeholder="Short event message"
+                value={sampLiveOps.active_event_message || ""}
+                onChange={(e) => setSampLiveOps((p) => ({ ...p, active_event_message: e.target.value }))}
+              />
+              <input
+                placeholder="Business income multiplier"
+                type="number"
+                min="0"
+                max="5"
+                step="0.05"
+                value={sampLiveOps.business_income_multiplier}
+                onChange={(e) => setSampLiveOps((p) => ({ ...p, business_income_multiplier: Number(e.target.value) }))}
+              />
+              <input
+                placeholder="Business run multiplier"
+                type="number"
+                min="0"
+                max="5"
+                step="0.05"
+                value={sampLiveOps.business_run_multiplier}
+                onChange={(e) => setSampLiveOps((p) => ({ ...p, business_run_multiplier: Number(e.target.value) }))}
+              />
+              <input
+                placeholder="Gang support cost multiplier"
+                type="number"
+                min="0"
+                max="5"
+                step="0.05"
+                value={sampLiveOps.gang_support_cost_multiplier}
+                onChange={(e) => setSampLiveOps((p) => ({ ...p, gang_support_cost_multiplier: Number(e.target.value) }))}
+              />
+              <input
+                placeholder="Rep multiplier"
+                type="number"
+                min="0"
+                max="10"
+                step="0.1"
+                value={sampLiveOps.rep_multiplier}
+                onChange={(e) => setSampLiveOps((p) => ({ ...p, rep_multiplier: Number(e.target.value) }))}
+              />
+            </div>
+            <div className="row-actions">
+              <button
+                onClick={async () => {
+                  try {
+                    const saved = await panelApi.saveSampLifeLiveOps(bot.key, { config: sampLiveOps });
+                    setSampLiveOps(saved.config || sampLiveOps);
+                    flash(setSampSuccess, "SA-MP live ops updated.");
+                    await loadSamp();
+                  } catch (e) {
+                    setSampError(formatApiError(e, "Failed to save SA-MP live ops"));
+                  }
+                }}
+              >
+                <Save size={13} /> Save live ops
+              </button>
+              <span className="text-muted text-sm">
+                Current multipliers: income {Number(sampLiveOps.business_income_multiplier || 1).toFixed(2)}x, runs {Number(sampLiveOps.business_run_multiplier || 1).toFixed(2)}x, rep {Number(sampLiveOps.rep_multiplier || 1).toFixed(2)}x.
+              </span>
+            </div>
+
+            <div className="grid grid-2" style={{ marginTop: 16 }}>
+              <SectionCard title="Saved Presets" icon={Save} description="Keep reusable weekend, holiday, and special event setups ready for one-click rollout.">
+                <div className="row-actions mb-4">
+                  <input
+                    placeholder="Preset name"
+                    value={sampPresetForm.name}
+                    onChange={(e) => setSampPresetForm((p) => ({ ...p, name: e.target.value }))}
+                  />
+                  <select
+                    value={sampPresetForm.preset_type}
+                    onChange={(e) => setSampPresetForm((p) => ({ ...p, preset_type: e.target.value }))}
+                  >
+                    <option value="weekend">Weekend</option>
+                    <option value="holiday">Holiday</option>
+                    <option value="special">Special Event</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                  <button
+                    onClick={async () => {
+                      try {
+                        const saved = await panelApi.saveSampLifeLiveOpsPreset(bot.key, {
+                          preset: {
+                            ...sampPresetForm,
+                            config: sampLiveOps,
+                          },
+                        });
+                        setSampLiveOpsPresets(saved.items || []);
+                        setSampPresetForm({ name: "", preset_type: "weekend" });
+                        flash(setSampSuccess, "Live ops preset saved.");
+                      } catch (e) {
+                        setSampError(formatApiError(e, "Failed to save live ops preset"));
+                      }
+                    }}
+                  >
+                    <Save size={13} /> Save current as preset
+                  </button>
+                </div>
+                {sampLiveOpsPresets.length === 0 ? (
+                  <EmptyState icon={Save} title="No presets saved" />
+                ) : (
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <thead><tr><th>Name</th><th>Type</th><th>Event</th><th>Income</th><th>Runs</th><th>Rep</th><th></th></tr></thead>
+                      <tbody>
+                        {sampLiveOpsPresets.map((preset) => (
+                          <tr key={preset.id}>
+                            <td>{preset.name}{preset.is_default ? " *" : ""}</td>
+                            <td>{preset.preset_type}</td>
+                            <td>{preset.config?.active_event_name || "—"}</td>
+                            <td>{Number(preset.config?.business_income_multiplier || 1).toFixed(2)}x</td>
+                            <td>{Number(preset.config?.business_run_multiplier || 1).toFixed(2)}x</td>
+                            <td>{Number(preset.config?.rep_multiplier || 1).toFixed(2)}x</td>
+                            <td>
+                              <div className="row-actions">
+                                <button
+                                  className="btn--ghost btn--sm"
+                                  onClick={async () => {
+                                    try {
+                                      const applied = await panelApi.applySampLifeLiveOpsPreset(bot.key, preset.id);
+                                      setSampLiveOps(applied.config || sampLiveOps);
+                                      flash(setSampSuccess, `Preset applied: ${preset.name}.`);
+                                      await loadSamp();
+                                    } catch (e) {
+                                      setSampError(formatApiError(e, "Failed to apply live ops preset"));
+                                    }
+                                  }}
+                                >
+                                  Apply
+                                </button>
+                                <button
+                                  className="btn--icon btn--danger-icon"
+                                  title="Delete"
+                                  onClick={async () => {
+                                    try {
+                                      const deleted = await panelApi.deleteSampLifeLiveOpsPreset(bot.key, preset.id);
+                                      setSampLiveOpsPresets(deleted.items || []);
+                                      flash(setSampSuccess, `Preset deleted: ${preset.name}.`);
+                                    } catch (e) {
+                                      setSampError(formatApiError(e, "Failed to delete live ops preset"));
+                                    }
+                                  }}
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </SectionCard>
+
+              <SectionCard title="Territory Control" icon={Map} description="Track which gangs own districts and how many businesses are getting the local buff.">
+                {sampTerritories.length === 0 ? (
+                  <EmptyState icon={Map} title="No territory data" />
+                ) : (
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <thead><tr><th>District</th><th>Controller</th><th>Pressure</th><th>Buff</th><th>Businesses</th><th>Controlled</th></tr></thead>
+                      <tbody>
+                        {sampTerritories.map((territory) => (
+                          <tr key={territory.district_id}>
+                            <td>{territory.district_name}</td>
+                            <td>{territory.gang_name ? `[${territory.gang_tag}] ${territory.gang_name}` : "Neutral"}</td>
+                            <td>{territory.pressure}%</td>
+                            <td>+{territory.business_buff_pct}%</td>
+                            <td>{territory.owned_businesses}/{territory.business_count}</td>
+                            <td>{territory.controlled_businesses}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </SectionCard>
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Business Economy Overview" icon={Building2} description="Monitor the health of the business economy and identify where manual balancing is needed.">
+            <div className="grid grid-3 mb-4">
+              <div className="card stat-card">
+                <div className="stat-card__label">Businesses Owned</div>
+                <div className="stat-card__value">{sampBusinessOverview.summary?.total_businesses || 0}</div>
+              </div>
+              <div className="card stat-card">
+                <div className="stat-card__label">Active Owners</div>
+                <div className="stat-card__value">{sampBusinessOverview.summary?.total_owners || 0}</div>
+              </div>
+              <div className="card stat-card">
+                <div className="stat-card__label">Avg Condition</div>
+                <div className="stat-card__value">{Number(sampBusinessOverview.summary?.avg_condition || 0).toFixed(1)}%</div>
+              </div>
+              <div className="card stat-card">
+                <div className="stat-card__label">Avg Supplies</div>
+                <div className="stat-card__value">{Number(sampBusinessOverview.summary?.avg_supplies || 0).toFixed(1)}%</div>
+              </div>
+              <div className="card stat-card">
+                <div className="stat-card__label">At Risk</div>
+                <div className="stat-card__value">{sampBusinessOverview.summary?.at_risk || 0}</div>
+              </div>
+              <div className="card stat-card">
+                <div className="stat-card__label">Gang-Boosted</div>
+                <div className="stat-card__value">{sampBusinessOverview.summary?.boosted_businesses || 0}</div>
+              </div>
+            </div>
+
+            <div className="grid grid-2">
+              <SectionCard title="Business Distribution" icon={Building2}>
+                {(sampBusinessOverview.distribution || []).length === 0 ? (
+                  <EmptyState icon={Building2} title="No businesses yet" />
+                ) : (
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <thead><tr><th>Business</th><th>District</th><th>Owned</th><th>Avg cond.</th><th>Avg supply</th><th>Total collected</th></tr></thead>
+                      <tbody>
+                        {(sampBusinessOverview.distribution || []).map((row) => (
+                          <tr key={row.property_id}>
+                            <td>{row.property_id}</td>
+                            <td>{row.district_name || row.district || "—"}</td>
+                            <td>{row.owned}</td>
+                            <td>{row.avg_condition}%</td>
+                            <td>{row.avg_supplies}%</td>
+                            <td>{row.total_collected}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </SectionCard>
+
+              <SectionCard title="Top Owners" icon={Users}>
+                {(sampBusinessOverview.topOwners || []).length === 0 ? (
+                  <EmptyState icon={Users} title="No owners yet" />
+                ) : (
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <thead><tr><th>User</th><th>Businesses</th><th>Total collected</th><th>Avg cond.</th><th>Avg supply</th></tr></thead>
+                      <tbody>
+                        {(sampBusinessOverview.topOwners || []).map((row) => (
+                          <tr key={row.user_id}>
+                            <td>{row.user_id}</td>
+                            <td>{row.businesses_owned}</td>
+                            <td>{row.total_collected}</td>
+                            <td>{row.avg_condition}%</td>
+                            <td>{row.avg_supplies}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </SectionCard>
+            </div>
+
+            <SectionCard title="Businesses At Risk" icon={Target}>
+              {(sampBusinessOverview.atRisk || []).length === 0 ? (
+                <EmptyState icon={Target} title="No businesses at risk" />
+              ) : (
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead><tr><th>User</th><th>Business</th><th>Condition</th><th>Supplies</th><th>Gang boost</th><th></th></tr></thead>
+                    <tbody>
+                      {(sampBusinessOverview.atRisk || []).map((row) => (
+                        <tr key={`${row.user_id}-${row.property_id}`}>
+                          <td>{row.user_id}</td>
+                          <td>{row.property_id}</td>
+                          <td>{row.condition}%</td>
+                          <td>{row.supplies}%</td>
+                          <td>{row.gang_boost_until ? "yes" : "no"}</td>
+                          <td>
+                            <button className="btn--ghost btn--sm" onClick={() => inspectSampUser(row.user_id)}>
+                              Inspect
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </SectionCard>
+          </SectionCard>
+
+          <SectionCard title="Gang Business Support" icon={Shield} description="See which gangs have treasury to influence the economy and who is actively backing businesses.">
+            {(sampGangOverview || []).length === 0 ? (
+              <EmptyState icon={Shield} title="No gangs yet" />
+            ) : (
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead><tr><th>Gang</th><th>Treasury</th><th>Territories</th><th>Members</th><th>Supported businesses</th></tr></thead>
+                  <tbody>
+                    {(sampGangOverview || []).map((row) => (
+                      <tr key={row.id}>
+                        <td>[{row.tag}] {row.name}</td>
+                        <td>{row.treasury}</td>
+                        <td>{row.territories || 0}</td>
+                        <td>{row.members}</td>
+                        <td>{row.supported_businesses}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </SectionCard>
+
+          <SectionCard title="Turf Wars & Live Ops History" icon={History} description="Recent district takeovers, gang support actions, presets, and manual economy changes.">
+            {sampHistory.length === 0 ? (
+              <EmptyState icon={History} title="No recent gameplay history" />
+            ) : (
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead><tr><th>Time</th><th>Category</th><th>Event</th><th>Actor</th><th>Target</th><th>Amount</th></tr></thead>
+                  <tbody>
+                    {sampHistory.map((row) => (
+                      <tr key={row.id}>
+                        <td>{row.ts}</td>
+                        <td>{row.category}</td>
+                        <td>{row.summary}</td>
+                        <td>{row.actor || row.from_user || "—"}</td>
+                        <td>{row.target || row.to_user || "—"}</td>
+                        <td>{row.amount || 0}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </SectionCard>
+
           <SectionCard title="SA-MP Life Users" icon={Map}>
             {sampError && <Alert type="error">{sampError}</Alert>}
             {sampSuccess && <Alert type="success">{sampSuccess}</Alert>}
@@ -880,6 +1274,7 @@ export function GameplayPage({ bot }) {
                     await panelApi.adjustSampLifeUser(bot.key, sampUserId, sampAdjust);
                     flash(setSampSuccess, "Adjustment applied.");
                     await loadSamp();
+                    if (sampUserId) await inspectSampUser(sampUserId);
                   } catch (e) {
                     setSampError(formatApiError(e, "Failed to apply adjustment"));
                   }
@@ -887,20 +1282,29 @@ export function GameplayPage({ bot }) {
               >
                 Apply
               </button>
+              <button className="btn--ghost" onClick={() => inspectSampUser(sampUserId)}>
+                Inspect
+              </button>
             </div>
             {sampUsers.length === 0 ? (
               <EmptyState icon={Map} title="No SA-MP Life data" />
             ) : (
               <div className="table-wrap">
                 <table className="data-table">
-                  <thead><tr><th>User</th><th>Money</th><th>Rep</th><th>Jail until</th></tr></thead>
+                  <thead><tr><th>User</th><th>Money</th><th>Rep</th><th>Businesses</th><th>Jail until</th><th></th></tr></thead>
                   <tbody>
                     {sampUsers.map((r) => (
                       <tr key={r.user_id}>
                         <td>{r.user_id}</td>
                         <td>{r.money}</td>
                         <td>{r.rep}</td>
+                        <td>{r.businesses_owned || 0}</td>
                         <td>{r.jail_until || "—"}</td>
+                        <td>
+                          <button className="btn--ghost btn--sm" onClick={() => inspectSampUser(r.user_id)}>
+                            Inspect
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -908,6 +1312,72 @@ export function GameplayPage({ bot }) {
               </div>
             )}
           </SectionCard>
+
+          {sampUserDetails && (
+            <SectionCard title={`SA-MP User Details: ${sampUserDetails.user?.user_id || sampUserId}`} icon={Map} description="Inventory, cooldowns, and business state for the selected player.">
+              <div className="grid grid-3 mb-4">
+                <div className="card stat-card">
+                  <div className="stat-card__label">Money</div>
+                  <div className="stat-card__value">{sampUserDetails.user?.money ?? 0}</div>
+                </div>
+                <div className="card stat-card">
+                  <div className="stat-card__label">Rep</div>
+                  <div className="stat-card__value">{sampUserDetails.user?.rep ?? 0}</div>
+                </div>
+                <div className="card stat-card">
+                  <div className="stat-card__label">Businesses</div>
+                  <div className="stat-card__value">{(sampUserDetails.businesses || []).length}</div>
+                </div>
+              </div>
+
+              <div className="grid grid-2">
+                <SectionCard title="Businesses" icon={Building2}>
+                  {(sampUserDetails.businesses || []).length === 0 ? (
+                    <EmptyState icon={Building2} title="No businesses owned" />
+                  ) : (
+                    <div className="table-wrap">
+                      <table className="data-table">
+                        <thead><tr><th>Business</th><th>District</th><th>Condition</th><th>Supplies</th><th>Total collected</th><th>Gang boost</th><th>Territory</th></tr></thead>
+                        <tbody>
+                          {(sampUserDetails.businesses || []).map((row) => (
+                            <tr key={row.property_id}>
+                              <td>{row.property_id}</td>
+                              <td>{row.district_name || row.district || "—"}</td>
+                              <td>{row.condition}%</td>
+                              <td>{row.supplies}%</td>
+                              <td>{row.total_collected}</td>
+                              <td>{row.gang_boost_until || "—"}</td>
+                              <td>{row.territory_gang_name ? `${row.territory_gang_name} (+${row.territory_buff_pct}%)` : "Neutral"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </SectionCard>
+
+                <SectionCard title="Cooldowns" icon={RefreshCw}>
+                  {(sampUserDetails.cooldowns || []).length === 0 ? (
+                    <EmptyState icon={RefreshCw} title="No cooldowns" />
+                  ) : (
+                    <div className="table-wrap">
+                      <table className="data-table">
+                        <thead><tr><th>Action</th><th>Ready at</th></tr></thead>
+                        <tbody>
+                          {(sampUserDetails.cooldowns || []).map((row) => (
+                            <tr key={row.action}>
+                              <td>{row.action}</td>
+                              <td>{row.ready_at}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </SectionCard>
+              </div>
+            </SectionCard>
+          )}
 
           <SectionCard title="SA-MP Ledger" icon={Map} description="Transaction history.">
             {sampLedger.length === 0 ? (

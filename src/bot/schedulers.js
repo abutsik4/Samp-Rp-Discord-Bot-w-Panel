@@ -15,6 +15,7 @@ const { syncMissingMessages, getWatermark, initializeWatermark } = require("../f
 const { SAMPStatusTracker } = require("../features/samp-status");
 const { postWeeklyAwards, rotateWeeklyRoles, grantWeeklyRewards, resetWeeklyCounters, getWeekStart } = require("../features/weekly-awards");
 const { drawLottery } = require("../features/samp-extended");
+const { launchGiveaway, scheduleGiveawayEnd } = require("../features/giveaway");
 
 /**
  * Start all schedulers. Call once inside `client.once("ready")`.
@@ -451,6 +452,22 @@ async function startSchedulers(ctx) {
     }
   }
   console.log(`[SAMP] Tracker initialization complete. Active: ${client.sampTrackers.size}`);
+
+  // ── April Fools 2026 Giveaway ─────────────────────────────────
+  {
+    const now = new Date();
+    if (now.getMonth() === 3 && now.getDate() === 1 && now.getFullYear() === 2026) {
+      const GIVEAWAY_CHANNEL_ID = "541024157681319957";
+      const GIVEAWAY_GUILD_ID = "537187880842559499";
+      console.log("[Giveaway] April Fools 2026 — launching giveaway...");
+      try {
+        await launchGiveaway(client, GIVEAWAY_CHANNEL_ID, db);
+        scheduleGiveawayEnd(client, db, GIVEAWAY_CHANNEL_ID, GIVEAWAY_GUILD_ID);
+      } catch (err) {
+        console.error("[Giveaway] Launch failed:", err);
+      }
+    }
+  }
 
   return { holidaysScheduler };
 }

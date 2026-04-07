@@ -15,7 +15,9 @@ function makeDb() {
 function makeInteractionSafe(args) {
   const base = { ...args };
   let replied = false;
+  let deferred = false;
   let lastReply = null;
+  let lastEditReply = null;
   let lastFollowUp = null;
 
   const interaction = {
@@ -49,17 +51,26 @@ function makeInteractionSafe(args) {
     },
     deferred: false,
     replied: false,
+    deferReply: async () => {
+      deferred = true;
+      interaction.deferred = true;
+      return null;
+    },
     reply: async (payload) => {
       replied = true;
       lastReply = payload;
       interaction.replied = true;
       return null;
     },
+    editReply: async (payload) => {
+      lastEditReply = payload;
+      return null;
+    },
     followUp: async (payload) => {
       lastFollowUp = payload;
       return null;
     },
-    __getState: () => ({ replied, lastReply, lastFollowUp }),
+    __getState: () => ({ replied, deferred, lastReply, lastEditReply, lastFollowUp }),
   };
 
   return interaction;
@@ -114,7 +125,7 @@ test("/work pays and enforces cooldown", async () => {
     await handleSampLifeCommand({ interaction: w1, db });
 
     const uAfter = await dbGet(db, "SELECT money FROM samp_users WHERE user_id = 'u2'");
-    assert.ok(uAfter.money >= 600 && uAfter.money <= 1000);
+    assert.ok(uAfter.money >= 610 && uAfter.money <= 1050);
 
     // Same time => cooldown
     const w2 = makeInteractionSafe({ commandName: "work", userId: "u2", username: "Bob" });

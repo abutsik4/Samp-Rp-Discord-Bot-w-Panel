@@ -563,11 +563,52 @@ export const panelApi = {
   sampLifeUser(botKey, userId) {
     return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/gameplay/samp-life/user/${encodeURIComponent(userId)}`, { method: "GET" });
   },
+  sampLifeBusinessOverview(botKey) {
+    return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/gameplay/samp-life/businesses/overview`, { method: "GET" });
+  },
+  sampLifeLiveOps(botKey) {
+    return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/gameplay/samp-life/live-ops`, { method: "GET" });
+  },
+  saveSampLifeLiveOps(botKey, payload) {
+    return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/gameplay/samp-life/live-ops`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  sampLifeLiveOpsPresets(botKey) {
+    return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/gameplay/samp-life/live-ops/presets`, { method: "GET" });
+  },
+  saveSampLifeLiveOpsPreset(botKey, payload) {
+    return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/gameplay/samp-life/live-ops/presets`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  applySampLifeLiveOpsPreset(botKey, presetId) {
+    return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/gameplay/samp-life/live-ops/presets/${encodeURIComponent(presetId)}/apply`, {
+      method: "POST",
+    });
+  },
+  deleteSampLifeLiveOpsPreset(botKey, presetId) {
+    return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/gameplay/samp-life/live-ops/presets/${encodeURIComponent(presetId)}`, {
+      method: "DELETE",
+    });
+  },
+  sampLifeTerritories(botKey) {
+    return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/gameplay/samp-life/territories/overview`, { method: "GET" });
+  },
+  sampLifeGangOverview(botKey) {
+    return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/gameplay/samp-life/gangs/overview`, { method: "GET" });
+  },
   adjustSampLifeUser(botKey, userId, payload) {
     return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/gameplay/samp-life/user/${encodeURIComponent(userId)}/adjust`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
+  },
+  sampLifeHistory(botKey, params) {
+    const query = new URLSearchParams(params || {}).toString();
+    return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/gameplay/samp-life/history${query ? `?${query}` : ""}`, { method: "GET" });
   },
   sampLifeLedger(botKey, params) {
     const query = new URLSearchParams(params || {}).toString();

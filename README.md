@@ -19,12 +19,15 @@ A production-grade, full-stack Discord bot platform for a Russian SA-MP roleplay
 
 > **🇷🇺 Весь интерфейс бота на русском языке** — команды, описания, уведомления и эмбеды полностью переведены на русский.
 
-## 🆕 Recent Updates (31 Mar 2026)
+## 🆕 Recent Updates (7 Apr 2026)
 
-- Added new feature modules: `src/features/samp-extended.js` and `src/features/seasonal-events.js`.
-- Expanded SA-MP gameplay logic and command flow updates in dispatcher/registration.
-- Updated automation and engagement paths: schedulers, perks, reactions, streaks, trivia, and weekly awards.
-- Refreshed runtime assets/configuration including Markov model data and PM2 ecosystem settings.
+- Added **gang territory control** with district ownership, takeover pressure, and passive buffs for nearby gang-owned businesses.
+- Added **managed business gameplay**: upkeep, supplies, manual `/bizrun` actions, gang-funded business support, co-op jobs, and heists.
+- Added **live-ops presets** in the gameplay panel for weekend, holiday, and special-event economy setups, plus focused history/logging for presets and manual adjustments.
+- Expanded the gameplay panel with **territory overview, turf-war history, business economy health, and SA-MP ledger/history views**.
+- Split the panel bundle into manual Vite chunks to reduce large-bundle warnings and keep panel assets cleaner in production.
+- Added a canonical **Discord docs sync workflow** via `npm run docs:commands-channel` for the public command channel and the separate admin-notes channel.
+- Added a persistent **giveaway system** with button participation, reward roles, and commemorative badge grants.
 
 ---
 
@@ -34,7 +37,7 @@ These are the engineering decisions and challenges that characterise this projec
 
 | Area | Detail |
 |------|--------|
-| **Full-stack solo build** | End-to-end ownership: Discord bot, REST API (17 route modules), React SPA (13 pages), DB schema (45+ tables), CI scripts, deployment |
+| **Full-stack solo build** | End-to-end ownership: Discord bot, REST API (18 route modules), React SPA (13 pages), DB schema (45+ tables), CI scripts, deployment |
 | **Real-time event pipeline** | Discord gateway events → security checks (automod, rate-limit) → atomic DB writes → XP/badge/perk side-effects, all within a single message handler |
 | **Robust message counting** | Custom reconciliation system that cross-references a `message_index` shadow table against `user_stats` to catch and repair discrepancies caused by deleted messages, bulk deletes, or Discord API gaps |
 | **Incremental & full backfill** | Resumable backfill engine with adaptive rate-limiting, thread support, and SQLite batch inserts — processes thousands of historical messages without data loss or duplication |
@@ -102,6 +105,11 @@ These are the engineering decisions and challenges that characterise this projec
 - **SA-MP Life** — Roleplay economy (`/reg`, `/work`, `/truck`, `/rob`, `/balance`)
 - **Dealership & Arsenal** — Buy cars and weapons (`/dealership`, `/buy`, `/weapon`)
 - **PvP & Trading** — Races, duels, and car sales (`/race`, `/duel`, `/sellcar`)
+- **Managed Businesses** — Buy, maintain, supply, and actively run businesses for higher payout (`/businesses`, `/buybiz`, `/collectincome`, `/maintainbiz`, `/bizrun`)
+- **Gangs & Territories** — Gang treasury, member support, district takeovers, and local business buffs (`/gang ...`)
+- **Jobs, Heists & Bounties** — Daily job board, co-op robberies, and wanted-player contracts (`/jobs`, `/dojob`, `/heist`, `/bounty`)
+- **Lottery, Black Market & Cosmetics** — Rare-item sinks and side-economy systems (`/lottery`, `/blackmarket`, `/shopcosmetics`)
+- **Live Ops Economy** — Runtime multipliers and event messaging controlled from the panel without redeploying the bot
 - **Daily Bonus** — Streak-based daily rewards up to $50K (`/daily`)
 - **Bail System** — Pay to leave jail early (`/bail`)
 - **Richest Players** — Top 10 wealthiest leaderboard (`/richest`)
@@ -131,7 +139,8 @@ These are the engineering decisions and challenges that characterise this projec
 - **Real-Time Dashboard** — Live server statistics & graphs
 - **Message Manager** — Create and send rich Discord embeds with full preview
 - **AI Configuration** — Control engagement settings, channels, and model stats
-- **Gameplay Management** — Full CRUD for levels, badges, perk rules, XP multipliers, trivia, wanted stars, radio votes, SA-MP Life economy
+- **Gameplay Management** — Full CRUD for levels, badges, perk rules, XP multipliers, trivia, wanted stars, radio votes, SA-MP Life economy, gangs, territories, and live-ops presets
+- **SA-MP Observability** — Territory timeline, live-ops/admin history, ledger inspection, business-risk tables, and per-user gameplay drill-down
 - **Accuracy Monitor** — Message counting accuracy, reconciliation status, per-user trace debugging
 - **Redesigned React SPA** — Full ground-up dark UI: lucide-react icons, recharts analytics, 8-component shared library (PageHeader, StatCard, SectionCard, DataTable, Alert, EmptyState, LoadingSkeleton, StatusBadge), page-level tab navigation throughout
 
@@ -143,7 +152,7 @@ These are the engineering decisions and challenges that characterise this projec
 
 The codebase follows a **thin orchestrator** pattern. The entry point (`src/index.js`, ~480 lines) creates resources and wires together self-contained modules — no pass-through imports between feature modules. Each module owns its own DB table schema, queries, and business logic, making it independently testable.
 
-The web layer uses a **parallel API + SPA** approach: the same Express app serves a React 19 SPA at `/panel` (built by Vite) while also exposing 17 route modules under `/panel/api/:botKey/*`. A backward-compatibility middleware normalises legacy URL patterns at the request level so existing clients continue to work transparently.
+The web layer uses a **parallel API + SPA** approach: the same Express app serves a React 19 SPA at `/panel` (built by Vite) while also exposing 18 route modules under `/panel/api/:botKey/*`. A backward-compatibility middleware normalises legacy URL patterns at the request level so existing clients continue to work transparently.
 
 ### Project Structure
 
@@ -157,7 +166,7 @@ The web layer uses a **parallel API + SPA** approach: the same Express app serve
 │   │   ├── helpers.js           # Shared utilities (formatting, plurals, etc.)
 │   │   ├── schedulers.js        # All periodic tasks (ML, reconciliation, cleanup)
 │   │   ├── discordClient.js     # Discord client factory
-│   │   ├── slashCommands.js     # Slash command registration (30+ commands)
+│   │   ├── slashCommands.js     # Slash command registration (70 commands)
 │   │   ├── statsDb.js           # Database query operations
 │   │   ├── commands/
 │   │   │   └── dispatcher.js    # Slash command dispatch
@@ -170,6 +179,8 @@ The web layer uses a **parallel API + SPA** approach: the same Express app serve
 │   │   ├── analytics.js         # Advanced analytics & daily stats
 │   │   ├── holidays.js          # Holiday system (calend.ru + manual)
 │   │   ├── samp-life.js         # SA-MP roleplay economy
+│   │   ├── samp-extended.js     # Businesses, gangs, territories, live ops presets
+│   │   ├── giveaway.js          # Persistent giveaway buttons, rewards, badges
 │   │   ├── levels.js            # XP & leveling system
 │   │   ├── badges.js            # User badge system (24 achievements)
 │   │   ├── perks.js             # Badge/level → Discord role rule engine
@@ -234,11 +245,11 @@ The web layer uses a **parallel API + SPA** approach: the same Express app serve
 | **Counting** | `message_count_events`, `message_count_errors`, `message_count_reference` |
 | **Features** | `user_streaks`, `user_milestones`, `user_reactions`, `user_badges`, `user_levels` |
 | **Gamification** | `badge_definitions`, `perk_rules`, `xp_role_multipliers` |
-| **Game** | `samp_users`, `samp_garage`, `samp_inventory`, `samp_cooldowns`, `samp_ledger` |
+| **Game** | `samp_users`, `samp_properties`, `samp_garage`, `samp_inventory`, `samp_cooldowns`, `samp_ledger`, `samp_gangs`, `samp_gang_members`, `samp_gang_territories`, `samp_live_ops`, `samp_live_ops_presets` |
 | **AI/ML** | `ai_engagement_settings`, `ai_ml_training_data`, `ai_ml_metadata` |
 | **Moderation** | `rate_limit_config`, `rate_limit_violations`, `banned_words`, `disabled_commands` |
 | **Panel** | `panel_users`, `panel_messages`, `panel_sent_items`, `panel_debug_reports`, `sessions` |
-| **Other** | `holidays`, `countdown_config`, `wanted_stars`, `trivia_scores`, `radio_votes`, `weekly_awards` |
+| **Other** | `holidays`, `countdown_config`, `wanted_stars`, `trivia_scores`, `radio_votes`, `weekly_awards`, `giveaway_participants` |
 
 ---
 
@@ -366,7 +377,7 @@ node src/panel-only.js
 | **Automation** | Command toggles, holidays, countdown, AI engagement config |
 | **Operations** | History/undo, debug reports, accuracy reconcile & trace |
 | **SA-MP Servers** | Live SA-MP server status monitoring |
-| **Gameplay Systems** | Levels, badges (definitions + user grants), perk rules, XP multipliers, trivia, wanted stars, radio votes, SA-MP Life economy |
+| **Gameplay Systems** | Levels, badges, perk rules, XP multipliers, trivia, wanted stars, radio votes, SA-MP Life users, businesses, gangs, territories, live ops presets, and focused gameplay history |
 | **User Management** | Create/delete panel users, role assignment, password resets *(Admin only)* |
 
 ### API Design
@@ -422,16 +433,52 @@ node src/panel-only.js
 | `/work` | Quick job (100–500$) |
 | `/truck` | Trucking run (2.5–6.5K$, risk of crash) |
 | `/rob` | Robbery attempt (2–10K$, risk of jail) |
+| `/pay user:<user> amount:<amount>` | Transfer money to another player |
 | `/daily` | Claim daily bonus (streak-based, up to $50K) |
 | `/bail` | Pay bail to leave jail early |
 | `/dealership` | Browse available cars and prices |
+| `/weaponshop` | Browse available weapons and damage values |
 | `/buy type:(car\|weapon) id:<id>` | Purchase a car or weapon |
 | `/weapon id:<id>` | Equip a weapon |
 | `/race @user bet:<amount>` | Street race for money |
 | `/duel @user bet:<amount>` | Armed duel for money |
 | `/sellcar user:@user car:<id> price:<$>` | Sell a car to another player |
 | `/buycar offer:<id>` | Accept a car purchase offer |
+| `/garage` | View owned vehicles and upgrades |
+| `/tunecar car:<id> upgrade:<id>` | Install tuning upgrades |
+| `/businesses` | Browse available businesses |
+| `/buybiz id:<id>` | Purchase a business |
+| `/collectincome` | Collect passive business revenue |
+| `/maintainbiz [id]` | Restore business condition and supplies |
+| `/bizrun id:<id>` | Perform an active shift on a business |
+| `/jobs` | View daily jobs |
+| `/dojob number:<1-3>` | Complete a listed job |
+| `/heist tier:<tier>` | Start a co-op heist |
+| `/bounty user:@user amount:<$>` | Put a bounty on a player |
+| `/bountylist` | View the wanted list |
+| `/gang ...` | Gang creation, invites, treasury, territories, and business support |
+| `/shopcosmetics` / `/buycosmetic id:<id>` | Cosmetic shop and purchases |
+| `/lottery buy [count]` / `/lottery info` | Lottery participation and status |
+| `/blackmarket browse` / `/blackmarket buy slot:<n>` | Black market inventory and purchases |
+| `/slots` / `/blackjack` / `/roulette` | Casino games and gambling commands |
+| `/repair` | Repair your currently equipped weapon |
+| `/events` | Show active event buffs and live-ops modifiers |
 | `/richest` | Top 10 wealthiest players |
+
+### Admin Commands
+
+| Command | Description |
+|---------|-------------|
+| `/whitelist add/remove/list/clear` | Manage the channel whitelist |
+| `/automod add/remove/list/clear` | Manage banned words |
+| `/undo [operation_id]` | Undo the last bulk operation |
+| `/history [limit]` | View recent bulk operations |
+| `/sampstatus add/remove/list/start/stop` | Manage SA-MP server trackers |
+| `/backfill [enhanced] [resume]` | Run historical backfill |
+| `/sync-missing` | Fill missed message gaps |
+| `/synccommands` | Re-register slash commands |
+| `/export` | Export stats to CSV |
+| `/demoembed` | Test embed send/edit flow |
 
 ### Radio Commands
 
@@ -458,7 +505,7 @@ node src/panel-only.js
 | **AI/ML** | Markov chains (order-2), keyword-based sentiment analysis |
 | **Frontend** | React 19, React Router 7, Vite 7, lucide-react (icons), recharts (charts), dark-only CSS custom property design system |
 | **Logging** | Custom structured logger, per-request trace IDs |
-| **Testing** | Node.js built-in test runner, 33 unit tests + integration suite |
+| **Testing** | Node.js built-in test runner, 39 unit tests + integration suite |
 
 ---
 
@@ -486,6 +533,7 @@ pm2 start ecosystem.config.js --watch
 | `npm run ui:dev` | Start Vite dev server for panel SPA |
 | `npm run ui:build` | Build panel SPA into `public/panel` |
 | `npm run build` | Alias for `ui:build` |
+| `npm run docs:commands-channel` | Refresh the canonical public/admin Discord docs posts |
 | `npm run check` | Syntax-check entrypoint (`node --check`) |
 | `npm test` | Run unit tests (`node --test`) |
 | `npm run test:integration` | Run DB/query integration checks |
@@ -502,6 +550,7 @@ npm test
 # Specific suite
 node --test src/features/robust-message-counting.test.js
 node --test src/features/samp-life.test.js
+node --test src/features/samp-extended.test.js
 
 # Integration tests (requires server running)
 npm run test:integration
@@ -532,6 +581,7 @@ node scripts/backfill-daily-stats.js              # Backfill daily_channel_stats
 node scripts/migrate-analytics-schema.js          # Apply analytics schema migrations
 node scripts/verify-counts-from-search.js         # Verify from Discord search
 node scripts/verify-analytics.js                  # Verify analytics data quality
+node scripts/update-commands-and-post-guide.js    # Refresh public/admin Discord command docs
 node scripts/trace-message-counting.js user <id> --guild <gid>   # Trace user
 node scripts/trace-message-counting.js message <id> --guild <gid> # Trace message
 ```

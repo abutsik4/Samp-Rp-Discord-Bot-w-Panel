@@ -18,6 +18,7 @@ const { handleEventsCommand } = require("../../features/seasonal-events");
 const { getUserBadges, getBadgeDefinitions } = require("../../features/badges");
 const { SAMPStatusTracker } = require("../../features/samp-status");
 const { getLeaderboard } = require("../../features/leaderboard-cache");
+const { handleGiveawayButton } = require("../../features/giveaway");
 
 /**
  * Register the interactionCreate handler for slash command dispatch.
@@ -35,6 +36,17 @@ function registerCommandHandlers(ctx) {
   } = ctx;
 
   client.on("interactionCreate", async (interaction) => {
+    console.log(`[dispatch] interaction received: type=${interaction.type} customId=${interaction.customId || "-"}`);
+    // Handle giveaway button clicks
+    if (interaction.isButton()) {
+      try {
+        const handled = await handleGiveawayButton(interaction);
+        if (handled) return;
+      } catch (e) {
+        console.error("[giveaway] button error", e);
+      }
+    }
+
     // Handle autocomplete for SAMP Life commands
     if (interaction.isAutocomplete()) {
       if (["buy", "weapon", "sellcar"].includes(interaction.commandName)) {
@@ -43,7 +55,7 @@ function registerCommandHandlers(ctx) {
         } catch (e) {
           console.error("[samp-life] autocomplete error", e);
         }
-      } else if (["buybiz", "tunecar", "buycosmetic"].includes(interaction.commandName)) {
+      } else if (["buybiz", "maintainbiz", "bizrun", "tunecar", "buycosmetic", "gang"].includes(interaction.commandName)) {
         try {
           await handleSampExtendedAutocomplete(interaction, db);
         } catch (e) {
@@ -107,6 +119,7 @@ function registerCommandHandlers(ctx) {
     if (
       [
         "businesses", "buybiz", "collectincome",
+        "maintainbiz", "bizrun",
         "tunecar", "garage",
         "bounty", "bountylist",
         "heist",
@@ -1006,6 +1019,7 @@ function registerCommandHandlers(ctx) {
         streak: { label: "🔥 Стрики", items: [] },
         reactions_given: { label: "👍 Реакции (отправлено)", items: [] },
         reactions_received: { label: "❤️ Реакции (получено)", items: [] },
+        event: { label: "🎉 Особые", items: [] },
       };
 
       for (const def of allDefs) {

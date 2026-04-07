@@ -7,7 +7,7 @@ const { updateStreak, getStreak } = require("../../features/streaks");
 const { incrementWeeklyCount, decrementWeeklyCount } = require("../../features/weekly-stats");
 const { checkMilestone } = require("../../features/milestones");
 const { awardMessageXP } = require("../../features/levels");
-const { checkAndAwardBadges } = require("../../features/badges");
+const { checkAndAwardBadges, awardBadge, upsertBadgeDefinition } = require("../../features/badges");
 const { getUserReactionStats, incrementReactionsGiven, incrementReactionsReceived } = require("../../features/reactions");
 const { getEngagementSettings, tryEngageWithMessage } = require("../../features/ai-engagement");
 const { updateWatermark } = require("../../features/incremental-sync");
@@ -57,6 +57,27 @@ function registerEventHandlers(ctx) {
       // Security pipeline (spam prevention, automod)
       const securityResult = await runSecurityPipeline(db, message, userRoles);
       if (securityResult.stop) return;
+
+      // April Fools 2026 badge — channel 541024085283700741, April 1st only
+      if (channelId === "541024085283700741") {
+        const now = new Date();
+        if (now.getMonth() === 3 && now.getDate() === 1) {
+          try {
+            // Ensure badge definition exists for this guild
+            await upsertBadgeDefinition(db, guildId, {
+              id: "april_fools_2026", type: "event", threshold: 0,
+              name: "Клоун Grove Street", emoji: "🤡",
+              description: "Попался 1 апреля 2026",
+            });
+            const awarded = await awardBadge(db, guildId, userId, "april_fools_2026");
+            if (awarded) {
+              try {
+                await message.channel.send(`🤡 <@${userId}> получил секретную ачивку: 🤡 **Клоун Grove Street**!`);
+              } catch {}
+            }
+          } catch {}
+        }
+      }
 
       // Channel whitelist check
       const whitelistedChannels = await dbAll(

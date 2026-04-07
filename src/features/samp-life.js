@@ -135,7 +135,11 @@ const COOLDOWNS_MS = {
   work: 60_000,
   truck: 15 * 60_000,
   rob: 10 * 60_000,
+  race: 5 * 60_000,
+  duel: 5 * 60_000,
 };
+
+const AUTOCOMPLETE_PAGE_SIZE = 25;
 
 // -------------------------
 // Helpers
@@ -179,6 +183,21 @@ function msToHuman(ms) {
   const r = s % 60;
   if (m <= 0) return `${r}с`;
   return `${m}м ${r}с`;
+}
+
+function getAutocompletePage(interaction) {
+  const rawPage = interaction.options.getInteger("page");
+  if (!Number.isInteger(rawPage) || rawPage < 1) return 1;
+  return rawPage;
+}
+
+function sliceAutocompleteChoices(choices, page) {
+  if (!choices.length) return [];
+
+  const totalPages = Math.max(1, Math.ceil(choices.length / AUTOCOMPLETE_PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const start = (safePage - 1) * AUTOCOMPLETE_PAGE_SIZE;
+  return choices.slice(start, start + AUTOCOMPLETE_PAGE_SIZE);
 }
 
 async function withTransaction(db, fn) {
@@ -444,7 +463,14 @@ function getSampLifeCommandBuilders() {
             { name: "Оружие", value: "weapon" }
           )
       )
-      .addStringOption((o) => o.setName("id").setDescription("ID (начни вводить для поиска)").setRequired(true).setAutocomplete(true)),
+      .addIntegerOption((o) =>
+        o
+          .setName("page")
+          .setDescription("Страница списка для автокомплита")
+          .setRequired(false)
+          .setMinValue(1)
+      )
+      .addStringOption((o) => o.setName("id").setDescription("ID (необязательно; без него покажу полный список)").setRequired(false).setAutocomplete(true)),
 
     new SlashCommandBuilder()
       .setName("race")
@@ -479,7 +505,14 @@ function getSampLifeCommandBuilders() {
     new SlashCommandBuilder()
       .setName("weapon")
       .setDescription("SAMP Life: выбрать активное оружие")
-      .addStringOption((o) => o.setName("id").setDescription("ID оружия").setRequired(true).setAutocomplete(true)),
+      .addIntegerOption((o) =>
+        o
+          .setName("page")
+          .setDescription("Страница списка для автокомплита")
+          .setRequired(false)
+          .setMinValue(1)
+      )
+      .addStringOption((o) => o.setName("id").setDescription("ID оружия (для длинного списка укажи page)").setRequired(true).setAutocomplete(true)),
 
     new SlashCommandBuilder().setName("weaponshop").setDescription("SAMP Life: магазин оружия Ammu-Nation (цены/урон)"),
 
@@ -569,7 +602,12 @@ async function handleWork(interaction, db) {
 
   const jobs = ["разносил пиццу", "мыл тачку босса", "грузил ящики в порту", "таскал колёса на шинке"]; 
   const job = pick(jobs);
-  const levelRow = await dbGet(db, "SELECT level FROM user_levels WHERE guild_id = ? AND user_id = ?", [interaction.guild?.id, userId]);
+  let levelRow = null;
+  try {
+    levelRow = await dbGet(db, "SELECT level FROM user_levels WHERE guild_id = ? AND user_id = ?", [interaction.guild?.id, userId]);
+  } catch (_) {
+    levelRow = null;
+  }
   const level = levelRow?.level || 1;
   const earnings = Math.floor(randInt(100, 500) * (1 + level * 0.1));
 
@@ -755,8 +793,20 @@ async function handleWeaponShop(interaction) {
 async function handleBuy(interaction, db) {
   const userId = interaction.user.id;
   const type = interaction.options.getString("type", true);
-  const idRaw = interaction.options.getString("id", true);
-  const id = String(idRaw).toLowerCase();
+  const idRaw = interaction.options.getString("id", false);
+  const id = idRaw ? String(idRaw).toLowerCase() : null;
+
+  if (!id) {
+    if (type === "car") {
+      await handleDealership(interaction);
+      return;
+    }
+
+    if (type === "weapon") {
+      await handleWeaponShop(interaction);
+      return;
+    }
+  }
 
   const user = await getOrCreateUser(db, userId);
   if (!(await ensureNotJailed(interaction, user))) return;
@@ -764,7 +814,7 @@ async function handleBuy(interaction, db) {
   if (type === "car") {
     const car = CARS[id];
     if (!car) {
-      await interaction.reply({ content: "Такой тачки нет в салоне.", ephemeral: true });
+      await interaction.reply({ content: "Такой тачки нет в салоне. Запусти /buy type:car без id, чтобы увидеть весь список.", ephemeral: true });
       return;
     }
 
@@ -789,7 +839,7 @@ async function handleBuy(interaction, db) {
   if (type === "weapon") {
     const weapon = ITEMS[id];
     if (!weapon) {
-      await interaction.reply({ content: "Такого оружия нет. Смотри /weaponshop для списка.", ephemeral: true });
+      await interaction.reply({ content: "Такого оружия нет. Запусти /buy type:weapon без id, чтобы увидеть весь список.", ephemeral: true });
       return;
     }
 
@@ -857,10 +907,30 @@ async function handleRace(interaction, db) {
   const p1 = await getOrCreateUser(db, userId);
   const p2 = await getOrCreateUser(db, opponent.id);
   if (!(await ensureNotJailed(interaction, p1))) return;
+
+  const userRaceCd = await getCooldown(db, userId, "race");
+  if (userRaceCd > nowMs()) {
+    await interaction.reply({ content: `⏳ Рано. Подожди **${msToHuman(userRaceCd - nowMs())}**.`, ephemeral: true });
+    return;
+  }
+
+  const opponentRaceCd = await getCooldown(db, opponent.id, "race");
+  if (opponentRaceCd > nowMs()) {
+    await interaction.reply({
+      content: `⏳ Игрок <@${opponent.id}> недавно участвовал в гонке. Попробуй через **${msToHuman(opponentRaceCd - nowMs())}**.`,
+      ephemeral: true,
+    });
+    return;
+  }
+
   if (Number(p1.money) < bet || Number(p2.money) < bet) {
     await interaction.reply({ content: "У кого-то нет денег на ставку.", ephemeral: true });
     return;
   }
+
+  const raceReadyAt = nowMs() + COOLDOWNS_MS.race;
+  await setCooldown(db, userId, "race", raceReadyAt);
+  await setCooldown(db, opponent.id, "race", raceReadyAt);
 
   const p1Car = carInfo(p1.car_id);
   const p2Car = carInfo(p2.car_id);
@@ -922,10 +992,29 @@ async function handleDuel(interaction, db) {
   const p2 = await getOrCreateUser(db, opponent.id);
   if (!(await ensureNotJailed(interaction, p1))) return;
 
+  const userDuelCd = await getCooldown(db, userId, "duel");
+  if (userDuelCd > nowMs()) {
+    await interaction.reply({ content: `⏳ Рано. Подожди **${msToHuman(userDuelCd - nowMs())}**.`, ephemeral: true });
+    return;
+  }
+
+  const opponentDuelCd = await getCooldown(db, opponent.id, "duel");
+  if (opponentDuelCd > nowMs()) {
+    await interaction.reply({
+      content: `⏳ Игрок <@${opponent.id}> недавно участвовал в дуэли. Попробуй через **${msToHuman(opponentDuelCd - nowMs())}**.`,
+      ephemeral: true,
+    });
+    return;
+  }
+
   if (Number(p1.money) < bet || Number(p2.money) < bet) {
     await interaction.reply({ content: "У кого-то нет денег на ставку.", ephemeral: true });
     return;
   }
+
+  const duelReadyAt = nowMs() + COOLDOWNS_MS.duel;
+  await setCooldown(db, userId, "duel", duelReadyAt);
+  await setCooldown(db, opponent.id, "duel", duelReadyAt);
 
   await interaction.deferReply();
 
@@ -1471,6 +1560,7 @@ async function handleSampLifeAutocomplete(interaction, db) {
   const commandName = interaction.commandName;
   const focused = interaction.options.getFocused(true);
   const query = String(focused.value || "").toLowerCase();
+  const page = getAutocompletePage(interaction);
 
   let choices = [];
 
@@ -1523,7 +1613,7 @@ async function handleSampLifeAutocomplete(interaction, db) {
     );
   }
 
-  await interaction.respond(choices.slice(0, 25));
+  await interaction.respond(sliceAutocompleteChoices(choices, page));
 }
 
 module.exports = {

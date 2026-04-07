@@ -14,10 +14,101 @@ const {
   upsertXpRoleMultiplier,
   deleteXpRoleMultiplier,
 } = require("../../features/xp-multipliers");
+const {
+  getSampLiveOpsConfig,
+  updateSampLiveOpsConfig,
+  listSampLiveOpsPresets,
+  upsertSampLiveOpsPreset,
+  deleteSampLiveOpsPreset,
+  applySampLiveOpsPreset,
+  listGangTerritories,
+  PROPERTIES,
+  TERRITORY_DISTRICTS,
+} = require("../../features/samp-extended");
 
 function createGameplayRouter(ctx) {
   const router = Router();
   const { PANEL_BASE, requireAuth, requireAdmin, apiLimiter, bots, dbRun, dbGet, dbAll, client } = ctx;
+  const SAMP_HISTORY_TYPES = {
+    territory: new Set([
+      "gang_territory_claim",
+      "gang_territory_attack",
+      "gang_territory_takeover",
+      "gang_territory_reinforce",
+      "gang_business_support",
+    ]),
+    liveOps: new Set([
+      "live_ops_update",
+      "live_ops_preset_save",
+      "live_ops_preset_apply",
+      "live_ops_preset_delete",
+    ]),
+    admin: new Set(["samp_admin_adjust"]),
+  };
+
+  function parseMetaJsonSafe(value) {
+    if (!value) return {};
+    try {
+      return JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+
+  function panelActor(req) {
+    const username = String(req.session?.user?.username || "system").trim();
+    return `panel:${username || "system"}`;
+  }
+
+  async function appendSampLedger(db, { type, fromUser = null, toUser = null, amount = 0, meta = {} }) {
+    await dbRun(
+      db,
+      `INSERT INTO samp_ledger(type, from_user, to_user, amount, meta_json) VALUES(?, ?, ?, ?, ?)`,
+      [type, fromUser, toUser, Number(amount || 0), JSON.stringify(meta || {})]
+    );
+  }
+
+  function summarizeSampHistory(row) {
+    const meta = parseMetaJsonSafe(row.meta_json);
+    const base = {
+      ...row,
+      meta,
+      category: "economy",
+      summary: row.type,
+      target: meta?.district_id || meta?.property_id || row.to_user || row.from_user || "-",
+      actor: row.from_user || "system",
+    };
+
+    if (SAMP_HISTORY_TYPES.territory.has(row.type)) {
+      base.category = "territory";
+      if (row.type === "gang_territory_claim") base.summary = `Захват района ${meta.district_id}`;
+      if (row.type === "gang_territory_attack") base.summary = `Атака на район ${meta.district_id}`;
+      if (row.type === "gang_territory_takeover") base.summary = `Перехват района ${meta.district_id}`;
+      if (row.type === "gang_territory_reinforce") base.summary = `Укрепление района ${meta.district_id}`;
+      if (row.type === "gang_business_support") base.summary = `Поддержка бизнеса ${meta.property_id}`;
+      base.target = meta.district_id || meta.property_id || row.to_user || "-";
+      return base;
+    }
+
+    if (SAMP_HISTORY_TYPES.liveOps.has(row.type)) {
+      base.category = "live-ops";
+      if (row.type === "live_ops_update") base.summary = `Обновлены live ops множители`;
+      if (row.type === "live_ops_preset_save") base.summary = `Сохранён пресет ${meta.name || meta.preset_name || ""}`.trim();
+      if (row.type === "live_ops_preset_apply") base.summary = `Применён пресет ${meta.name || meta.preset_name || ""}`.trim();
+      if (row.type === "live_ops_preset_delete") base.summary = `Удалён пресет ${meta.name || meta.preset_name || ""}`.trim();
+      base.target = meta.name || meta.preset_name || "-";
+      return base;
+    }
+
+    if (SAMP_HISTORY_TYPES.admin.has(row.type)) {
+      base.category = "admin";
+      base.summary = `Ручная правка игрока ${row.to_user || ""}`.trim();
+      base.target = row.to_user || "-";
+      return base;
+    }
+
+    return base;
+  }
 
   function resolveBot(req, res) {
     const bot = bots.find((b) => b.key === req.params.botKey);
@@ -504,7 +595,8 @@ function createGameplayRouter(ctx) {
       let rows;
       if (search) {
         rows = await dbAll(
-          `SELECT user_id, money, car_id, rep, jail_until, created_at, updated_at
+          `SELECT user_id, money, car_id, rep, jail_until, created_at, updated_at,
+                  (SELECT COUNT(*) FROM samp_properties sp WHERE sp.user_id = samp_users.user_id) AS businesses_owned
            FROM samp_users
            WHERE user_id LIKE ?
            ORDER BY money DESC
@@ -513,7 +605,8 @@ function createGameplayRouter(ctx) {
         );
       } else {
         rows = await dbAll(
-          `SELECT user_id, money, car_id, rep, jail_until, created_at, updated_at
+          `SELECT user_id, money, car_id, rep, jail_until, created_at, updated_at,
+                  (SELECT COUNT(*) FROM samp_properties sp WHERE sp.user_id = samp_users.user_id) AS businesses_owned
            FROM samp_users
            ORDER BY money DESC
            LIMIT ?`,
@@ -524,6 +617,225 @@ function createGameplayRouter(ctx) {
     } catch (e) {
       console.error("Gameplay SAMP users error:", e);
       return res.status(500).json({ error: e?.message || "Failed to list SAMP users" });
+    }
+  });
+
+  router.get(`${PANEL_BASE}/api/:botKey/gameplay/samp-life/businesses/overview`, requireAuth, apiLimiter, async (req, res) => {
+    if (!resolveBot(req, res)) return;
+
+    try {
+      const summary = await dbGet(
+        `SELECT COUNT(*) AS total_businesses,
+                COUNT(DISTINCT user_id) AS total_owners,
+                ROUND(AVG(condition), 1) AS avg_condition,
+                ROUND(AVG(supplies), 1) AS avg_supplies,
+                COALESCE(SUM(total_collected), 0) AS total_collected,
+                SUM(CASE WHEN condition < 60 OR supplies < 60 THEN 1 ELSE 0 END) AS at_risk,
+                SUM(CASE WHEN gang_boost_until IS NOT NULL AND gang_boost_until > datetime('now') THEN 1 ELSE 0 END) AS boosted_businesses
+         FROM samp_properties`
+      );
+
+      const distribution = await dbAll(
+        `SELECT property_id,
+                COUNT(*) AS owned,
+                ROUND(AVG(condition), 1) AS avg_condition,
+                ROUND(AVG(supplies), 1) AS avg_supplies,
+                COALESCE(SUM(total_collected), 0) AS total_collected
+         FROM samp_properties
+         GROUP BY property_id
+         ORDER BY owned DESC, total_collected DESC, property_id ASC`
+      );
+
+      const topOwners = await dbAll(
+        `SELECT user_id,
+                COUNT(*) AS businesses_owned,
+                COALESCE(SUM(total_collected), 0) AS total_collected,
+                ROUND(AVG(condition), 1) AS avg_condition,
+                ROUND(AVG(supplies), 1) AS avg_supplies
+         FROM samp_properties
+         GROUP BY user_id
+         ORDER BY total_collected DESC, businesses_owned DESC, user_id ASC
+         LIMIT 10`
+      );
+
+      const atRisk = await dbAll(
+        `SELECT user_id, property_id, condition, supplies, total_collected, last_collected, gang_boost_until
+         FROM samp_properties
+         WHERE condition < 60 OR supplies < 60
+         ORDER BY CASE WHEN condition < supplies THEN condition ELSE supplies END ASC,
+                  total_collected DESC
+         LIMIT 15`
+      );
+
+      return res.json({
+        summary: summary || {},
+        distribution: (distribution || []).map((row) => ({
+          ...row,
+          district: PROPERTIES[row.property_id]?.district || null,
+          district_name: PROPERTIES[row.property_id]?.district ? TERRITORY_DISTRICTS[PROPERTIES[row.property_id].district]?.name || PROPERTIES[row.property_id].district : null,
+        })),
+        topOwners: topOwners || [],
+        atRisk: atRisk || [],
+      });
+    } catch (e) {
+      console.error("Gameplay SAMP business overview error:", e);
+      return res.status(500).json({ error: e?.message || "Failed to get business overview" });
+    }
+  });
+
+  router.get(`${PANEL_BASE}/api/:botKey/gameplay/samp-life/live-ops`, requireAuth, apiLimiter, async (req, res) => {
+    if (!resolveBot(req, res)) return;
+
+    try {
+      const config = await getSampLiveOpsConfig(ctx.db);
+      return res.json({ config });
+    } catch (e) {
+      console.error("Gameplay SAMP live ops get error:", e);
+      return res.status(500).json({ error: e?.message || "Failed to get live ops config" });
+    }
+  });
+
+  router.get(`${PANEL_BASE}/api/:botKey/gameplay/samp-life/live-ops/presets`, requireAuth, apiLimiter, async (req, res) => {
+    if (!resolveBot(req, res)) return;
+
+    try {
+      const items = await listSampLiveOpsPresets(ctx.db);
+      return res.json({ items });
+    } catch (e) {
+      console.error("Gameplay SAMP live ops presets get error:", e);
+      return res.status(500).json({ error: e?.message || "Failed to get live ops presets" });
+    }
+  });
+
+  router.post(`${PANEL_BASE}/api/:botKey/gameplay/samp-life/live-ops/presets`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
+    if (!resolveBot(req, res)) return;
+
+    try {
+      const items = await upsertSampLiveOpsPreset(ctx.db, req.body?.preset || {});
+      const savedPreset = items.find((item) => item.name === String(req.body?.preset?.name || "").trim()) || null;
+      await appendSampLedger(ctx.db, {
+        type: "live_ops_preset_save",
+        fromUser: panelActor(req),
+        amount: 0,
+        meta: {
+          id: savedPreset?.id || null,
+          name: savedPreset?.name || String(req.body?.preset?.name || "").trim(),
+          preset_type: savedPreset?.preset_type || req.body?.preset?.preset_type || null,
+          config: savedPreset?.config || req.body?.preset?.config || {},
+        },
+      });
+      return res.json({ ok: true, items });
+    } catch (e) {
+      console.error("Gameplay SAMP live ops preset save error:", e);
+      return res.status(400).json({ error: e?.message || "Failed to save live ops preset" });
+    }
+  });
+
+  router.post(`${PANEL_BASE}/api/:botKey/gameplay/samp-life/live-ops/presets/:presetId/apply`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
+    if (!resolveBot(req, res)) return;
+
+    try {
+      const applied = await applySampLiveOpsPreset(ctx.db, req.params.presetId);
+      await appendSampLedger(ctx.db, {
+        type: "live_ops_preset_apply",
+        fromUser: panelActor(req),
+        amount: 0,
+        meta: {
+          id: applied?.preset?.id || null,
+          name: applied?.preset?.name || null,
+          preset_type: applied?.preset?.preset_type || null,
+          config: applied?.config || {},
+        },
+      });
+      return res.json({ ok: true, ...applied });
+    } catch (e) {
+      console.error("Gameplay SAMP live ops preset apply error:", e);
+      return res.status(400).json({ error: e?.message || "Failed to apply live ops preset" });
+    }
+  });
+
+  router.delete(`${PANEL_BASE}/api/:botKey/gameplay/samp-life/live-ops/presets/:presetId`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
+    if (!resolveBot(req, res)) return;
+
+    try {
+      const existing = await listSampLiveOpsPresets(ctx.db);
+      const targetPreset = (existing || []).find((item) => Number(item.id) === Number(req.params.presetId)) || null;
+      const items = await deleteSampLiveOpsPreset(ctx.db, req.params.presetId);
+      await appendSampLedger(ctx.db, {
+        type: "live_ops_preset_delete",
+        fromUser: panelActor(req),
+        amount: 0,
+        meta: {
+          id: targetPreset?.id || Number(req.params.presetId),
+          name: targetPreset?.name || null,
+          preset_type: targetPreset?.preset_type || null,
+        },
+      });
+      return res.json({ ok: true, items });
+    } catch (e) {
+      console.error("Gameplay SAMP live ops preset delete error:", e);
+      return res.status(400).json({ error: e?.message || "Failed to delete live ops preset" });
+    }
+  });
+
+  router.get(`${PANEL_BASE}/api/:botKey/gameplay/samp-life/territories/overview`, requireAuth, apiLimiter, async (req, res) => {
+    if (!resolveBot(req, res)) return;
+
+    try {
+      const items = await listGangTerritories(ctx.db);
+      return res.json({ items });
+    } catch (e) {
+      console.error("Gameplay SAMP territories overview error:", e);
+      return res.status(500).json({ error: e?.message || "Failed to get territories overview" });
+    }
+  });
+
+  router.post(`${PANEL_BASE}/api/:botKey/gameplay/samp-life/live-ops`, requireAuth, requireAdmin, apiLimiter, async (req, res) => {
+    if (!resolveBot(req, res)) return;
+
+    try {
+      const before = await getSampLiveOpsConfig(ctx.db);
+      const config = await updateSampLiveOpsConfig(ctx.db, req.body?.config || {});
+      await appendSampLedger(ctx.db, {
+        type: "live_ops_update",
+        fromUser: panelActor(req),
+        amount: 0,
+        meta: {
+          before,
+          after: config,
+        },
+      });
+      return res.json({ ok: true, config });
+    } catch (e) {
+      console.error("Gameplay SAMP live ops update error:", e);
+      return res.status(400).json({ error: e?.message || "Failed to update live ops config" });
+    }
+  });
+
+  router.get(`${PANEL_BASE}/api/:botKey/gameplay/samp-life/gangs/overview`, requireAuth, apiLimiter, async (req, res) => {
+    if (!resolveBot(req, res)) return;
+
+    try {
+      const rows = await dbAll(
+        `SELECT g.id,
+                g.name,
+                g.tag,
+                g.treasury,
+                COUNT(DISTINCT gm.user_id) AS members,
+                  COUNT(DISTINCT t.district_id) AS territories,
+                COUNT(DISTINCT CASE WHEN sp.gang_boost_until IS NOT NULL AND sp.gang_boost_until > datetime('now') THEN sp.user_id || ':' || sp.property_id END) AS supported_businesses
+         FROM samp_gangs g
+         LEFT JOIN samp_gang_members gm ON gm.gang_id = g.id
+                LEFT JOIN samp_gang_territories t ON t.gang_id = g.id
+         LEFT JOIN samp_properties sp ON sp.gang_boosted_by = g.id
+         GROUP BY g.id
+                ORDER BY territories DESC, g.treasury DESC, supported_businesses DESC, members DESC, g.name ASC
+         LIMIT 20`
+      );
+      return res.json({ items: rows || [] });
+    } catch (e) {
+      console.error("Gameplay SAMP gang overview error:", e);
+      return res.status(500).json({ error: e?.message || "Failed to get gang overview" });
     }
   });
 
@@ -543,8 +855,33 @@ function createGameplayRouter(ctx) {
       const inventory = await dbAll(`SELECT item_id, qty FROM samp_inventory WHERE user_id = ?`, [userId]);
       const garage = await dbAll(`SELECT car_id, acquired_at FROM samp_garage WHERE user_id = ? ORDER BY acquired_at DESC`, [userId]);
       const cooldowns = await dbAll(`SELECT action, ready_at FROM samp_cooldowns WHERE user_id = ?`, [userId]);
+      const territoryMap = new Map((await listGangTerritories(ctx.db)).map((item) => [item.district_id, item]));
+      const businesses = await dbAll(
+        `SELECT property_id, bought_at, last_collected, condition, supplies, last_maintained, last_state_tick, total_collected, gang_boost_until, gang_boosted_by
+         FROM samp_properties
+         WHERE user_id = ?
+         ORDER BY bought_at DESC`,
+        [userId]
+      );
 
-      return res.json({ user, inventory: inventory || [], garage: garage || [], cooldowns: cooldowns || [] });
+      return res.json({
+        user,
+        inventory: inventory || [],
+        garage: garage || [],
+        cooldowns: cooldowns || [],
+        businesses: (businesses || []).map((business) => {
+          const property = PROPERTIES[business.property_id] || null;
+          const territory = property?.district ? territoryMap.get(property.district) || null : null;
+          return {
+            ...business,
+            district: property?.district || null,
+            district_name: territory?.district_name || property?.district || null,
+            territory_gang_id: territory?.gang_id || null,
+            territory_gang_name: territory?.gang_name || null,
+            territory_buff_pct: territory?.business_buff_pct || 0,
+          };
+        }),
+      });
     } catch (e) {
       console.error("Gameplay SAMP user details error:", e);
       return res.status(500).json({ error: e?.message || "Failed to get SAMP user" });
@@ -561,6 +898,10 @@ function createGameplayRouter(ctx) {
     const jailMinutes = Number.parseInt(req.body?.jailMinutes || "0", 10) || 0;
 
     try {
+      const before = await dbGet(
+        `SELECT user_id, money, car_id, rep, jail_until, created_at, updated_at FROM samp_users WHERE user_id = ?`,
+        [userId]
+      );
       await dbRun(
         `INSERT OR IGNORE INTO samp_users (user_id, money, car_id, rep, jail_until)
          VALUES (?, 500, 'bicycle', 0, 0)`,
@@ -582,10 +923,58 @@ function createGameplayRouter(ctx) {
         `SELECT user_id, money, car_id, rep, jail_until, created_at, updated_at FROM samp_users WHERE user_id = ?`,
         [userId]
       );
+      if (moneyDelta !== 0 || repDelta !== 0 || jailMinutes > 0) {
+        await appendSampLedger(ctx.db, {
+          type: "samp_admin_adjust",
+          fromUser: panelActor(req),
+          toUser: userId,
+          amount: moneyDelta,
+          meta: {
+            before: before || null,
+            after: updated || null,
+            moneyDelta,
+            repDelta,
+            jailMinutes,
+          },
+        });
+      }
       return res.json({ ok: true, user: updated });
     } catch (e) {
       console.error("Gameplay SAMP adjust error:", e);
       return res.status(500).json({ error: e?.message || "Failed to adjust SAMP user" });
+    }
+  });
+
+  router.get(`${PANEL_BASE}/api/:botKey/gameplay/samp-life/history`, requireAuth, apiLimiter, async (req, res) => {
+    if (!resolveBot(req, res)) return;
+    const limit = Math.min(Math.max(parseInt(req.query.limit || "80", 10), 1), 200);
+    const category = String(req.query.category || "all").trim();
+
+    try {
+      let types = null;
+      if (category === "territory") {
+        types = [...SAMP_HISTORY_TYPES.territory];
+      } else if (category === "live-ops") {
+        types = [...SAMP_HISTORY_TYPES.liveOps];
+      } else if (category === "admin") {
+        types = [...SAMP_HISTORY_TYPES.admin];
+      } else {
+        types = [...new Set([...SAMP_HISTORY_TYPES.territory, ...SAMP_HISTORY_TYPES.liveOps, ...SAMP_HISTORY_TYPES.admin])];
+      }
+
+      const placeholders = types.map(() => "?").join(", ");
+      const rows = await dbAll(
+        `SELECT id, ts, type, from_user, to_user, amount, meta_json
+         FROM samp_ledger
+         WHERE type IN (${placeholders})
+         ORDER BY id DESC
+         LIMIT ?`,
+        [...types, limit]
+      );
+      return res.json({ items: (rows || []).map(summarizeSampHistory) });
+    } catch (e) {
+      console.error("Gameplay SAMP history error:", e);
+      return res.status(500).json({ error: e?.message || "Failed to get SAMP history" });
     }
   });
 

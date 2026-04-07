@@ -40,6 +40,10 @@ const BADGE_DEFINITIONS = [
   { id: "recv_50",    threshold: 50,   type: "reactions_received", name: "Народный любимец",  emoji: "❤️", description: "Получить 50 реакций" },
   { id: "recv_200",   threshold: 200,  type: "reactions_received", name: "Звезда сервера",    emoji: "🌟", description: "Получить 200 реакций" },
   { id: "recv_500",   threshold: 500,  type: "reactions_received", name: "Легенда реакций",   emoji: "🏆", description: "Получить 500 реакций" },
+
+  // Event badges (manually awarded, not threshold-based)
+  { id: "april_fools_2026", threshold: 0, type: "event", name: "Клоун Grove Street", emoji: "🤡", description: "Попался 1 апреля 2026" },
+  { id: "april_fools_giveaway_2026", threshold: 0, type: "event", name: "Руководитель-Клоун", emoji: "🤡", description: "Участвовал в розыгрыше на Красную Админку 1 апреля 2026" },
 ];
 
 // In-memory seed guard so we only seed defaults once per guild *per DB instance*.
