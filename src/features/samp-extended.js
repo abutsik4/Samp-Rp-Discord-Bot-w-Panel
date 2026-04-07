@@ -3,6 +3,12 @@
 const { dbRun, dbGet, dbAll } = require("../utils/db-helpers");
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require("discord.js");
 const { CARS, ITEMS } = require("./samp-life");
+const {
+  COSMETICS,
+  getUserCosmetics,
+  applyUserCosmeticsToEmbed,
+  getCosmeticBenefitText,
+} = require("./samp-cosmetics");
 
 // Helpers
 function fmtMoney(n) { return `${Number(n || 0).toLocaleString("ru-RU")} $`; }
@@ -70,17 +76,6 @@ const JOB_TEMPLATES = [
   { name: "Снос здания", basePay: [15000, 35000], requirement: "weapon_heavy" },
   { name: "Рейд на склад", basePay: [20000, 50000], requirement: "level_20" },
 ];
-
-const COSMETICS = {
-  title_og: { name: "Титул: OG", type: "title", price: 25_000, value: "OG" },
-  title_boss: { name: "Титул: Босс", type: "title", price: 50_000, value: "Босс" },
-  title_legend: { name: "Титул: Легенда", type: "title", price: 100_000, value: "Легенда" },
-  title_king: { name: "Титул: Король SA", type: "title", price: 250_000, value: "Король SA" },
-  color_gold: { name: "Цвет: Золотой", type: "color", price: 30_000, value: "0xf1c40f" },
-  color_red: { name: "Цвет: Красный", type: "color", price: 30_000, value: "0xe74c3c" },
-  color_purple: { name: "Цвет: Фиолетовый", type: "color", price: 30_000, value: "0x9b59b6" },
-  color_green: { name: "Цвет: Зелёный", type: "color", price: 30_000, value: "0x2ecc71" },
-};
 
 const BLACK_MARKET_ITEMS = [
   { name: "Золотой Desert Eagle", type: "weapon_skin", basePrice: [40_000, 80_000] },
@@ -314,6 +309,50 @@ function parseSqliteDate(value) {
 
 function toSqliteDate(date) {
   return new Date(date).toISOString().slice(0, 19).replace("T", " ");
+}
+
+function joinLines(lines) {
+  return (lines || []).filter(Boolean).join("\n");
+}
+
+function chunkArray(items, size) {
+  const chunkSize = Math.max(1, Number(size) || 1);
+  const chunks = [];
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
+  }
+  return chunks;
+}
+
+function formatPagedTitle(title, pageIndex, totalPages) {
+  return totalPages > 1 ? `${title} • ${pageIndex + 1}/${totalPages}` : title;
+}
+
+function buildPagedFieldEmbeds({ title, description, color, fields, fieldsPerPage = 6, footer }) {
+  const chunks = chunkArray(fields, fieldsPerPage);
+  return chunks.map((chunk, pageIndex) => {
+    const embed = new EmbedBuilder()
+      .setTitle(formatPagedTitle(title, pageIndex, chunks.length))
+      .setColor(color)
+      .setTimestamp();
+    if (description) embed.setDescription(description);
+    if (footer) embed.setFooter({ text: footer });
+    embed.addFields(chunk);
+    return embed;
+  });
+}
+
+function buildPagedLineEmbeds({ title, description, color, lines, linesPerPage = 10, footer }) {
+  const chunks = chunkArray(lines, linesPerPage);
+  return chunks.map((chunk, pageIndex) => {
+    const embed = new EmbedBuilder()
+      .setTitle(formatPagedTitle(title, pageIndex, chunks.length))
+      .setDescription(joinLines([description, chunk.join("\n")].filter(Boolean)))
+      .setColor(color)
+      .setTimestamp();
+    if (footer) embed.setFooter({ text: footer });
+    return embed;
+  });
 }
 
 function normalizeSampLiveOpsConfig(input = {}) {
@@ -575,6 +614,102 @@ async function getBusinessRow(db, userId, bizId) {
   );
 }
 
+async function handleBizStats(interaction, db) {
+  const userId = interaction.user.id;
+  const bizId = String(interaction.options.getString("id", true)).toLowerCase();
+  const prop = PROPERTIES[bizId];
+  if (!prop) {
+    await interaction.reply({ content: "Такого бизнеса нет.", ephemeral: true });
+    return;
+  }
+
+  const property = await getBusinessRow(db, userId, bizId);
+  if (!property) {
+    await interaction.reply({ content: "У тебя нет этого бизнеса.", ephemeral: true });
+    return;
+  }
+
+  const now = new Date();
+  const liveOps = await getSampLiveOpsConfig(db);
+  const membership = await getUserGangMembership(db, userId);
+  const territoryControlMap = await getTerritoryControlMap(db);
+  const cosmetics = await getUserCosmetics(db, userId);
+  const state = getBusinessState(prop, property, now);
+  const territory = getTerritoryBoost(prop, territoryControlMap, membership?.gang_id);
+  const income = getBusinessIncomeBreakdown(prop, state, liveOps, territory.multiplier);
+  const maintenanceCost = getBusinessMaintenanceCost(prop, state);
+  const operation = getBusinessOperation(bizId);
+  const activeBonusPct = Math.round((prop.activeBonus || 0) * 100);
+  const territoryBonusPct = Math.max(0, Math.round((territory.multiplier - 1) * 100));
+  const boughtAt = property.bought_at || "—";
+  const lastCollected = property.last_collected || "—";
+  const lastMaintained = property.last_maintained || "—";
+  const gangBoostUntil = state.gangBoostUntil ? `${toSqliteDate(state.gangBoostUntil)} UTC` : "Нет";
+  const liveOpsLabel = liveOps.active_event_name || "Нет";
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🏢 ${prop.name}`)
+    .setDescription(`ID: **${bizId}**`)
+    .addFields(
+      {
+        name: "📍 Профиль",
+        value:
+          `Район: **${territory.districtName || "—"}**\n` +
+          `Цена покупки: **${fmtMoney(prop.price)}**\n` +
+          `Куплен: **${boughtAt} UTC**`,
+        inline: true,
+      },
+      {
+        name: "💸 Доход",
+        value:
+          `База: **${fmtMoney(prop.income)}/час**\n` +
+          `Upkeep: **${fmtMoney(prop.upkeep || 0)}/час**\n` +
+          `Сейчас чистыми: **${fmtMoney(income.hourlyNet)}/час**`,
+        inline: true,
+      },
+      {
+        name: "🛠️ Состояние",
+        value:
+          `Сост.: **${state.projectedCondition}%**\n` +
+          `Запасы: **${state.projectedSupplies}%**\n` +
+          `Обслуживание: **${maintenanceCost > 0 ? fmtMoney(maintenanceCost) : "не требуется"}**`,
+        inline: true,
+      },
+      {
+        name: "📈 Эффективность",
+        value:
+          `Эфф.: **${Math.round(state.efficiency * 100)}%**\n` +
+          `Доход за цикл: **${fmtMoney(income.net)}**\n` +
+          `Всего собрано: **${fmtMoney(property.total_collected || 0)}**`,
+        inline: true,
+      },
+      {
+        name: "🚀 Бонусы",
+        value:
+          `Активный бонус: **${state.hasActiveBonus ? `+${activeBonusPct}%` : "нет"}**\n` +
+          `Поддержка банды: **${state.isGangBoosted ? gangBoostUntil : "нет"}**\n` +
+          `Контроль района: **${territory.isControlled ? `+${territoryBonusPct}%` : "нет"}**`,
+        inline: true,
+      },
+      {
+        name: "🧾 История",
+        value:
+          `Последний сбор: **${lastCollected} UTC**\n` +
+          `Последний сервис: **${lastMaintained} UTC**\n` +
+          `Активная работа: **${operation.label}**`,
+        inline: true,
+      }
+    )
+    .setFooter({
+      text: `Ивент: ${liveOpsLabel} • /bizrun id:${bizId} • /maintainbiz id:${bizId}`,
+    })
+    .setTimestamp();
+
+  applyUserCosmeticsToEmbed(embed, cosmetics, interaction.user.username, 0x16a34a);
+
+  await interaction.reply({ embeds: [embed] });
+}
+
 function getDailyJobs() {
   const rng = seededRandom(getDailySeed());
   const shuffled = [...JOB_TEMPLATES].sort(() => rng() - 0.5);
@@ -612,7 +747,7 @@ async function handleBusinesses(interaction, db) {
   const userId = interaction.user.id;
   const owned = await dbAll(
     db,
-    "SELECT property_id, last_collected, condition, supplies, last_maintained, last_state_tick, gang_boost_until FROM samp_properties WHERE user_id = ?",
+    "SELECT property_id, last_collected, condition, supplies, last_maintained, last_state_tick, gang_boost_until, total_collected FROM samp_properties WHERE user_id = ?",
     [userId]
   );
   const ownedMap = new Map((owned || []).map((row) => [row.property_id, row]));
@@ -620,15 +755,22 @@ async function handleBusinesses(interaction, db) {
   const liveOps = await getSampLiveOpsConfig(db);
   const membership = await getUserGangMembership(db, userId);
   const territoryControlMap = await getTerritoryControlMap(db);
+  const ownedFields = [];
+  const marketFields = [];
 
-  const embed = new EmbedBuilder().setTitle("🏢 Бизнесы San Andreas").setColor(0x2ecc71).setTimestamp();
   for (const [id, p] of Object.entries(PROPERTIES)) {
     const ownedRow = ownedMap.get(id);
     if (!ownedRow) {
-      embed.addFields({
-        name: `${p.name} (${id})`,
-        value: `Цена: ${fmtMoney(p.price)} | База: ${fmtMoney(p.income)}/час`,
-        inline: true,
+      marketFields.push({
+        name: `🏪 ${p.name}`,
+        value: joinLines([
+          `ID: **${id}**`,
+          `Цена: **${fmtMoney(p.price)}**`,
+          `Доход: **${fmtMoney(p.income)}/час**`,
+          `Расходы: **${fmtMoney(p.upkeep || 0)}/час**`,
+          `Район: **${TERRITORY_DISTRICTS[p.district]?.name || p.district || "—"}**`,
+        ]),
+        inline: false,
       });
       continue;
     }
@@ -636,27 +778,68 @@ async function handleBusinesses(interaction, db) {
     const state = getBusinessState(p, ownedRow, now);
     const territory = getTerritoryBoost(p, territoryControlMap, membership?.gang_id);
     const income = getBusinessIncomeBreakdown(p, state, liveOps, territory.multiplier);
-    const bonusLabel = state.hasActiveBonus ? ` | Бонус: +${Math.round((p.activeBonus || 0) * 100)}%` : "";
-    const gangLabel = state.isGangBoosted ? " | Поддержка банды" : "";
-    const territoryLabel = territory.isControlled ? ` | Район: +${Math.round((territory.multiplier - 1) * 100)}%` : "";
-    embed.addFields({
-      name: `${p.name} (${id})`,
-      value:
-        `✅ Куплен | Чистыми: ${fmtMoney(income.hourlyNet)}/час\n` +
-        `Сост.: ${state.projectedCondition}% | Запасы: ${state.projectedSupplies}%\n` +
-        `Район: ${territory.districtName || "—"}\n` +
-        `Эфф.: ${Math.round(state.efficiency * 100)}%${bonusLabel}${gangLabel}${territoryLabel}`,
-      inline: true,
+    const modifiers = [];
+    if (state.hasActiveBonus) modifiers.push(`актив +${Math.round((p.activeBonus || 0) * 100)}%`);
+    if (state.isGangBoosted) modifiers.push("поддержка банды");
+    if (territory.isControlled) modifiers.push(`район +${Math.round((territory.multiplier - 1) * 100)}%`);
+    ownedFields.push({
+      name: `✅ ${p.name}`,
+      value: joinLines([
+        `ID: **${id}**`,
+        `Чистыми: **${fmtMoney(income.hourlyNet)}/час**`,
+        `Сост. / Запасы: **${state.projectedCondition}% / ${state.projectedSupplies}%**`,
+        `Район: **${territory.districtName || "—"}**`,
+        `Эффективность: **${Math.round(state.efficiency * 100)}%**`,
+        `Модификаторы: ${modifiers.length ? modifiers.join(" • ") : "без бонусов"}`,
+        `Собрано всего: **${fmtMoney(ownedRow.total_collected || 0)}**`,
+      ]),
+      inline: false,
     });
   }
-  if (liveOps.active_event_name) {
-    embed.setDescription(
-      `Ивент: **${liveOps.active_event_name}**` +
-      (liveOps.active_event_message ? `\n${liveOps.active_event_message}` : "")
+
+  const overview = new EmbedBuilder()
+    .setTitle("🏢 Бизнесы San Andreas")
+    .setDescription(joinLines([
+      `У тебя бизнесов: **${ownedFields.length}** из **${Object.keys(PROPERTIES).length}**.`,
+      liveOps.active_event_name ? `Ивент: **${liveOps.active_event_name}**` : null,
+      liveOps.active_event_message || null,
+    ]))
+    .addFields(
+      { name: "Твои бизнесы", value: `${ownedFields.length}`, inline: true },
+      { name: "Свободно на рынке", value: `${marketFields.length}`, inline: true },
+      { name: "Полезно", value: "/bizstats • /mbizstats • /bizrun", inline: true }
+    )
+    .setColor(0x2ecc71)
+    .setFooter({ text: "Покупка: /buybiz id:<business> • Работа: /bizrun id:<business> • Сбор: /collectincome • Обслуживание: /maintainbiz [id]" })
+    .setTimestamp();
+
+  const embeds = [overview];
+  if (ownedFields.length) {
+    embeds.push(
+      ...buildPagedFieldEmbeds({
+        title: "🏦 Твои бизнесы",
+        description: "Подробная сводка по доходности, состоянию и бонусам.",
+        color: 0x16a34a,
+        fields: ownedFields,
+        fieldsPerPage: 4,
+        footer: "Детали по одному бизнесу: /mbizstats id:<business>",
+      })
     );
   }
-  embed.setFooter({ text: "Покупка: /buybiz id:<business> • Работа: /bizrun id:<business> • Сбор: /collectincome • Обслуживание: /maintainbiz [id]" });
-  await interaction.reply({ embeds: [embed] });
+  if (marketFields.length) {
+    embeds.push(
+      ...buildPagedFieldEmbeds({
+        title: "🛍️ Рынок бизнесов",
+        description: "Доступные точки для покупки.",
+        color: 0x22c55e,
+        fields: marketFields,
+        fieldsPerPage: 4,
+        footer: "Покупка: /buybiz id:<business>",
+      })
+    );
+  }
+
+  await interaction.reply({ embeds: embeds.slice(0, 10) });
 }
 
 async function handleBuyBiz(interaction, db) {
@@ -933,16 +1116,57 @@ async function handleGarage(interaction, db) {
   const cars = await dbAll(db, "SELECT car_id FROM samp_garage WHERE user_id = ?", [userId]);
   if (!cars || cars.length === 0) { await interaction.reply({ content: "Твой гараж пуст.", ephemeral: true }); return; }
 
-  const embed = new EmbedBuilder().setTitle("🏎️ Твой гараж").setColor(0x3498db).setTimestamp();
-  for (const row of cars) {
+  const user = await getSampUser(db, userId);
+  const cosmetics = await getUserCosmetics(db, userId);
+  const carFields = [];
+  let tunedCount = 0;
+  const orderedCars = [...cars].sort((left, right) => {
+    if (left.car_id === user?.car_id) return -1;
+    if (right.car_id === user?.car_id) return 1;
+    return 0;
+  });
+
+  for (const row of orderedCars) {
     const car = CARS[row.car_id];
     if (!car) continue;
     const upgrades = await dbAll(db, "SELECT upgrade_id FROM samp_car_upgrades WHERE user_id = ? AND car_id = ?", [userId, row.car_id]);
     const speedBonus = (upgrades || []).reduce((s, u) => s + (CAR_UPGRADES[u.upgrade_id]?.speedBonus || 0), 0);
     const upgradeNames = (upgrades || []).map(u => CAR_UPGRADES[u.upgrade_id]?.name || u.upgrade_id).join(", ") || "—";
-    embed.addFields({ name: `${car.name}`, value: `Скорость: **${car.speed + speedBonus}** (${speedBonus > 0 ? `+${speedBonus}` : "без тюнинга"})\nТюнинг: ${upgradeNames}`, inline: true });
+    if (speedBonus > 0) tunedCount += 1;
+    carFields.push({
+      name: `${row.car_id === user?.car_id ? "🟢 Активная" : "🚘"} ${car.name}`,
+      value: joinLines([
+        `ID: **${row.car_id}**`,
+        `Скорость: **${car.speed + speedBonus}** (${speedBonus > 0 ? `база ${car.speed} + ${speedBonus}` : `база ${car.speed}`})`,
+        `Тюнинг: ${upgradeNames}`,
+      ]),
+      inline: false,
+    });
   }
-  await interaction.reply({ embeds: [embed] });
+
+  const overview = new EmbedBuilder()
+    .setTitle("🏎️ Твой гараж")
+    .setDescription("Машины отсортированы с активной тачкой сверху.")
+    .addFields(
+      { name: "Всего машин", value: `${carFields.length}`, inline: true },
+      { name: "С тюнингом", value: `${tunedCount}`, inline: true },
+      { name: "Активная", value: user?.car_id ? `**${user.car_id}**` : "—", inline: true }
+    )
+    .setTimestamp();
+
+  applyUserCosmeticsToEmbed(overview, cosmetics, interaction.user.username, 0x3498db);
+
+  const detailEmbeds = buildPagedFieldEmbeds({
+    title: "🚗 Машины в гараже",
+    description: "Скорость уже учитывает установленные апгрейды.",
+    color: 0x2563eb,
+    fields: carFields,
+    fieldsPerPage: 4,
+    footer: "Тюнинг: /tunecar car:<id> upgrade:<id>",
+  }).map((embed) => applyUserCosmeticsToEmbed(embed, cosmetics, interaction.user.username, 0x2563eb));
+
+  const embeds = [overview, ...detailEmbeds];
+  await interaction.reply({ embeds: embeds.slice(0, 10) });
 }
 
 // --- Bounty ---
@@ -968,9 +1192,16 @@ async function handleBountyList(interaction, db) {
   const bounties = await dbAll(db, "SELECT target_user_id, SUM(amount) as total FROM samp_bounties WHERE status = 'active' GROUP BY target_user_id ORDER BY total DESC LIMIT 10", []);
   if (!bounties || bounties.length === 0) { await interaction.reply("Нет активных наград. Стало скучно? /bounty!"); return; }
 
-  const lines = bounties.map((b, i) => `\`${i+1}.\` <@${b.target_user_id}> — **${fmtMoney(b.total)}**`);
-  const embed = new EmbedBuilder().setTitle("🎯 Разыскиваются").setDescription(lines.join("\n")).setColor(0xe74c3c).setTimestamp();
-  await interaction.reply({ embeds: [embed] });
+  const lines = bounties.map((b, i) => `${i < 3 ? ["🥇", "🥈", "🥉"][i] : `\`${i+1}.\``} <@${b.target_user_id}> — **${fmtMoney(b.total)}**`);
+  const embeds = buildPagedLineEmbeds({
+    title: "🎯 Разыскиваются",
+    description: "Актуальные награды за головы на сервере.",
+    color: 0xe74c3c,
+    lines,
+    linesPerPage: 10,
+    footer: "Назначить награду: /bounty user:@игрок amount:<$>",
+  });
+  await interaction.reply({ embeds });
 }
 
 async function checkAndCollectBounty(db, winnerId, loserId) {
@@ -1272,17 +1503,28 @@ async function handleGangCommand(interaction, db) {
 
   } else if (sub === "territories") {
     const territories = await listGangTerritories(db);
-    const lines = territories.map((territory) => {
+    const fields = territories.map((territory) => {
       const owner = territory.gang_name ? `**[${territory.gang_tag}] ${territory.gang_name}**` : "нейтрально";
-      return `• **${territory.district_name}** — ${owner} | давление ${territory.pressure}% | бонус +${territory.business_buff_pct}%`;
+      return {
+        name: `🗺️ ${territory.district_name}`,
+        value: joinLines([
+          `Владелец: ${owner}`,
+          `Давление: **${territory.pressure}%**`,
+          `Бонус бизнесам: **+${territory.business_buff_pct}%**`,
+          `Бизнесов в районе: **${territory.business_count}**`,
+        ]),
+        inline: false,
+      };
     });
-    const embed = new EmbedBuilder()
-      .setTitle("🗺️ Районы San Andreas")
-      .setDescription(lines.join("\n") || "Пока нет контролируемых районов.")
-      .setColor(0xf39c12)
-      .setFooter({ text: "Лидеры банд могут атаковать или укреплять районы через /gang claimterritory" })
-      .setTimestamp();
-    await interaction.reply({ embeds: [embed] });
+    const embeds = buildPagedFieldEmbeds({
+      title: "🗺️ Районы San Andreas",
+      description: "Контроль района усиливает бизнесы банды в этой зоне.",
+      color: 0xf39c12,
+      fields,
+      fieldsPerPage: 5,
+      footer: "Захват и укрепление: /gcapture district:<район>",
+    });
+    await interaction.reply({ embeds });
 
   } else if (sub === "claimterritory") {
     const userId = interaction.user.id;
@@ -1374,9 +1616,10 @@ async function handleGangCommand(interaction, db) {
     const members = await dbAll(db, "SELECT user_id, role FROM samp_gang_members WHERE gang_id = ?", [member.gang_id]);
     const support = await dbGet(db, "SELECT COUNT(*) as c FROM samp_properties WHERE gang_boosted_by = ? AND gang_boost_until > datetime('now')", [member.gang_id]);
     const territories = await dbGet(db, "SELECT COUNT(*) as c FROM samp_gang_territories WHERE gang_id = ?", [member.gang_id]);
-    const memberList = (members || []).map(m => `<@${m.user_id}> (${m.role})`).join("\n");
+    const memberList = (members || []).map(m => `• <@${m.user_id}> — ${m.role}`).join("\n");
     const embed = new EmbedBuilder()
       .setTitle(`[${gang.tag}] ${gang.name}`)
+      .setDescription("Сводка по казне, районам и составу банды.")
       .addFields(
         { name: "Лидер", value: `<@${gang.leader_id}>`, inline: true },
         { name: "Казна", value: fmtMoney(gang.treasury), inline: true },
@@ -1384,25 +1627,47 @@ async function handleGangCommand(interaction, db) {
         { name: "Районы", value: `${territories?.c || 0} под контролем`, inline: true },
         { name: `Участники (${members.length})`, value: memberList || "—" }
       ).setColor(0x2ecc71).setTimestamp();
+    const cosmetics = await getUserCosmetics(db, userId);
+    applyUserCosmeticsToEmbed(embed, cosmetics, interaction.user.username, 0x2ecc71);
     await interaction.reply({ embeds: [embed] });
 
   } else if (sub === "top") {
     const gangs = await dbAll(db, "SELECT g.*, COUNT(gm.user_id) as members FROM samp_gangs g JOIN samp_gang_members gm ON gm.gang_id = g.id GROUP BY g.id ORDER BY g.treasury DESC LIMIT 10", []);
     if (!gangs || gangs.length === 0) { await interaction.reply("Пока нет банд."); return; }
-    const lines = gangs.map((g, i) => `\`${i+1}.\` **[${g.tag}] ${g.name}** — ${fmtMoney(g.treasury)} (${g.members} чел.)`);
-    const embed = new EmbedBuilder().setTitle("🔫 Топ банд San Andreas").setDescription(lines.join("\n")).setColor(0xe74c3c).setTimestamp();
-    await interaction.reply({ embeds: [embed] });
+    const lines = gangs.map((g, i) => `${i < 3 ? ["🥇", "🥈", "🥉"][i] : `\`${i+1}.\``} **[${g.tag}] ${g.name}** — ${fmtMoney(g.treasury)} • ${g.members} чел.`);
+    const embeds = buildPagedLineEmbeds({
+      title: "🔫 Топ банд San Andreas",
+      description: "Рейтинг по размеру казны.",
+      color: 0xe74c3c,
+      lines,
+      linesPerPage: 10,
+      footer: "Детали по своей банде: /gang info",
+    });
+    await interaction.reply({ embeds });
   }
 }
 
 // --- Cosmetics ---
 async function handleShopCosmetics(interaction) {
-  const embed = new EmbedBuilder().setTitle("🎨 Магазин косметики").setColor(0x9b59b6).setTimestamp();
-  for (const [id, c] of Object.entries(COSMETICS)) {
-    embed.addFields({ name: `${c.name} (${id})`, value: `Тип: ${c.type} | Цена: **${fmtMoney(c.price)}**`, inline: true });
-  }
-  embed.setFooter({ text: "Покупка: /buycosmetic id:<id>" });
-  await interaction.reply({ embeds: [embed] });
+  const fields = Object.entries(COSMETICS).map(([id, c]) => ({
+    name: `${c.type === "title" ? "🏷️" : "🎨"} ${c.name}`,
+    value: joinLines([
+      `ID: **${id}**`,
+      `Тип: **${c.type}**`,
+      `Цена: **${fmtMoney(c.price)}**`,
+      `Эффект: ${getCosmeticBenefitText(c)}`,
+    ]),
+    inline: false,
+  }));
+  const embeds = buildPagedFieldEmbeds({
+    title: "🎨 Магазин косметики",
+    description: "Титулы попадают в author-строку, а цвета перекрашивают профильные embed'ы вроде /balance, /bizstats, /garage и /gang info.",
+    color: 0x9b59b6,
+    fields,
+    fieldsPerPage: 4,
+    footer: "Покупка: /buycosmetic id:<id>",
+  });
+  await interaction.reply({ embeds });
 }
 
 async function handleBuyCosmetic(interaction, db) {
@@ -1422,7 +1687,10 @@ async function handleBuyCosmetic(interaction, db) {
     await dbRun(db, `INSERT OR REPLACE INTO samp_cosmetics(user_id, cosmetic_type, cosmetic_value) VALUES(?, ?, ?)`, [userId, cos.type, cos.value]);
     await addLedger(db, "buy_cosmetic", userId, null, cos.price, { cosmetic_id: cosId });
   });
-  await interaction.reply(`🎨 Ты купил **${cos.name}** за **${fmtMoney(cos.price)}**!`);
+  await interaction.reply(
+    `🎨 Ты купил **${cos.name}** за **${fmtMoney(cos.price)}**!\n` +
+    `${getCosmeticBenefitText(cos)}`
+  );
 }
 
 // --- Weapon Durability ---
@@ -1488,6 +1756,7 @@ async function handleLottery(interaction, db) {
     const totalTickets = await dbGet(db, "SELECT SUM(tickets) as t FROM samp_lottery WHERE week_start = ?", [week]);
     const embed = new EmbedBuilder()
       .setTitle("🎰 Лотерея San Andreas")
+      .setDescription("Недельный розыгрыш с лимитом 10 билетов на игрока.")
       .addFields(
         { name: "Джекпот", value: fmtMoney(pot?.total || 0), inline: true },
         { name: "Твои билеты", value: `${mine?.t || 0}/10`, inline: true },
@@ -1525,12 +1794,23 @@ async function handleBlackMarket(interaction, db) {
 
   if (sub === "browse" || !interaction.options.getSubcommand) {
     const deals = getDailyBlackMarketDeals();
-    const embed = new EmbedBuilder().setTitle("🕶️ Чёрный рынок").setDescription("Сегодняшние предложения:").setColor(0x2c3e50).setTimestamp();
-    deals.forEach((d, i) => {
-      embed.addFields({ name: `#${i+1} ${d.name}`, value: `Цена: **${fmtMoney(d.price)}**\nТип: ${d.type}`, inline: true });
+    const fields = deals.map((d, i) => ({
+      name: `#${i+1} ${d.name}`,
+      value: joinLines([
+        `Цена: **${fmtMoney(d.price)}**`,
+        `Тип: **${d.type}**`,
+      ]),
+      inline: false,
+    }));
+    const embeds = buildPagedFieldEmbeds({
+      title: "🕶️ Чёрный рынок",
+      description: "Сегодняшние редкие предложения.",
+      color: 0x2c3e50,
+      fields,
+      fieldsPerPage: 3,
+      footer: "Покупка: /blackmarket buy slot:<номер>",
     });
-    embed.setFooter({ text: "Покупка: /blackmarket buy slot:<номер>" });
-    await interaction.reply({ embeds: [embed] });
+    await interaction.reply({ embeds });
 
   } else if (sub === "buy") {
     const userId = interaction.user.id;
@@ -1557,6 +1837,10 @@ async function handleBlackMarket(interaction, db) {
 function getSampExtendedCommandBuilders() {
   return [
     new SlashCommandBuilder().setName("businesses").setDescription("SAMP Life: список бизнесов"),
+    new SlashCommandBuilder().setName("bizstats").setDescription("SAMP Life: подробная статистика по бизнесу")
+      .addStringOption(o => o.setName("id").setDescription("ID бизнеса").setRequired(true).setAutocomplete(true)),
+    new SlashCommandBuilder().setName("mbizstats").setDescription("SAMP Life: статы твоего бизнеса")
+      .addStringOption(o => o.setName("id").setDescription("ID твоего бизнеса").setRequired(true).setAutocomplete(true)),
     new SlashCommandBuilder().setName("buybiz").setDescription("SAMP Life: купить бизнес")
       .addStringOption(o => o.setName("id").setDescription("ID бизнеса").setRequired(true).setAutocomplete(true)),
     new SlashCommandBuilder().setName("collectincome").setDescription("SAMP Life: собрать доход с бизнесов"),
@@ -1643,6 +1927,8 @@ async function handleSampExtendedCommand({ interaction, db }) {
   };
   try {
     if (name === "businesses") return await handleBusinesses(interaction, db);
+    if (name === "bizstats") return await handleBizStats(interaction, db);
+    if (name === "mbizstats") return await handleBizStats(interaction, db);
     if (name === "buybiz") return await handleBuyBiz(interaction, db);
     if (name === "collectincome") return await handleCollectIncome(interaction, db);
     if (name === "maintainbiz") return await handleMaintainBiz(interaction, db);
@@ -1656,13 +1942,12 @@ async function handleSampExtendedCommand({ interaction, db }) {
     if (name === "dojob") return await handleDoJob(interaction, db);
     if (name === "gang") return await handleGangCommand(interaction, db);
     if (gangAliasMap[name]) {
+      const aliasOptions = Object.create(interaction.options);
+      aliasOptions.getSubcommand = () => gangAliasMap[name];
       const aliasInteraction = {
         ...interaction,
         commandName: "gang",
-        options: {
-          ...interaction.options,
-          getSubcommand: () => gangAliasMap[name],
-        },
+        options: aliasOptions,
       };
       return await handleGangCommand(aliasInteraction, db);
     }
@@ -1685,7 +1970,14 @@ async function handleSampExtendedAutocomplete(interaction, db) {
   const query = String(focused.value || "").toLowerCase();
   let choices = [];
 
-  if (name === "buybiz" || name === "maintainbiz" || name === "bizrun") {
+  if (name === "mbizstats") {
+    const userId = interaction.user.id;
+    const owned = await dbAll(db, "SELECT property_id FROM samp_properties WHERE user_id = ?", [userId]);
+    choices = (owned || [])
+      .map((row) => row.property_id)
+      .filter((propertyId) => PROPERTIES[propertyId])
+      .map((propertyId) => ({ name: `${PROPERTIES[propertyId].name} — ${propertyId}`, value: propertyId }));
+  } else if (name === "buybiz" || name === "bizstats" || name === "maintainbiz" || name === "bizrun") {
     choices = Object.entries(PROPERTIES).map(([id, p]) => ({ name: `${p.name} — ${fmtMoney(p.price)}`, value: id }));
   } else if ((name === "gang" || name === "gsupportbiz") && focused.name === "business") {
     choices = Object.entries(PROPERTIES).map(([id, p]) => ({ name: `${p.name} — ${id}`, value: id }));

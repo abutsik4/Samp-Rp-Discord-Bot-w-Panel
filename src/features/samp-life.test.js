@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const sqlite3 = require("sqlite3").verbose();
 
-const { dbGet } = require("../utils/db-helpers");
+const { dbGet, dbRun } = require("../utils/db-helpers");
 const { ensureSampLifeTables, handleSampLifeCommand } = require("./samp-life");
 
 function makeDb() {
@@ -108,6 +108,44 @@ test("/reg creates a profile once", async () => {
   db.close();
 });
 
+test("/balance returns a structured profile embed", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteractionSafe({ commandName: "reg", userId: "u-balance", username: "Balance" }), db });
+    await dbRun(
+      db,
+      `CREATE TABLE IF NOT EXISTS samp_cosmetics (
+        user_id TEXT NOT NULL,
+        cosmetic_type TEXT NOT NULL,
+        cosmetic_value TEXT NOT NULL,
+        PRIMARY KEY (user_id, cosmetic_type)
+      )`
+    );
+    await dbRun(db, `INSERT INTO samp_cosmetics(user_id, cosmetic_type, cosmetic_value) VALUES(?, ?, ?)`, ["u-balance", "title", "OG"]);
+    await dbRun(db, `INSERT INTO samp_cosmetics(user_id, cosmetic_type, cosmetic_value) VALUES(?, ?, ?)`, ["u-balance", "color", "0xe74c3c"]);
+
+    const balance = makeInteractionSafe({ commandName: "balance", userId: "u-balance", username: "Balance" });
+    await handleSampLifeCommand({ interaction: balance, db });
+
+    const state = balance.__getState();
+    assert.ok(state.lastReply?.embeds?.length === 1, "balance should reply with a single embed");
+    const embed = state.lastReply.embeds[0].toJSON();
+    const fieldNames = embed.fields.map((field) => field.name);
+
+    assert.equal(embed.title, "SAMP Life — Профиль");
+    assert.equal(embed.author?.name, "OG • Balance");
+    assert.equal(embed.color, 0xe74c3c);
+    assert.ok(fieldNames.includes("💵 Финансы"));
+    assert.ok(fieldNames.includes("🚘 Активная тачка"));
+    assert.ok(fieldNames.includes("🔫 Оружие"));
+    assert.ok(fieldNames.includes("⚖️ Статус"));
+  } finally {
+    db.close();
+  }
+});
+
 test("/work pays and enforces cooldown", async () => {
   const db = makeDb();
   await ensureSampLifeTables(db);
@@ -145,4 +183,54 @@ test("/work pays and enforces cooldown", async () => {
     Date.now = realNow;
     db.close();
   }
+});
+
+test("/race uses installed car upgrades when resolving winner", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+
+  await dbRun(
+    db,
+    `CREATE TABLE IF NOT EXISTS samp_car_upgrades (
+      user_id TEXT NOT NULL,
+      car_id TEXT NOT NULL,
+      upgrade_id TEXT NOT NULL,
+      PRIMARY KEY (user_id, car_id, upgrade_id)
+    )`
+  );
+
+  await handleSampLifeCommand({ interaction: makeInteractionSafe({ commandName: "reg", userId: "u1", username: "Alice" }), db });
+  await handleSampLifeCommand({ interaction: makeInteractionSafe({ commandName: "reg", userId: "u2", username: "Bob" }), db });
+
+  await dbRun(db, "UPDATE samp_users SET money = ?, car_id = ? WHERE user_id = ?", [500_000, "cheetah", "u1"]);
+  await dbRun(db, "UPDATE samp_users SET money = ?, car_id = ? WHERE user_id = ?", [500_000, "banshee", "u2"]);
+  await dbRun(db, "INSERT OR IGNORE INTO samp_garage(user_id, car_id) VALUES(?, ?)", ["u1", "cheetah"]);
+  await dbRun(db, "INSERT OR IGNORE INTO samp_garage(user_id, car_id) VALUES(?, ?)", ["u2", "banshee"]);
+  await dbRun(db, "INSERT INTO samp_car_upgrades(user_id, car_id, upgrade_id) VALUES(?, ?, ?)", ["u1", "cheetah", "engine"]);
+  await dbRun(db, "INSERT INTO samp_car_upgrades(user_id, car_id, upgrade_id) VALUES(?, ?, ?)", ["u1", "cheetah", "nos"]);
+  await dbRun(db, "INSERT INTO samp_car_upgrades(user_id, car_id, upgrade_id) VALUES(?, ?, ?)", ["u1", "cheetah", "turbo"]);
+
+  const race = makeInteractionSafe({
+    commandName: "race",
+    userId: "u1",
+    username: "Alice",
+    options: {
+      user: { id: "u2", username: "Bob", bot: false },
+      bet: 76_000,
+    },
+  });
+  await handleSampLifeCommand({ interaction: race, db });
+
+  const state = race.__getState();
+  assert.equal(state.deferred, true);
+  assert.match(state.lastEditReply, /скорость 155, тюнинг \+45/);
+  assert.match(state.lastEditReply, /скорость 105/);
+  assert.match(state.lastEditReply, /Победитель: <@u1>/);
+
+  const winner = await dbGet(db, "SELECT money FROM samp_users WHERE user_id = ?", ["u1"]);
+  const loser = await dbGet(db, "SELECT money FROM samp_users WHERE user_id = ?", ["u2"]);
+  assert.equal(winner.money, 576_000);
+  assert.equal(loser.money, 424_000);
+
+  db.close();
 });

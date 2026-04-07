@@ -21,6 +21,11 @@ A production-grade, full-stack Discord bot platform for a Russian SA-MP roleplay
 
 ## 🆕 Recent Updates (7 Apr 2026)
 
+- Added **short gang command aliases** for turf-war flow: `/gmap`, `/gcapture`, and `/gsupportbiz` while keeping the original `/gang ...` subcommands compatible.
+- Added **business intelligence commands** `/bizstats` and `/mbizstats` for per-business income, condition, upkeep, territory, and gang-support breakdowns.
+- Activated **cosmetic titles and colors** on profile-style embeds: `/balance`, `/bizstats`, `/mbizstats`, `/garage`, and `/gang info` now reflect purchased profile cosmetics.
+- Refreshed the **SAMP informational embed layout** so dense read-only commands like business, garage, catalog, gang, bounty, and territory views are split into clearer paged cards.
+- Fixed **street race resolution** so installed car upgrades now affect race speed instead of being ignored.
 - Added **gang territory control** with district ownership, takeover pressure, and passive buffs for nearby gang-owned businesses.
 - Added **managed business gameplay**: upkeep, supplies, manual `/bizrun` actions, gang-funded business support, co-op jobs, and heists.
 - Added **live-ops presets** in the gameplay panel for weekend, holiday, and special-event economy setups, plus focused history/logging for presets and manual adjustments.
@@ -105,10 +110,10 @@ These are the engineering decisions and challenges that characterise this projec
 - **SA-MP Life** — Roleplay economy (`/reg`, `/work`, `/truck`, `/rob`, `/balance`)
 - **Dealership & Arsenal** — Buy cars and weapons (`/dealership`, `/buy`, `/weapon`)
 - **PvP & Trading** — Races, duels, and car sales (`/race`, `/duel`, `/sellcar`)
-- **Managed Businesses** — Buy, maintain, supply, and actively run businesses for higher payout (`/businesses`, `/buybiz`, `/collectincome`, `/maintainbiz`, `/bizrun`)
-- **Gangs & Territories** — Gang treasury, member support, district takeovers, and local business buffs (`/gang ...`)
+- **Managed Businesses** — Buy, maintain, inspect, and actively run businesses for higher payout (`/businesses`, `/buybiz`, `/bizstats`, `/mbizstats`, `/collectincome`, `/maintainbiz`, `/bizrun`)
+- **Gangs & Territories** — Gang treasury, member support, district takeovers, and local business buffs with short aliases for map/capture/support flows (`/gang ...`, `/gmap`, `/gcapture`, `/gsupportbiz`)
 - **Jobs, Heists & Bounties** — Daily job board, co-op robberies, and wanted-player contracts (`/jobs`, `/dojob`, `/heist`, `/bounty`)
-- **Lottery, Black Market & Cosmetics** — Rare-item sinks and side-economy systems (`/lottery`, `/blackmarket`, `/shopcosmetics`)
+- **Lottery, Black Market & Cosmetics** — Rare-item sinks and side-economy systems, plus profile titles/colors for embed personalization (`/lottery`, `/blackmarket`, `/shopcosmetics`)
 - **Live Ops Economy** — Runtime multipliers and event messaging controlled from the panel without redeploying the bot
 - **Daily Bonus** — Streak-based daily rewards up to $50K (`/daily`)
 - **Bail System** — Pay to leave jail early (`/bail`)
@@ -166,7 +171,7 @@ The web layer uses a **parallel API + SPA** approach: the same Express app serve
 │   │   ├── helpers.js           # Shared utilities (formatting, plurals, etc.)
 │   │   ├── schedulers.js        # All periodic tasks (ML, reconciliation, cleanup)
 │   │   ├── discordClient.js     # Discord client factory
-│   │   ├── slashCommands.js     # Slash command registration (70 commands)
+│   │   ├── slashCommands.js     # Slash command registration (75 commands)
 │   │   ├── statsDb.js           # Database query operations
 │   │   ├── commands/
 │   │   │   └── dispatcher.js    # Slash command dispatch
@@ -180,6 +185,7 @@ The web layer uses a **parallel API + SPA** approach: the same Express app serve
 │   │   ├── holidays.js          # Holiday system (calend.ru + manual)
 │   │   ├── samp-life.js         # SA-MP roleplay economy
 │   │   ├── samp-extended.js     # Businesses, gangs, territories, live ops presets
+│   │   ├── samp-cosmetics.js    # Shared title/color cosmetic styling for profile embeds
 │   │   ├── giveaway.js          # Persistent giveaway buttons, rewards, badges
 │   │   ├── levels.js            # XP & leveling system
 │   │   ├── badges.js            # User badge system (24 achievements)
@@ -190,7 +196,7 @@ The web layer uses a **parallel API + SPA** approach: the same Express app serve
 │   │   ├── radio-vote.js        # Song voting
 │   │   ├── weekly-awards.js     # Automated weekly posts
 │   │   ├── ...                  # + 11 more modules
-│   │   └── *.test.js            # Unit tests (26 tests, 3 suites)
+│   │   └── *.test.js            # Unit tests (46 tests in the repo test suite)
 │   │
 │   ├── db/
 │   │   └── schema.js            # Schema initialization (45+ tables)
@@ -447,6 +453,8 @@ node src/panel-only.js
 | `/garage` | View owned vehicles and upgrades |
 | `/tunecar car:<id> upgrade:<id>` | Install tuning upgrades |
 | `/businesses` | Browse available businesses |
+| `/bizstats id:<id>` | Detailed business stats and health breakdown |
+| `/mbizstats id:<id>` | Quick stats for one of your owned businesses |
 | `/buybiz id:<id>` | Purchase a business |
 | `/collectincome` | Collect passive business revenue |
 | `/maintainbiz [id]` | Restore business condition and supplies |
@@ -457,6 +465,9 @@ node src/panel-only.js
 | `/bounty user:@user amount:<$>` | Put a bounty on a player |
 | `/bountylist` | View the wanted list |
 | `/gang ...` | Gang creation, invites, treasury, territories, and business support |
+| `/gmap` | View district ownership and territory buffs |
+| `/gcapture district:<id>` | Attack or reinforce a district |
+| `/gsupportbiz user:@user business:<id>` | Fund a gang member's business from treasury |
 | `/shopcosmetics` / `/buycosmetic id:<id>` | Cosmetic shop and purchases |
 | `/lottery buy [count]` / `/lottery info` | Lottery participation and status |
 | `/blackmarket browse` / `/blackmarket buy slot:<n>` | Black market inventory and purchases |
@@ -505,7 +516,7 @@ node src/panel-only.js
 | **AI/ML** | Markov chains (order-2), keyword-based sentiment analysis |
 | **Frontend** | React 19, React Router 7, Vite 7, lucide-react (icons), recharts (charts), dark-only CSS custom property design system |
 | **Logging** | Custom structured logger, per-request trace IDs |
-| **Testing** | Node.js built-in test runner, 39 unit tests + integration suite |
+| **Testing** | Node.js built-in test runner, 46 repository tests + integration suite |
 
 ---
 

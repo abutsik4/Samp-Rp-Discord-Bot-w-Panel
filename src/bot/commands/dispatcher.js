@@ -55,7 +55,7 @@ function registerCommandHandlers(ctx) {
         } catch (e) {
           console.error("[samp-life] autocomplete error", e);
         }
-      } else if (["buybiz", "maintainbiz", "bizrun", "tunecar", "buycosmetic", "gang", "gcapture", "gsupportbiz"].includes(interaction.commandName)) {
+      } else if (["buybiz", "bizstats", "mbizstats", "maintainbiz", "bizrun", "tunecar", "buycosmetic", "gang", "gcapture", "gsupportbiz"].includes(interaction.commandName)) {
         try {
           await handleSampExtendedAutocomplete(interaction, db);
         } catch (e) {
@@ -118,7 +118,7 @@ function registerCommandHandlers(ctx) {
     // SAMP Extended economy commands
     if (
       [
-        "businesses", "buybiz", "collectincome",
+        "businesses", "bizstats", "mbizstats", "buybiz", "collectincome",
         "maintainbiz", "bizrun",
         "tunecar", "garage",
         "bounty", "bountylist",

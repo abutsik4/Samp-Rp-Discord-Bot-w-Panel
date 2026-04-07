@@ -2,6 +2,7 @@
 
 const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
 const { dbRun, dbGet, dbAll } = require("../utils/db-helpers");
+const { getUserCosmetics, applyUserCosmeticsToEmbed } = require("./samp-cosmetics");
 
 // -------------------------
 // Game constants (MVP)
@@ -153,6 +154,36 @@ function fmtMoney(n) {
   return `${v.toLocaleString("ru-RU")} $`;
 }
 
+function joinLines(lines) {
+  return (lines || []).filter(Boolean).join("\n");
+}
+
+function chunkArray(items, size) {
+  const chunkSize = Math.max(1, Number(size) || 1);
+  const chunks = [];
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
+  }
+  return chunks;
+}
+
+function formatPagedTitle(title, pageIndex, totalPages) {
+  return totalPages > 1 ? `${title} • ${pageIndex + 1}/${totalPages}` : title;
+}
+
+function buildPagedLineEmbeds({ title, description, color, lines, linesPerPage = 10, footer }) {
+  const chunks = chunkArray(lines, linesPerPage);
+  return chunks.map((chunk, pageIndex) => {
+    const embed = new EmbedBuilder()
+      .setTitle(formatPagedTitle(title, pageIndex, chunks.length))
+      .setDescription(joinLines([description, chunk.join("\n")].filter(Boolean)))
+      .setColor(color)
+      .setTimestamp(new Date());
+    if (footer) embed.setFooter({ text: footer });
+    return embed;
+  });
+}
+
 function clampInt(n, min, max) {
   const x = Math.floor(Number(n));
   if (!Number.isFinite(x)) return null;
@@ -175,6 +206,49 @@ function carInfo(carId) {
 
 function itemInfo(itemId) {
   return ITEMS[itemId] || null;
+}
+
+const CAR_UPGRADE_SPEED_BONUSES = {
+  nos: 10,
+  turbo: 15,
+  hydraulics: 0,
+  wheels: 3,
+  bodykit: 5,
+  engine: 20,
+};
+
+async function getCarUpgradeSpeedBonus(db, userId, carId) {
+  try {
+    const upgrades = await dbAll(
+      db,
+      "SELECT upgrade_id FROM samp_car_upgrades WHERE user_id = ? AND car_id = ?",
+      [String(userId), String(carId)]
+    );
+    return (upgrades || []).reduce(
+      (sum, row) => sum + (CAR_UPGRADE_SPEED_BONUSES[row.upgrade_id] || 0),
+      0
+    );
+  } catch (error) {
+    if (String(error?.message || error).includes("no such table")) {
+      return 0;
+    }
+    throw error;
+  }
+}
+
+async function getRaceCarProfile(db, userId, carId) {
+  const car = carInfo(carId);
+  const tuneSpeedBonus = await getCarUpgradeSpeedBonus(db, userId, carId);
+  return {
+    ...car,
+    tuneSpeedBonus,
+    effectiveSpeed: car.speed + tuneSpeedBonus,
+  };
+}
+
+function formatRaceCarLabel(carProfile) {
+  const tuneSuffix = carProfile.tuneSpeedBonus > 0 ? `, тюнинг +${carProfile.tuneSpeedBonus}` : "";
+  return `${carProfile.name}, скорость ${carProfile.effectiveSpeed}${tuneSuffix}`;
 }
 
 function msToHuman(ms) {
@@ -569,24 +643,29 @@ async function handleBalance(interaction, db) {
   const userId = interaction.user.id;
   const user = await getOrCreateUser(db, userId);
   const car = carInfo(user.car_id);
+  const tuneBonus = await getCarUpgradeSpeedBonus(db, userId, user.car_id);
   const weaponId = await getActiveWeapon(db, userId);
   const weapon = weaponId ? itemInfo(weaponId) : null;
+  const cosmetics = await getUserCosmetics(db, userId);
 
   const jailUntil = Number(user.jail_until || 0);
   const jailText = jailUntil > nowMs() ? `🚔 Тюрьма: ещё **${msToHuman(jailUntil - nowMs())}**` : "✅ На свободе";
 
   const embed = new EmbedBuilder()
     .setTitle("SAMP Life — Профиль")
-    .setDescription(
-      [
-        `Игрок: <@${userId}>`,
-        `Баланс: **${fmtMoney(user.money)}**`,
-        `Тачка: **${car.name}** (скорость: ${car.speed})`,
-        weapon ? `Оружие: **${weapon.name}**` : "Оружие: —",
-        jailText,
-      ].join("\n")
+    .setDescription(`Игрок: <@${userId}>`)
+    .addFields(
+      { name: "💵 Финансы", value: `Баланс: **${fmtMoney(user.money)}**`, inline: true },
+      { name: "🚘 Активная тачка", value: joinLines([
+        `**${car.name}**`,
+        `Скорость: **${car.speed + tuneBonus}**${tuneBonus > 0 ? ` (база ${car.speed} + ${tuneBonus})` : ""}`,
+      ]), inline: true },
+      { name: "🔫 Оружие", value: weapon ? `**${weapon.name}**` : "—", inline: true },
+      { name: "⚖️ Статус", value: jailText, inline: false }
     )
     .setTimestamp(new Date());
+
+  applyUserCosmeticsToEmbed(embed, cosmetics, interaction.user.username, 0x3b82f6);
 
   await interaction.reply({ embeds: [embed], ephemeral: false });
 }
@@ -736,57 +815,29 @@ async function handleRob(interaction, db) {
 
 async function handleDealership(interaction) {
   const entries = Object.entries(CARS);
-  const embeds = [];
-  let current = new EmbedBuilder()
-    .setTitle("🚗 Автосалон Otto's Autos")
-    .setDescription("Тачки, которые поднимут твой статус в SA")
-    .setTimestamp(new Date());
-  let fieldCount = 0;
-
-  for (const [id, car] of entries) {
-    if (fieldCount >= 25) {
-      embeds.push(current);
-      current = new EmbedBuilder().setTimestamp(new Date());
-      fieldCount = 0;
-    }
-    current.addFields({
-      name: `${car.name}  (${id})`,
-      value: `Цена: **${fmtMoney(car.price)}** | Скорость: **${car.speed}**`,
-      inline: true,
-    });
-    fieldCount++;
-  }
-
-  current.setFooter({ text: "Покупка: /buy type:car id:<carId>" });
-  embeds.push(current);
+  const lines = entries.map(([id, car]) => `• **${car.name}** (ID: **${id}**) — ${fmtMoney(car.price)} • скорость **${car.speed}**`);
+  const embeds = buildPagedLineEmbeds({
+    title: "🚗 Автосалон Otto's Autos",
+    description: "Каталог машин с ценой и базовой скоростью.",
+    color: 0x2563eb,
+    lines,
+    linesPerPage: 10,
+    footer: "Покупка: /buy type:car id:<carId>",
+  });
   await interaction.reply({ embeds: embeds.slice(0, 10) });
 }
 
 async function handleWeaponShop(interaction) {
   const entries = Object.entries(ITEMS);
-  const embeds = [];
-  let current = new EmbedBuilder()
-    .setTitle("🔫 Ammu-Nation")
-    .setDescription("Пушки и клинки для настоящих OG")
-    .setTimestamp(new Date());
-  let fieldCount = 0;
-
-  for (const [id, item] of entries) {
-    if (fieldCount >= 25) {
-      embeds.push(current);
-      current = new EmbedBuilder().setTimestamp(new Date());
-      fieldCount = 0;
-    }
-    current.addFields({
-      name: `${item.name}  (${id})`,
-      value: `Цена: **${fmtMoney(item.price)}** | Урон: **${item.dmg[0]}–${item.dmg[1]}**`,
-      inline: true,
-    });
-    fieldCount++;
-  }
-
-  current.setFooter({ text: "Покупка: /buy type:weapon id:<weaponId>" });
-  embeds.push(current);
+  const lines = entries.map(([id, item]) => `• **${item.name}** (ID: **${id}**) — ${fmtMoney(item.price)} • урон **${item.dmg[0]}–${item.dmg[1]}**`);
+  const embeds = buildPagedLineEmbeds({
+    title: "🔫 Ammu-Nation",
+    description: "Каталог оружия с ценой и диапазоном урона.",
+    color: 0xdc2626,
+    lines,
+    linesPerPage: 10,
+    footer: "Покупка: /buy type:weapon id:<weaponId>",
+  });
   await interaction.reply({ embeds: embeds.slice(0, 10) });
 }
 
@@ -932,16 +983,18 @@ async function handleRace(interaction, db) {
   await setCooldown(db, userId, "race", raceReadyAt);
   await setCooldown(db, opponent.id, "race", raceReadyAt);
 
-  const p1Car = carInfo(p1.car_id);
-  const p2Car = carInfo(p2.car_id);
+  const [p1Car, p2Car] = await Promise.all([
+    getRaceCarProfile(db, userId, p1.car_id),
+    getRaceCarProfile(db, opponent.id, p2.car_id),
+  ]);
 
   await interaction.deferReply();
 
-  const p1Total = randInt(1, 50) + p1Car.speed;
-  const p2Total = randInt(1, 50) + p2Car.speed;
+  const p1Total = randInt(1, 50) + p1Car.effectiveSpeed;
+  const p2Total = randInt(1, 50) + p2Car.effectiveSpeed;
 
   let winner = null;
-  let text = `🏁 **Гонка!**\n<@${userId}> (**${p1Car.name}**) VS <@${opponent.id}> (**${p2Car.name}**)\nСтавка: **${fmtMoney(bet)}**\n\n`;
+  let text = `🏁 **Гонка!**\n<@${userId}> (**${formatRaceCarLabel(p1Car)}**) VS <@${opponent.id}> (**${formatRaceCarLabel(p2Car)}**)\nСтавка: **${fmtMoney(bet)}**\n\n`;
 
   if (p1Total > p2Total) {
     winner = userId;

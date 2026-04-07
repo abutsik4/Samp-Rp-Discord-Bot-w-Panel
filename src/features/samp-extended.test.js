@@ -152,6 +152,146 @@ test("managed businesses decay, pay net income, and can be restored", async () =
   }
 });
 
+test("/bizstats shows detailed stats for an owned business", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-stats", username: "Stats" }), db });
+    await dbRun(db, `UPDATE samp_users SET money = 250000 WHERE user_id = ?`, ["u-stats"]);
+
+    await handleSampExtendedCommand({
+      interaction: makeInteraction({ commandName: "buybiz", userId: "u-stats", username: "Stats", options: { id: "carwash" } }),
+      db,
+    });
+
+    const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60_000).toISOString().slice(0, 19).replace("T", " ");
+    await dbRun(
+      db,
+      `UPDATE samp_properties
+       SET last_collected = ?, last_maintained = ?, last_state_tick = ?, condition = 82, supplies = 77, total_collected = 12345
+       WHERE user_id = ? AND property_id = ?`,
+      [sixHoursAgo, sixHoursAgo, sixHoursAgo, "u-stats", "carwash"]
+    );
+    await dbRun(db, `INSERT INTO samp_cosmetics(user_id, cosmetic_type, cosmetic_value) VALUES(?, ?, ?)`, ["u-stats", "title", "Легенда"]);
+    await dbRun(db, `INSERT INTO samp_cosmetics(user_id, cosmetic_type, cosmetic_value) VALUES(?, ?, ?)`, ["u-stats", "color", "0x2ecc71"]);
+
+    const stats = makeInteraction({ commandName: "bizstats", userId: "u-stats", username: "Stats", options: { id: "carwash" } });
+    await handleSampExtendedCommand({ interaction: stats, db });
+
+    const state = stats.__getState();
+    assert.ok(state.lastReply?.embeds?.length === 1, "bizstats should reply with a single embed");
+    const embed = state.lastReply.embeds[0].toJSON();
+
+    assert.match(embed.title, /Автомойка/);
+    assert.match(embed.description, /carwash/);
+    assert.equal(embed.author?.name, "Легенда • Stats");
+    assert.equal(embed.color, 0x2ecc71);
+    assert.ok(embed.fields.some((field) => field.name === "💸 Доход" && /Сейчас чистыми/.test(field.value)));
+    assert.ok(embed.fields.some((field) => field.name === "🛠️ Состояние" && /Сост\.:/.test(field.value)));
+    assert.ok(embed.fields.some((field) => field.name === "📈 Эффективность" && /Всего собрано/.test(field.value)));
+  } finally {
+    db.close();
+  }
+});
+
+test("/mbizstats reuses owned business stats view", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-mstats", username: "MStats" }), db });
+    await dbRun(db, `UPDATE samp_users SET money = 250000 WHERE user_id = ?`, ["u-mstats"]);
+
+    await handleSampExtendedCommand({
+      interaction: makeInteraction({ commandName: "buybiz", userId: "u-mstats", username: "MStats", options: { id: "carwash" } }),
+      db,
+    });
+
+    const stats = makeInteraction({ commandName: "mbizstats", userId: "u-mstats", username: "MStats", options: { id: "carwash" } });
+    await handleSampExtendedCommand({ interaction: stats, db });
+
+    const state = stats.__getState();
+    assert.ok(state.lastReply?.embeds?.length === 1, "mbizstats should reply with a single embed");
+    const embed = state.lastReply.embeds[0].toJSON();
+
+    assert.match(embed.title, /Автомойка/);
+    assert.ok(embed.fields.some((field) => field.name === "💸 Доход"));
+    assert.ok(embed.fields.some((field) => field.name === "🛠️ Состояние"));
+  } finally {
+    db.close();
+  }
+});
+
+test("/garage and /gang info apply cosmetic title and color", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "leader-cos", username: "LeaderCos" }), db });
+    await dbRun(db, `UPDATE samp_users SET money = 200000 WHERE user_id = ?`, ["leader-cos"]);
+    await dbRun(db, `INSERT INTO samp_cosmetics(user_id, cosmetic_type, cosmetic_value) VALUES(?, ?, ?)`, ["leader-cos", "title", "Босс"]);
+    await dbRun(db, `INSERT INTO samp_cosmetics(user_id, cosmetic_type, cosmetic_value) VALUES(?, ?, ?)`, ["leader-cos", "color", "0xf1c40f"]);
+
+    const garage = makeInteraction({ commandName: "garage", userId: "leader-cos", username: "LeaderCos" });
+    await handleSampExtendedCommand({ interaction: garage, db });
+    const garageEmbed = garage.__getState().lastReply.embeds[0].toJSON();
+    assert.equal(garageEmbed.author?.name, "Босс • LeaderCos");
+    assert.equal(garageEmbed.color, 0xf1c40f);
+
+    await handleSampExtendedCommand({
+      interaction: makeInteraction({
+        commandName: "gang",
+        userId: "leader-cos",
+        username: "LeaderCos",
+        subcommand: "create",
+        options: { name: "Ballas", tag: "BLL" },
+      }),
+      db,
+    });
+
+    const gangInfo = makeInteraction({ commandName: "gang", userId: "leader-cos", username: "LeaderCos", subcommand: "info" });
+    await handleSampExtendedCommand({ interaction: gangInfo, db });
+    const gangEmbed = gangInfo.__getState().lastReply.embeds[0].toJSON();
+    assert.equal(gangEmbed.author?.name, "Босс • LeaderCos");
+    assert.equal(gangEmbed.color, 0xf1c40f);
+  } finally {
+    db.close();
+  }
+});
+
+test("/businesses returns paged embeds for owned and market views", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-portfolio", username: "Portfolio" }), db });
+    await dbRun(db, `UPDATE samp_users SET money = 400000 WHERE user_id = ?`, ["u-portfolio"]);
+
+    await handleSampExtendedCommand({
+      interaction: makeInteraction({ commandName: "buybiz", userId: "u-portfolio", username: "Portfolio", options: { id: "carwash" } }),
+      db,
+    });
+
+    const businesses = makeInteraction({ commandName: "businesses", userId: "u-portfolio", username: "Portfolio" });
+    await handleSampExtendedCommand({ interaction: businesses, db });
+
+    const state = businesses.__getState();
+    assert.ok(state.lastReply?.embeds?.length >= 3, "businesses should return overview plus paged owned/market embeds");
+    const titles = state.lastReply.embeds.map((embed) => embed.toJSON().title);
+
+    assert.equal(titles[0], "🏢 Бизнесы San Andreas");
+    assert.ok(titles.some((title) => /Твои бизнесы/.test(title)));
+    assert.ok(titles.some((title) => /Рынок бизнесов/.test(title)));
+  } finally {
+    db.close();
+  }
+});
+
 test("active business run improves state and creates a cooldown", async () => {
   const db = makeDb();
   await ensureSampLifeTables(db);
@@ -245,6 +385,49 @@ test("gang leaders can fund and boost member businesses from treasury", async ()
     assert.ok(property.gang_boost_until, "gang support should set a boost timeout");
     assert.ok(gangAfter.treasury < 50000, "gang support should spend treasury");
     assert.match(String(support.__getState().lastReply), /поддержала бизнес/i, "gang support summary should be shown");
+  } finally {
+    db.close();
+  }
+});
+
+test("gcapture alias preserves interaction option access and claims territory", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "leader", username: "Leader" }), db });
+    await dbRun(db, `UPDATE samp_users SET money = 200000 WHERE user_id = ?`, ["leader"]);
+
+    await handleSampExtendedCommand({
+      interaction: makeInteraction({
+        commandName: "gang",
+        userId: "leader",
+        username: "Leader",
+        subcommand: "create",
+        options: { name: "Grove", tag: "GRV" },
+      }),
+      db,
+    });
+
+    const gang = await dbGet(db, `SELECT id FROM samp_gangs WHERE leader_id = ?`, ["leader"]);
+    await dbRun(db, `UPDATE samp_gangs SET treasury = 100000 WHERE id = ?`, [gang.id]);
+
+    const capture = makeInteraction({
+      commandName: "gcapture",
+      userId: "leader",
+      username: "Leader",
+      options: { district: "ganton" },
+    });
+    await handleSampExtendedCommand({ interaction: capture, db });
+
+    const territory = await dbGet(db, `SELECT gang_id, pressure FROM samp_gang_territories WHERE district_id = ?`, ["ganton"]);
+    const gangAfter = await dbGet(db, `SELECT treasury FROM samp_gangs WHERE id = ?`, [gang.id]);
+
+    assert.equal(Number(territory.gang_id), Number(gang.id), "gcapture should assign the district to the leader's gang");
+    assert.equal(Number(territory.pressure), 60, "gcapture should initialize neutral capture pressure");
+    assert.ok(gangAfter.treasury < 100000, "gcapture should spend gang treasury");
+    assert.match(String(capture.__getState().lastReply), /взяла район/i, "gcapture should return the territory capture summary");
   } finally {
     db.close();
   }
