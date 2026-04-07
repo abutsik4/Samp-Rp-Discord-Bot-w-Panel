@@ -55,7 +55,7 @@ function registerCommandHandlers(ctx) {
         } catch (e) {
           console.error("[samp-life] autocomplete error", e);
         }
-      } else if (["buybiz", "maintainbiz", "bizrun", "tunecar", "buycosmetic", "gang"].includes(interaction.commandName)) {
+      } else if (["buybiz", "maintainbiz", "bizrun", "tunecar", "buycosmetic", "gang", "gcapture", "gsupportbiz"].includes(interaction.commandName)) {
         try {
           await handleSampExtendedAutocomplete(interaction, db);
         } catch (e) {
@@ -124,7 +124,7 @@ function registerCommandHandlers(ctx) {
         "bounty", "bountylist",
         "heist",
         "jobs", "dojob",
-        "gang",
+        "gang", "gmap", "gcapture", "gsupportbiz",
         "shopcosmetics", "buycosmetic",
         "repair",
         "lottery",

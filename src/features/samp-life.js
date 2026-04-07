@@ -505,14 +505,14 @@ function getSampLifeCommandBuilders() {
     new SlashCommandBuilder()
       .setName("weapon")
       .setDescription("SAMP Life: выбрать активное оружие")
+      .addStringOption((o) => o.setName("id").setDescription("ID оружия (для длинного списка укажи page)").setRequired(true).setAutocomplete(true))
       .addIntegerOption((o) =>
         o
           .setName("page")
           .setDescription("Страница списка для автокомплита")
           .setRequired(false)
           .setMinValue(1)
-      )
-      .addStringOption((o) => o.setName("id").setDescription("ID оружия (для длинного списка укажи page)").setRequired(true).setAutocomplete(true)),
+      ),
 
     new SlashCommandBuilder().setName("weaponshop").setDescription("SAMP Life: магазин оружия Ammu-Nation (цены/урон)"),
 

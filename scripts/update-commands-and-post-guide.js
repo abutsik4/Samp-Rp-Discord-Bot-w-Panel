@@ -170,9 +170,9 @@ const channelPosts = [
           field(
             "🗺️ Районы и контроль",
             lines(
-              "**`/gang territories`** — список районов San Andreas",
-              "**`/gang claimterritory district:<район>`** — атаковать или укрепить район",
-              "**`/gang supportbiz user:@игрок business:<id>`** — помочь бизнесу участника из казны",
+              "**`/gmap`** — список районов San Andreas",
+              "**`/gcapture district:<район>`** — атаковать или укрепить район",
+              "**`/gsupportbiz user:@игрок business:<id>`** — помочь бизнесу участника из казны",
               "Контроль района даёт бонус бизнесам вашей банды в этой зоне."
             )
           ),
@@ -237,7 +237,8 @@ const channelPosts = [
               "**`/radio-info station:<станция>`** — инфо о станции",
               "**`/radio-fans station:<станция>`** — фанаты станции",
               "**`/holiday today`** — праздники на сегодня",
-              "**`/holiday date value:<YYYY-MM-DD>`** — праздники на дату"
+              "**`/holiday date value:<YYYY-MM-DD>`** — праздники на дату",
+              "**`/holiday list date:<YYYY-MM-DD>`** — ручные праздники на дату"
             )
           ),
         ],

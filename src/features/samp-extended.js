@@ -1605,6 +1605,13 @@ function getSampExtendedCommandBuilders() {
       .addSubcommand(s => s.setName("info").setDescription("Инфо о банде"))
       .addSubcommand(s => s.setName("top").setDescription("Топ банд")),
 
+    new SlashCommandBuilder().setName("gmap").setDescription("SAMP Life: карта районов и контролирующих банд"),
+    new SlashCommandBuilder().setName("gcapture").setDescription("SAMP Life: атаковать или укрепить район")
+      .addStringOption(o => o.setName("district").setDescription("Район").setRequired(true).setAutocomplete(true)),
+    new SlashCommandBuilder().setName("gsupportbiz").setDescription("SAMP Life: поддержать бизнес участника из казны")
+      .addUserOption(o => o.setName("user").setDescription("Участник банды").setRequired(true))
+      .addStringOption(o => o.setName("business").setDescription("ID бизнеса").setRequired(true).setAutocomplete(true)),
+
     new SlashCommandBuilder().setName("shopcosmetics").setDescription("SAMP Life: магазин косметики"),
     new SlashCommandBuilder().setName("buycosmetic").setDescription("SAMP Life: купить косметику")
       .addStringOption(o => o.setName("id").setDescription("ID товара").setRequired(true).setAutocomplete(true)),
@@ -1629,6 +1636,11 @@ function getSampExtendedCommandBuilders() {
 
 async function handleSampExtendedCommand({ interaction, db }) {
   const name = interaction.commandName;
+  const gangAliasMap = {
+    gmap: "territories",
+    gcapture: "claimterritory",
+    gsupportbiz: "supportbiz",
+  };
   try {
     if (name === "businesses") return await handleBusinesses(interaction, db);
     if (name === "buybiz") return await handleBuyBiz(interaction, db);
@@ -1643,6 +1655,17 @@ async function handleSampExtendedCommand({ interaction, db }) {
     if (name === "jobs") return await handleJobs(interaction, db);
     if (name === "dojob") return await handleDoJob(interaction, db);
     if (name === "gang") return await handleGangCommand(interaction, db);
+    if (gangAliasMap[name]) {
+      const aliasInteraction = {
+        ...interaction,
+        commandName: "gang",
+        options: {
+          ...interaction.options,
+          getSubcommand: () => gangAliasMap[name],
+        },
+      };
+      return await handleGangCommand(aliasInteraction, db);
+    }
     if (name === "shopcosmetics") return await handleShopCosmetics(interaction);
     if (name === "buycosmetic") return await handleBuyCosmetic(interaction, db);
     if (name === "repair") return await handleRepair(interaction, db);
@@ -1664,9 +1687,9 @@ async function handleSampExtendedAutocomplete(interaction, db) {
 
   if (name === "buybiz" || name === "maintainbiz" || name === "bizrun") {
     choices = Object.entries(PROPERTIES).map(([id, p]) => ({ name: `${p.name} — ${fmtMoney(p.price)}`, value: id }));
-  } else if (name === "gang" && focused.name === "business") {
+  } else if ((name === "gang" || name === "gsupportbiz") && focused.name === "business") {
     choices = Object.entries(PROPERTIES).map(([id, p]) => ({ name: `${p.name} — ${id}`, value: id }));
-  } else if (name === "gang" && focused.name === "district") {
+  } else if ((name === "gang" || name === "gcapture") && focused.name === "district") {
     choices = Object.entries(TERRITORY_DISTRICTS).map(([id, district]) => ({
       name: `${district.name} — бонус +${Math.round((district.businessBuff || 0) * 100)}%`,
       value: id,
