@@ -4,7 +4,6 @@ const { dbAll } = require("../utils/db-helpers");
 
 const COSMETICS = {
   title_og: { name: "Титул: OG", type: "title", price: 25_000, value: "OG" },
-  title_boss: { name: "Титул: Босс", type: "title", price: 50_000, value: "Босс" },
   title_legend: { name: "Титул: Легенда", type: "title", price: 100_000, value: "Легенда" },
   title_king: { name: "Титул: Король SA", type: "title", price: 250_000, value: "Король SA" },
   color_gold: { name: "Цвет: Золотой", type: "color", price: 30_000, value: "0xf1c40f" },

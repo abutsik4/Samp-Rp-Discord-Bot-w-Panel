@@ -1382,6 +1382,31 @@ test("hottip shows richest players", async () => {
   }
 });
 
+test("buycosmetic rejects removed boss title", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-no-boss", username: "NoBoss" }), db });
+    await dbRun(db, `UPDATE samp_users SET money = 100000 WHERE user_id = ?`, ["u-no-boss"]);
+
+    const buy = makeInteraction({
+      commandName: "buycosmetic",
+      userId: "u-no-boss",
+      username: "NoBoss",
+      options: { id: "title_boss" },
+    });
+    await handleSampExtendedCommand({ interaction: buy, db });
+
+    const state = buy.__getState();
+    const payload = typeof state.lastReply === "string" ? state.lastReply : state.lastReply?.content || "";
+    assert.match(payload, /Нет такого товара/i);
+  } finally {
+    db.close();
+  }
+});
+
 test("BLACK_MARKET_ITEMS has 14 items with valid grants", () => {
   assert.equal(BLACK_MARKET_ITEMS.length, 14, "should have 14 black market items");
 
