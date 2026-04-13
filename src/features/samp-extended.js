@@ -257,6 +257,11 @@ const BM_SECRET_HEIST = {
   jailMs: 10 * 60_000,
 };
 
+const GOLDEN_DEAGLE_DUEL_DAMAGE_BONUS = 3;
+const GOLDEN_DEAGLE_BOUNTY_BONUS_MULTIPLIER = 0.25;
+const GOLDEN_DEAGLE_DURABILITY_LOSS_RANGE = [2, 5];
+const DEFAULT_WEAPON_DURABILITY_LOSS_RANGE = [5, 10];
+
 const BUSINESS_OPERATIONS = {
   carwash: { label: "открыл экспресс-мойку", reward: [1_600, 3_000], conditionGain: 7, suppliesGain: 12, repGain: 1, cooldownMs: 30 * 60_000 },
   gas_station: { label: "закрыл смену на заправке", reward: [2_400, 4_600], conditionGain: 5, suppliesGain: 10, repGain: 1, cooldownMs: 45 * 60_000 },
@@ -1176,6 +1181,11 @@ async function getUserSetting(db, userId, key) {
   return row ? row.value : null;
 }
 
+async function hasGoldenDeagleSkin(db, userId) {
+  const cosmetics = await getUserCosmetics(db, userId);
+  return cosmetics?.raw?.weapon_skin_deagle === "gold";
+}
+
 function isIgnorableInteractionError(error) {
   const code = Number(error?.code || error?.rawError?.code || 0);
   return code === 10062 || code === 40060;
@@ -2082,17 +2092,31 @@ async function handleBountyList(interaction, db) {
 
 async function checkAndCollectBounty(db, winnerId, loserId) {
   const bounties = await dbAll(db, "SELECT id, amount FROM samp_bounties WHERE target_user_id = ? AND status = 'active'", [loserId]);
-  if (!bounties || bounties.length === 0) return 0;
+  if (!bounties || bounties.length === 0) {
+    return { collected: false, amount: 0, baseAmount: 0, bonusAmount: 0 };
+  }
   let total = 0;
   for (const b of bounties) {
     total += b.amount;
     await dbRun(db, "UPDATE samp_bounties SET status = 'collected' WHERE id = ?", [b.id]);
   }
-  if (total > 0) {
-    await adjustMoney(db, winnerId, total);
-    await addLedger(db, "bounty_collect", null, winnerId, total, { target: loserId });
+  let bonusAmount = 0;
+  try {
+    if (await hasGoldenDeagleSkin(db, winnerId)) {
+      bonusAmount = Math.floor(total * GOLDEN_DEAGLE_BOUNTY_BONUS_MULTIPLIER);
+    }
+  } catch (_) {}
+  const payout = total + bonusAmount;
+  if (payout > 0) {
+    await adjustMoney(db, winnerId, payout);
+    await addLedger(db, "bounty_collect", null, winnerId, payout, {
+      target: loserId,
+      base_amount: total,
+      bonus_amount: bonusAmount,
+      source: bonusAmount > 0 ? "golden_deagle" : null,
+    });
   }
-  return total;
+  return { collected: payout > 0, amount: payout, baseAmount: total, bonusAmount };
 }
 
 // --- Heists ---
@@ -2631,7 +2655,9 @@ async function handleBuyCosmetic(interaction, db) {
 
 // --- Weapon Durability ---
 async function degradeWeapon(db, userId, weaponId) {
-  const loss = randInt(5, 10);
+  const isGoldenDeagle = weaponId === "deagle" && await hasGoldenDeagleSkin(db, userId).catch(() => false);
+  const [minLoss, maxLoss] = isGoldenDeagle ? GOLDEN_DEAGLE_DURABILITY_LOSS_RANGE : DEFAULT_WEAPON_DURABILITY_LOSS_RANGE;
+  const loss = randInt(minLoss, maxLoss);
   await dbRun(db, `UPDATE samp_inventory SET durability = MAX(0, durability - ?) WHERE user_id = ? AND item_id = ?`, [loss, userId, weaponId]);
   const row = await dbGet(db, "SELECT durability FROM samp_inventory WHERE user_id = ? AND item_id = ?", [userId, weaponId]);
   return row?.durability ?? 0;
@@ -3427,4 +3453,7 @@ module.exports = {
   BLACK_MARKET_GRANTS,
   getUserSetting,
   setUserSetting,
+  hasGoldenDeagleSkin,
+  GOLDEN_DEAGLE_DUEL_DAMAGE_BONUS,
+  GOLDEN_DEAGLE_BOUNTY_BONUS_MULTIPLIER,
 };

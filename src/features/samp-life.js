@@ -1548,6 +1548,14 @@ async function handleDuel(interaction, db) {
 
   const p1Weapon = p1WeaponId ? itemInfo(p1WeaponId) : null;
   const p2Weapon = p2WeaponId ? itemInfo(p2WeaponId) : null;
+  const [p1Cosmetics, p2Cosmetics] = await Promise.all([
+    p1WeaponId === "deagle" ? getUserCosmetics(db, userId) : Promise.resolve(null),
+    p2WeaponId === "deagle" ? getUserCosmetics(db, opponent.id) : Promise.resolve(null),
+  ]);
+  const p1GoldenDeagle = p1WeaponId === "deagle" && p1Cosmetics?.raw?.weapon_skin_deagle === "gold";
+  const p2GoldenDeagle = p2WeaponId === "deagle" && p2Cosmetics?.raw?.weapon_skin_deagle === "gold";
+  const p1WeaponLabel = p1Weapon ? (p1GoldenDeagle ? "Золотой Desert Eagle" : p1Weapon.name) : "кулаки";
+  const p2WeaponLabel = p2Weapon ? (p2GoldenDeagle ? "Золотой Desert Eagle" : p2Weapon.name) : "кулаки";
 
   let p1Hp = 100;
   let p2Hp = 100;
@@ -1578,10 +1586,12 @@ async function handleDuel(interaction, db) {
   const rounds = [];
   if (p1HasArmor) rounds.push(`🛡️ <@${userId}> надел бронежилет (+25 поглощения)`);
   if (p2HasArmor) rounds.push(`🛡️ <@${opponent.id}> надел бронежилет (+25 поглощения)`);
+  if (p1GoldenDeagle) rounds.push(`🏆 <@${userId}> вышел с Золотым Desert Eagle (+3 урон, +25% к баунти)`);
+  if (p2GoldenDeagle) rounds.push(`🏆 <@${opponent.id}> вышел с Золотым Desert Eagle (+3 урон, +25% к баунти)`);
 
   for (let i = 1; i <= 6; i++) {
-    const p1Dmg = p1Weapon ? randInt(p1Weapon.dmg[0], p1Weapon.dmg[1]) : randInt(6, 12);
-    const p2Dmg = p2Weapon ? randInt(p2Weapon.dmg[0], p2Weapon.dmg[1]) : randInt(6, 12);
+    const p1Dmg = p1Weapon ? randInt(p1Weapon.dmg[0], p1Weapon.dmg[1]) + (p1GoldenDeagle ? 3 : 0) : randInt(6, 12);
+    const p2Dmg = p2Weapon ? randInt(p2Weapon.dmg[0], p2Weapon.dmg[1]) + (p2GoldenDeagle ? 3 : 0) : randInt(6, 12);
 
     // Armor absorbs damage
     let p1Absorbed = 0;
@@ -1626,7 +1636,7 @@ async function handleDuel(interaction, db) {
   if (p1Hp > p2Hp) winner = userId;
   else if (p2Hp > p1Hp) winner = opponent.id;
 
-  let text = `🔫 **Дуэль!**\n<@${userId}> (${p1Weapon?.name || "кулаки"}) VS <@${opponent.id}> (${p2Weapon?.name || "кулаки"})\nСтавка: **${fmtMoney(bet)}**\n\n`;
+  let text = `🔫 **Дуэль!**\n<@${userId}> (${p1WeaponLabel}) VS <@${opponent.id}> (${p2WeaponLabel})\nСтавка: **${fmtMoney(bet)}**\n\n`;
   text += rounds.slice(0, 6).join("\n");
   text += `\n\nФинал: <@${userId}> HP=${Math.max(0, p1Hp)} | <@${opponent.id}> HP=${Math.max(0, p2Hp)}`;
 
@@ -1652,7 +1662,9 @@ async function handleDuel(interaction, db) {
       const bountyResult = await checkAndCollectBounty(db, userId, opponent.id);
       if (p1WeaponId) await degradeWeapon(db, userId, p1WeaponId);
       if (p2WeaponId) await degradeWeapon(db, opponent.id, p2WeaponId);
-      const bountyText = bountyResult?.collected ? `\n💀 Награда за голову: **${fmtMoney(bountyResult.amount)}**` : "";
+      const bountyText = bountyResult?.collected
+        ? `\n💀 Награда за голову: **${fmtMoney(bountyResult.amount)}**${bountyResult.bonusAmount > 0 ? ` (включая **+${fmtMoney(bountyResult.bonusAmount)}** бонус Золотого Desert Eagle)` : ""}`
+        : "";
       await interaction.editReply(text + `\n\n🏆 Победил <@${userId}> и поднял **${fmtMoney(bet)}**.${bountyText}`);
     } catch (_) {
       await interaction.editReply(text + `\n\n🏆 Победил <@${userId}> и поднял **${fmtMoney(bet)}**.`);
@@ -1669,7 +1681,9 @@ async function handleDuel(interaction, db) {
     const bountyResult = await checkAndCollectBounty(db, opponent.id, userId);
     if (p1WeaponId) await degradeWeapon(db, userId, p1WeaponId);
     if (p2WeaponId) await degradeWeapon(db, opponent.id, p2WeaponId);
-    const bountyText = bountyResult?.collected ? `\n💀 Награда за голову: **${fmtMoney(bountyResult.amount)}**` : "";
+    const bountyText = bountyResult?.collected
+      ? `\n💀 Награда за голову: **${fmtMoney(bountyResult.amount)}**${bountyResult.bonusAmount > 0 ? ` (включая **+${fmtMoney(bountyResult.bonusAmount)}** бонус Золотого Desert Eagle)` : ""}`
+      : "";
     await interaction.editReply(text + `\n\n💀 Победил <@${opponent.id}>. Ты потерял **${fmtMoney(bet)}**.${bountyText}`);
   } catch (_) {
     await interaction.editReply(text + `\n\n💀 Победил <@${opponent.id}>. Ты потерял **${fmtMoney(bet)}**.`);

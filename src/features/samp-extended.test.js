@@ -22,6 +22,8 @@ const {
   applyHeistCooldown,
   getInventoryQty,
   consumeInventoryItem,
+  checkAndCollectBounty,
+  degradeWeapon,
   BLACK_MARKET_ITEMS,
   BLACK_MARKET_GRANTS,
 } = require("./samp-extended");
@@ -1308,5 +1310,74 @@ test("BLACK_MARKET_ITEMS has 14 items with valid grants", () => {
     const grant = BLACK_MARKET_GRANTS[item.type];
     assert.ok(grant, `item ${item.type} should have a grant entry`);
     assert.ok(grant.summary, `item ${item.type} grant should have summary`);
+  }
+});
+
+test("golden deagle grants bounty bonus and reduced durability loss", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  const realRandom = Math.random;
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-gold", username: "Gold" }), db });
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-target", username: "Target" }), db });
+
+    await dbRun(db, `INSERT INTO samp_cosmetics(user_id, cosmetic_type, cosmetic_value) VALUES(?, ?, ?)`, ["u-gold", "weapon_skin_deagle", "gold"]);
+    await dbRun(db, `INSERT INTO samp_inventory(user_id, item_id, qty, durability) VALUES(?, ?, 1, 100)`, ["u-gold", "deagle"]);
+    await dbRun(db, `INSERT INTO samp_bounties(target_user_id, placed_by, amount, status) VALUES(?, ?, ?, 'active')`, ["u-target", "u-gold", 20000]);
+
+    const bountyResult = await checkAndCollectBounty(db, "u-gold", "u-target");
+    assert.equal(bountyResult.collected, true);
+    assert.equal(bountyResult.baseAmount, 20000);
+    assert.equal(bountyResult.bonusAmount, 5000);
+    assert.equal(bountyResult.amount, 25000);
+
+    Math.random = () => 0;
+    await degradeWeapon(db, "u-gold", "deagle");
+    const weapon = await dbGet(db, `SELECT durability FROM samp_inventory WHERE user_id = ? AND item_id = ?`, ["u-gold", "deagle"]);
+    assert.equal(Number(weapon?.durability || 0), 98, "golden deagle should only lose 2 durability at minimum roll");
+  } finally {
+    Math.random = realRandom;
+    db.close();
+  }
+});
+
+test("golden deagle appears in duel log and mentions its bonus", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  const realRandom = Math.random;
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-gold-duel", username: "GoldDuel" }), db });
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-gold-victim", username: "Victim" }), db });
+    await dbRun(db, `UPDATE samp_users SET money = 100000 WHERE user_id IN (?, ?)`, ["u-gold-duel", "u-gold-victim"]);
+
+    await dbRun(db, `INSERT INTO samp_cosmetics(user_id, cosmetic_type, cosmetic_value) VALUES(?, ?, ?)`, ["u-gold-duel", "weapon_skin_deagle", "gold"]);
+    await dbRun(db, `INSERT INTO samp_inventory(user_id, item_id, qty, durability) VALUES(?, ?, 1, 100)`, ["u-gold-duel", "deagle"]);
+    await dbRun(db, `INSERT INTO samp_user_settings(user_id, key, value) VALUES(?, 'weapon', ?)`, ["u-gold-duel", "deagle"]);
+    await dbRun(db, `INSERT INTO samp_bounties(target_user_id, placed_by, amount, status) VALUES(?, ?, ?, 'active')`, ["u-gold-victim", "u-gold-duel", 20000]);
+
+    Math.random = () => 0;
+    const duel = makeInteraction({
+      commandName: "duel",
+      userId: "u-gold-duel",
+      username: "GoldDuel",
+      options: {
+        user: { id: "u-gold-victim", username: "Victim", bot: false },
+        bet: 1000,
+      },
+    });
+    await handleSampLifeCommand({ interaction: duel, db });
+
+    const state = duel.__getState();
+    const reply = String(state.lastReply || state.lastEditReply || "");
+    assert.match(reply, /Золотой Desert Eagle/);
+    assert.match(reply, /\+3 урон, \+25% к баунти/i);
+    assert.match(reply, /бонус Золотого Desert Eagle/i);
+  } finally {
+    Math.random = realRandom;
+    db.close();
   }
 });
