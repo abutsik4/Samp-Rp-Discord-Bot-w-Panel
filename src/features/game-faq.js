@@ -287,7 +287,7 @@ const GAME_FAQ_TOPICS = [
     id: "jobs-heists",
     title: "Работы дня, ограбления и баунти",
     summary: "Ежедневные задания, кооперативные ограбления, контракты на игроков и редкие подсистемы.",
-    commands: ["/jobs", "/dojob", "/heist", "/bounty", "/bountylist", "/shopcosmetics", "/lottery", "/blackmarket"],
+    commands: ["/jobs", "/dojob", "/heist", "/bounty", "/bountylist", "/shopcosmetics", "/lottery", "/blackmarket", "/usejailpass", "/userepairkit", "/disguise", "/hottip", "/secretheist", "/wiretap", "/sabotage", "/gangbmorder"],
     keywords: ["jobs", "heist", "bounty", "лотерея", "косметика", "черный рынок"],
     questions: [
       {
@@ -314,9 +314,9 @@ const GAME_FAQ_TOPICS = [
       {
         id: "rare-systems",
         question: "Для чего нужны косметика, лотерея и чёрный рынок?",
-        answer: "`/shopcosmetics` и `/buycosmetic` дают титулы и цвета оформления профилей/эмбедов. `/lottery` — это недельная лотерея на общий банк. `/blackmarket` — отдельный слой редких или дорогих сделок. Эти системы нужны не для обязательного старта, а как late-game sink для денег и персонализации профиля.",
-        commands: ["/shopcosmetics", "/buycosmetic", "/lottery", "/blackmarket"],
-        keywords: ["косметика", "лотерея", "blackmarket", "титулы"],
+        answer: "`/shopcosmetics` и `/buycosmetic` дают титулы и цвета оформления профилей/эмбедов. `/lottery` — это недельная лотерея на общий банк. `/blackmarket` — обновлённый чёрный рынок с 14 товарами, дилерами, риском облавы и системой репутации. Предметы реально работают: броня и аптечка — в дуэлях, NOS — в гонках, отмывка — снижает штрафы, маскировка — защита от PvP. Новые команды: `/usejailpass`, `/userepairkit`, `/disguise`, `/hottip`, `/secretheist`, `/wiretap`, `/sabotage`, `/gangbmorder`.",
+        commands: ["/shopcosmetics", "/buycosmetic", "/lottery", "/blackmarket", "/usejailpass", "/userepairkit", "/disguise", "/hottip", "/secretheist", "/wiretap", "/sabotage", "/gangbmorder"],
+        keywords: ["косметика", "лотерея", "blackmarket", "титулы", "чёрный рынок", "дилер", "облава"],
       },
     ],
   },
