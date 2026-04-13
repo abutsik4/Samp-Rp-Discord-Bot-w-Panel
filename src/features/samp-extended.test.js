@@ -1349,12 +1349,15 @@ test("hottip shows richest players", async () => {
   await ensureSampExtendedTables(db);
 
   try {
-    const reg1 = makeInteraction({ commandName: "reg", userId: "u-tip1", username: "TipUser" });
-    await handleSampLifeCommand({ interaction: reg1, db });
-    const reg2 = makeInteraction({ commandName: "reg", userId: "u-tip2", username: "RichUser" });
-    await handleSampLifeCommand({ interaction: reg2, db });
+    for (const userId of ["u-tip1", "u-tip2", "u-tip3", "u-tip4", "u-tip5", "u-tip6"]) {
+      await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId, username: userId }), db });
+    }
 
     await dbRun(db, `UPDATE samp_users SET money = 500000 WHERE user_id = ?`, ["u-tip2"]);
+    await dbRun(db, `UPDATE samp_users SET money = 430000 WHERE user_id = ?`, ["u-tip3"]);
+    await dbRun(db, `UPDATE samp_users SET money = 360000 WHERE user_id = ?`, ["u-tip4"]);
+    await dbRun(db, `UPDATE samp_users SET money = 290000 WHERE user_id = ?`, ["u-tip5"]);
+    await dbRun(db, `UPDATE samp_users SET money = 220000 WHERE user_id = ?`, ["u-tip6"]);
     await dbRun(db,
       `INSERT INTO samp_inventory(user_id, item_id, qty) VALUES(?, ?, ?)
        ON CONFLICT(user_id, item_id) DO UPDATE SET qty = qty + excluded.qty`,
@@ -1366,7 +1369,11 @@ test("hottip shows richest players", async () => {
 
     const state = tip.__getState();
     const content = typeof state.lastReply === "string" ? state.lastReply : state.lastReply?.content || "";
-    assert.ok(content.includes("500") || content.includes("наводк") || content.includes("🔍"), "hot tip should show rich players");
+    assert.match(content, /1\. <@u-tip2>/);
+    assert.match(content, /2\. <@u-tip3>/);
+    assert.match(content, /3\. <@u-tip4>/);
+    assert.match(content, /4\. <@u-tip5>/);
+    assert.match(content, /5\. <@u-tip6>/);
 
     const qty = await getInventoryQty(db, "u-tip1", "bm_hot_tip");
     assert.equal(qty, 0, "hot tip should be consumed");

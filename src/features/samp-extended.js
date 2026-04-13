@@ -3052,7 +3052,7 @@ async function handleHotTip(interaction, db) {
      LEFT JOIN samp_user_settings s ON u.user_id = s.user_id AND s.key = 'disguised_until'
      WHERE u.user_id != ? AND u.money > 1000
        AND (s.value IS NULL OR CAST(s.value AS INTEGER) <= ?)
-     ORDER BY u.money DESC LIMIT 3`,
+     ORDER BY u.money DESC LIMIT 5`,
     [String(userId), nowMs()]);
 
   if (!richest || richest.length === 0) {
