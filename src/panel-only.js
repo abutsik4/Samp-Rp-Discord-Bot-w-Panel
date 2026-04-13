@@ -34,6 +34,7 @@ const { ensureRadioTable } = require("./features/radio-vote");
 
 const PORT = Number(process.env.PANEL_PORT || 3001);
 const TOKEN = process.env.DISCORD_TOKEN;
+const PANEL_DISABLE_DISCORD = process.env.PANEL_DISABLE_DISCORD === "1";
 
 const PANEL_BASE = "/panel";
 const TRUST_PROXY = process.env.TRUST_PROXY === "1";
@@ -149,7 +150,7 @@ async function startPanelOnly() {
   });
 
   // If Discord token is available, connect the bot
-  if (TOKEN) {
+  if (TOKEN && !PANEL_DISABLE_DISCORD) {
     console.log("\n🔗 Connecting to Discord...");
     try {
       await discordClient.login(TOKEN);
@@ -158,6 +159,8 @@ async function startPanelOnly() {
       console.log("⚠️  Discord connection failed (panel will work without bot features)");
       console.log(`   Error: ${error.message}`);
     }
+  } else if (PANEL_DISABLE_DISCORD) {
+    console.log("⚠️  Discord login disabled for panel-only mode");
   } else {
     console.log("⚠️  No DISCORD_TOKEN found - running panel without Discord connection");
   }

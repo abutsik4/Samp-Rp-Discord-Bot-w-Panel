@@ -494,6 +494,8 @@ async function ensureSampExtendedTables(db) {
     week_start TEXT NOT NULL, winner_id TEXT, pot INTEGER NOT NULL DEFAULT 0,
     drawn_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`);
+
+  await dbRun(db, `DELETE FROM samp_cooldowns WHERE action = ?`, [HEIST_ACTIVE_ACTION]);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2151,7 +2153,13 @@ async function handleHeist(interaction, db) {
     .setDescription(`Организатор: <@${userId}>\nНужно: **${tier.minPlayers}-${tier.maxPlayers}** игроков\nВыплата: **${fmtMoney(tier.payout[0])} — ${fmtMoney(tier.payout[1])}**\nРиск: **${Math.round(tier.failChance * 100)}%**\nКулдаун после запуска: **${formatDuration(organizerCooldownMs)}** для тебя, у опытных игроков может снизиться до **${formatDuration(HEIST_MIN_COOLDOWN_MS)}**\n\nУчастники: <@${userId}>`)
     .setColor(0x9b59b6).setFooter({ text: "60 секунд на сбор команды" });
 
-  const reply = await interaction.reply({ embeds: [embed], components: [row], fetchReply: true });
+  let reply;
+  try {
+    reply = await interaction.reply({ embeds: [embed], components: [row], fetchReply: true });
+  } catch (error) {
+    await releaseHeistParticipants(db, [userId]).catch(() => {});
+    throw error;
+  }
 
   const collector = reply.createMessageComponentCollector({ componentType: ComponentType.Button, time: 60_000 });
 

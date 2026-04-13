@@ -853,6 +853,81 @@ test("heist participants cannot reserve multiple lobbies and receive cooldown af
   }
 });
 
+test("ensureSampExtendedTables clears stale active heist locks on startup", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    await dbRun(db, `INSERT INTO samp_cooldowns(user_id, action, ready_at) VALUES(?, ?, ?)`, ["u-stale-heist", "heist:active", Date.now() + 60_000]);
+
+    await ensureSampExtendedTables(db);
+
+    const activeLock = await dbGet(db, `SELECT ready_at FROM samp_cooldowns WHERE user_id = ? AND action = ?`, ["u-stale-heist", "heist:active"]);
+
+    assert.equal(activeLock, null, "startup initialization should drop stale heist lobby locks");
+  } finally {
+    db.close();
+  }
+});
+
+test("heist creation releases active lock when the initial reply fails", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+  await ensureBadgesTable(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-heist-fail", username: "HeistFail" }), db });
+
+    let replyCalls = 0;
+    const interaction = {
+      commandName: "heist",
+      user: { id: "u-heist-fail", username: "HeistFail", bot: false },
+      guild: { id: "g1" },
+      deferred: false,
+      replied: false,
+      options: {
+        getSubcommand: () => null,
+        getString: (name, required) => {
+          if (name === "tier") return "store";
+          if (required) throw new Error(`missing option ${name}`);
+          return null;
+        },
+        getInteger: () => null,
+        getUser: () => null,
+      },
+      async reply(payload) {
+        replyCalls += 1;
+        if (replyCalls === 1) {
+          throw new Error("initial heist reply failed");
+        }
+        this.replied = true;
+        this.lastReply = payload;
+        return null;
+      },
+      async editReply(payload) {
+        this.replied = true;
+        this.lastEditReply = payload;
+        return null;
+      },
+      async followUp(payload) {
+        this.lastFollowUp = payload;
+        return null;
+      },
+    };
+
+    await handleSampExtendedCommand({ interaction, db });
+
+    const activeLock = await dbGet(db, `SELECT ready_at FROM samp_cooldowns WHERE user_id = ? AND action = ?`, ["u-heist-fail", "heist:active"]);
+
+    assert.equal(activeLock, null, "failed heist creation should not leave an active lobby lock behind");
+    assert.match(String(interaction.lastReply?.content || ""), /Ошибка\. Попробуй позже\./, "the command should still surface a generic error response");
+  } finally {
+    db.close();
+  }
+});
+
 test("heist cooldown drops for users with high-tier message badges", async () => {
   const db = makeDb();
   await ensureSampLifeTables(db);
