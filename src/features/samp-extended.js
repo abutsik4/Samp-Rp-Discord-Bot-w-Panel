@@ -2715,6 +2715,7 @@ async function handleBlackMarket(interaction, db) {
   const sub = interaction.options.getSubcommand?.() || "browse";
 
   if (sub === "browse" || !interaction.options.getSubcommand) {
+    await interaction.deferReply();
     const userId = interaction.user.id;
     const deals = getDailyBlackMarketDeals();
     const dealer = getDailyDealer();
@@ -2740,26 +2741,27 @@ async function handleBlackMarket(interaction, db) {
       fieldsPerPage: 4,
       footer: `Покупка: /blackmarket buy slot:<1-${BM_DAILY_DEAL_COUNT}> • ⚠️ 8% шанс облавы`,
     });
-    await interaction.reply({ embeds });
+    await interaction.editReply({ embeds });
 
   } else if (sub === "buy") {
+    await interaction.deferReply();
     const userId = interaction.user.id;
     const guildId = interaction.guild?.id || interaction.guildId || null;
     const slot = interaction.options.getInteger("slot", true);
     const deals = getDailyBlackMarketDeals();
     const deal = deals[slot - 1];
-    if (!deal) { await interaction.reply({ content: `Слот 1-${BM_DAILY_DEAL_COUNT}.`, ephemeral: true }); return; }
+    if (!deal) { await interaction.editReply({ content: `Слот 1-${BM_DAILY_DEAL_COUNT}.` }); return; }
 
     const user = await getSampUser(db, userId);
-    if (!user) { await interaction.reply({ content: "Сначала /reg.", ephemeral: true }); return; }
+    if (!user) { await interaction.editReply({ content: "Сначала /reg." }); return; }
 
     const purchases = await getBmPurchaseCount(db, userId);
     const tier = getBmRepTier(purchases);
     const finalPrice = tier.discount > 0 ? Math.floor(deal.price * (1 - tier.discount)) : deal.price;
 
-    if (Number(user.money) < finalPrice) { await interaction.reply({ content: "Не хватает виртов.", ephemeral: true }); return; }
+    if (Number(user.money) < finalPrice) { await interaction.editReply({ content: "Не хватает виртов." }); return; }
     if (await alreadyOwnsBlackMarketDeal(db, userId, deal)) {
-      await interaction.reply({ content: "Этот товар у тебя уже есть. Повторно списывать деньги не буду.", ephemeral: true });
+      await interaction.editReply({ content: "Этот товар у тебя уже есть. Повторно списывать деньги не буду." });
       return;
     }
 
@@ -2792,7 +2794,7 @@ async function handleBlackMarket(interaction, db) {
     let reply = `🕶️ Куплено: **${deal.name}** за **${fmtMoney(finalPrice)}**!\n${grantResult.summary}`;
     if (instantResult) reply += `\n${instantResult}`;
     if (stingTriggered) reply += `\n\n⚠️ **Полиция засекла сделку!** +${BM_STING_STARS} ⭐ розыска!`;
-    await interaction.reply(reply);
+    await interaction.editReply(reply);
   }
 }
 
