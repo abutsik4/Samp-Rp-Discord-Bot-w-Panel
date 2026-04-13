@@ -232,6 +232,29 @@ function itemInfo(itemId) {
   return ITEMS[itemId] || null;
 }
 
+function isIgnorableInteractionError(error) {
+  const code = Number(error?.code || error?.rawError?.code || 0);
+  return code === 10062 || code === 40060;
+}
+
+async function sendInteractionResponse(interaction, payload) {
+  if (interaction.deferred || interaction.replied) {
+    return interaction.editReply(payload);
+  }
+  return interaction.reply(payload);
+}
+
+async function tryDeferReply(interaction) {
+  if (interaction.deferred || interaction.replied) return true;
+  try {
+    await interaction.deferReply();
+    return true;
+  } catch (error) {
+    if (isIgnorableInteractionError(error)) return false;
+    throw error;
+  }
+}
+
 function isMissingTableError(error, tableName = "") {
   const message = String(error?.message || error || "");
   return message.includes("no such table") && (!tableName || message.includes(tableName));
@@ -560,7 +583,7 @@ async function ensureNotJailed(interaction, userRow) {
   const until = Number(userRow?.jail_until || 0);
   if (until > nowMs()) {
     const left = msToHuman(until - nowMs());
-    await interaction.reply({
+    await sendInteractionResponse(interaction, {
       content: `🚔 Ты в тюрьме ещё **${left}**. Вирты и тачки подождут.\n(Команда /balance доступна всегда.)`,
       ephemeral: true,
     });
@@ -586,7 +609,19 @@ async function setCooldown(db, userId, action, readyAt) {
 async function checkAndConsumeCooldown(interaction, db, userId, action) {
   const result = await consumeCooldownAtomic(db, userId, action);
   if (!result.ok) {
-    await interaction.reply({ content: `⏳ Рано. Подожди **${msToHuman(result.remainingMs)}**.`, ephemeral: true });
+    await sendInteractionResponse(interaction, { content: `⏳ Рано. Подожди **${msToHuman(result.remainingMs)}**.`, ephemeral: true });
+    return false;
+  }
+  return true;
+}
+
+async function checkCooldownWithoutConsuming(interaction, db, userId, action) {
+  const readyAt = await getCooldown(db, userId, action);
+  if (readyAt > nowMs()) {
+    await sendInteractionResponse(interaction, {
+      content: `⏳ Рано. Подожди **${msToHuman(readyAt - nowMs())}**.`,
+      ephemeral: true,
+    });
     return false;
   }
   return true;
@@ -1046,9 +1081,9 @@ async function handleWork(interaction, db) {
   const user = await getOrCreateUser(db, userId);
 
   if (!(await ensureNotJailed(interaction, user))) return;
+  if (!(await checkCooldownWithoutConsuming(interaction, db, userId, "work"))) return;
+  if (!(await tryDeferReply(interaction))) return;
   if (!(await checkAndConsumeCooldown(interaction, db, userId, "work"))) return;
-
-  await interaction.deferReply();
 
   const jobs = ["разносил пиццу", "мыл тачку босса", "грузил ящики в порту", "таскал колёса на шинке"]; 
   const job = pick(jobs);
@@ -1077,9 +1112,9 @@ async function handleTruck(interaction, db) {
   const user = await getOrCreateUser(db, userId);
 
   if (!(await ensureNotJailed(interaction, user))) return;
+  if (!(await checkCooldownWithoutConsuming(interaction, db, userId, "truck"))) return;
+  if (!(await tryDeferReply(interaction))) return;
   if (!(await checkAndConsumeCooldown(interaction, db, userId, "truck"))) return;
-
-  await interaction.deferReply();
 
   // Risk model: 18% crash
   const crash = Math.random() < 0.18;
@@ -1116,9 +1151,9 @@ async function handleRob(interaction, db) {
   const user = await getOrCreateUser(db, userId);
 
   if (!(await ensureNotJailed(interaction, user))) return;
+  if (!(await checkCooldownWithoutConsuming(interaction, db, userId, "rob"))) return;
+  if (!(await tryDeferReply(interaction))) return;
   if (!(await checkAndConsumeCooldown(interaction, db, userId, "rob"))) return;
-
-  await interaction.deferReply();
 
   const target = interaction.options.getUser("user");
 
@@ -2174,6 +2209,11 @@ async function handleSampLifeCommand({ interaction, db }) {
   } catch (e) {
     const isDeferred = Boolean(interaction.deferred || interaction.replied);
 
+    if (isIgnorableInteractionError(e)) {
+      console.error("[samp-life] interaction expired", e?.code || e?.rawError?.code || e);
+      return;
+    }
+
     if (String(e.message) === "COOLDOWN_ACTIVE") {
       if (isDeferred) {
         await interaction.followUp({ content: "⏳ Ежедневный бонус уже получен. Попробуй позже.", ephemeral: true });
@@ -2208,10 +2248,14 @@ async function handleSampLifeCommand({ interaction, db }) {
     }
     // eslint-disable-next-line no-console
     console.error("[samp-life] command error", e);
-    if (isDeferred) {
-      await interaction.followUp({ content: "Ошибка. Попробуй позже.", ephemeral: true });
+    if (interaction.deferred && !interaction.replied) {
+      await interaction.editReply({ content: "Ошибка. Попробуй позже.", embeds: [] }).catch(async () => {
+        await interaction.followUp({ content: "Ошибка. Попробуй позже.", ephemeral: true }).catch(() => {});
+      });
+    } else if (isDeferred) {
+      await interaction.followUp({ content: "Ошибка. Попробуй позже.", ephemeral: true }).catch(() => {});
     } else {
-      await interaction.reply({ content: "Ошибка. Попробуй позже.", ephemeral: true });
+      await interaction.reply({ content: "Ошибка. Попробуй позже.", ephemeral: true }).catch(() => {});
     }
   }
 }

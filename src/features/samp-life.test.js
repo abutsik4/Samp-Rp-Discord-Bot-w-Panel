@@ -206,7 +206,10 @@ test("concurrent /work commands keep one payout and one cooldown reply", async (
     ]);
 
     const interactionStates = [workA, workB].map((interaction) => interaction.__getState());
-    const cooldownReplyCount = interactionStates.filter((state) => state.lastReply?.ephemeral).length;
+    const cooldownReplyCount = interactionStates.filter((state) => {
+      const payload = state.lastReply || state.lastEditReply;
+      return typeof payload === "object" && payload?.ephemeral;
+    }).length;
     const successReplyCount = interactionStates.filter(
       (state) => typeof state.lastEditReply === "string" && state.lastEditReply.includes("Баланс")
     ).length;
@@ -262,6 +265,70 @@ test("/truck crash applies fine without throwing and still returns cooldown on i
   } finally {
     Date.now = realNow;
     Math.random = realRandom;
+    db.close();
+  }
+});
+
+test("/truck does not consume cooldown when deferReply fails", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteractionSafe({ commandName: "reg", userId: "truck-expire", username: "TruckExpire" }), db });
+
+    const interaction = {
+      commandName: "truck",
+      user: { id: "truck-expire", username: "TruckExpire", bot: false },
+      options: { getString: () => null, getInteger: () => null, getUser: () => null },
+      deferred: false,
+      replied: false,
+      deferReply: async () => {
+        const error = new Error("Unknown interaction");
+        error.code = 10062;
+        throw error;
+      },
+      reply: async () => null,
+      editReply: async () => null,
+      followUp: async () => null,
+    };
+
+    await handleSampLifeCommand({ interaction, db });
+
+    const cooldown = await dbGet(db, "SELECT ready_at FROM samp_cooldowns WHERE user_id = ? AND action = ?", ["truck-expire", "truck"]);
+    assert.equal(cooldown, null, "truck cooldown should not be consumed when the interaction already expired");
+  } finally {
+    db.close();
+  }
+});
+
+test("/rob does not consume cooldown when deferReply fails", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteractionSafe({ commandName: "reg", userId: "rob-expire", username: "RobExpire" }), db });
+
+    const interaction = {
+      commandName: "rob",
+      user: { id: "rob-expire", username: "RobExpire", bot: false },
+      options: { getString: () => null, getInteger: () => null, getUser: () => null },
+      deferred: false,
+      replied: false,
+      deferReply: async () => {
+        const error = new Error("Unknown interaction");
+        error.code = 10062;
+        throw error;
+      },
+      reply: async () => null,
+      editReply: async () => null,
+      followUp: async () => null,
+    };
+
+    await handleSampLifeCommand({ interaction, db });
+
+    const cooldown = await dbGet(db, "SELECT ready_at FROM samp_cooldowns WHERE user_id = ? AND action = ?", ["rob-expire", "rob"]);
+    assert.equal(cooldown, null, "rob cooldown should not be consumed when the interaction already expired");
+  } finally {
     db.close();
   }
 });
