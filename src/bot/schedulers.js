@@ -11,11 +11,37 @@ const { processStarDecay } = require("../features/wanted-stars");
 const { processErrorQueue, cleanupEventLog } = require("../features/robust-message-counting");
 const { reconcileAllGuilds, selfHealingReconcile } = require("../features/reconciliation");
 const { cleanupOldMessageIndex } = require("../features/message-index-cleanup");
-const { syncMissingMessages, getWatermark, initializeWatermark } = require("../features/incremental-sync");
+const { syncMissingMessages, ensureWatermarkForGuild } = require("../features/incremental-sync");
 const { SAMPStatusTracker } = require("../features/samp-status");
-const { postWeeklyAwards, rotateWeeklyRoles, grantWeeklyRewards, resetWeeklyCounters, getWeekStart } = require("../features/weekly-awards");
+const {
+  postWeeklyAwards,
+  rotateWeeklyRoles,
+  grantWeeklyRewards,
+  resetWeeklyCounters,
+  getWeekStart,
+  getWeeklyAwardRun,
+  getStoredWeeklyAwards,
+  markWeeklyAwardRunStage,
+} = require("../features/weekly-awards");
 const { drawLottery } = require("../features/samp-extended");
 const { launchGiveaway, scheduleGiveawayEnd } = require("../features/giveaway");
+const { runSampBackupCycle } = require("../features/samp-money-backups");
+
+const activeSchedulerTasks = new Set();
+
+async function runExclusiveTask(taskName, fn) {
+  if (activeSchedulerTasks.has(taskName)) {
+    console.log(`[Scheduler] Skipping overlapping task: ${taskName}`);
+    return null;
+  }
+
+  activeSchedulerTasks.add(taskName);
+  try {
+    return await fn();
+  } finally {
+    activeSchedulerTasks.delete(taskName);
+  }
+}
 
 /**
  * Start all schedulers. Call once inside `client.once("ready")`.
@@ -79,8 +105,8 @@ async function startSchedulers(ctx) {
   // Process error queue (every 5 minutes)
   setInterval(async () => {
     try {
-      const result = await processErrorQueue(db);
-      if (result.processed > 0) {
+      const result = await runExclusiveTask("message-error-queue", async () => processErrorQueue(db));
+      if (result && result.processed > 0) {
         console.log(`[Error Queue] Processed ${result.processed}, succeeded: ${result.succeeded}`);
       }
     } catch (err) {
@@ -100,14 +126,14 @@ async function startSchedulers(ctx) {
 
     setTimeout(async () => {
       try {
-        await cleanupEventLog(db);
+        await runExclusiveTask("event-log-cleanup", async () => cleanupEventLog(db));
         console.log("[Event Log] Daily cleanup complete");
       } catch (err) {
         console.error("[Event Log] Cleanup failed:", err);
       }
       setInterval(async () => {
         try {
-          await cleanupEventLog(db);
+          await runExclusiveTask("event-log-cleanup", async () => cleanupEventLog(db));
           console.log("[Event Log] Daily cleanup complete");
         } catch (err) {
           console.error("[Event Log] Cleanup failed:", err);
@@ -120,9 +146,11 @@ async function startSchedulers(ctx) {
   // Self-healing reconciliation (every 15 minutes)
   setInterval(async () => {
     try {
-      for (const guild of client.guilds.cache.values()) {
-        await selfHealingReconcile(db, guild.id);
-      }
+      await runExclusiveTask("reconcile", async () => {
+        for (const guild of client.guilds.cache.values()) {
+          await selfHealingReconcile(db, guild.id);
+        }
+      });
     } catch (err) {
       console.error("[Self-Heal] Error:", err);
     }
@@ -142,13 +170,13 @@ async function startSchedulers(ctx) {
 
     setTimeout(async () => {
       try {
-        await reconcileAllGuilds(db, client);
+        await runExclusiveTask("reconcile", async () => reconcileAllGuilds(db, client));
       } catch (err) {
         console.error("[Reconcile] Failed:", err);
       }
       setInterval(async () => {
         try {
-          await reconcileAllGuilds(db, client);
+          await runExclusiveTask("reconcile", async () => reconcileAllGuilds(db, client));
         } catch (err) {
           console.error("[Reconcile] Failed:", err);
         }
@@ -176,13 +204,13 @@ async function startSchedulers(ctx) {
 
     setTimeout(async () => {
       try {
-        await cleanupOldMessageIndex(db, 90);
+        await runExclusiveTask("message-index-cleanup", async () => cleanupOldMessageIndex(db, 90));
       } catch (err) {
         console.error("[Index Cleanup] Failed:", err);
       }
       setInterval(async () => {
         try {
-          await cleanupOldMessageIndex(db, 90);
+          await runExclusiveTask("message-index-cleanup", async () => cleanupOldMessageIndex(db, 90));
         } catch (err) {
           console.error("[Index Cleanup] Failed:", err);
         }
@@ -192,6 +220,47 @@ async function startSchedulers(ctx) {
   scheduleIndexCleanup();
 
   console.log("[Bot] Robust counting schedulers started ✓");
+
+  const scheduleMoneyBackup = () => {
+    const now = new Date();
+    const next4AM = new Date(now);
+    next4AM.setHours(4, 0, 0, 0);
+    if (next4AM <= now) {
+      next4AM.setDate(next4AM.getDate() + 1);
+    }
+    const msUntil4AM = next4AM.getTime() - now.getTime();
+
+    console.log(`[MoneyBackup] Next daily backup scheduled for ${next4AM.toLocaleString()}`);
+
+    setTimeout(async () => {
+      try {
+        const result = await runExclusiveTask("samp-backup-cycle", async () => runSampBackupCycle(db));
+        if (result) {
+          console.log(
+            `[MoneyBackup] Snapshot ${result.snapshot.filePath}, state export ${result.stateExport.filePath}, ` +
+            `money backup ${result.money.filePath} (${result.money.userCount} users, ${result.money.totalMoney} $ total)`
+          );
+        }
+      } catch (err) {
+        console.error("[MoneyBackup] Backup failed:", err);
+      }
+
+      setInterval(async () => {
+        try {
+          const result = await runExclusiveTask("samp-backup-cycle", async () => runSampBackupCycle(db));
+          if (result) {
+            console.log(
+              `[MoneyBackup] Snapshot ${result.snapshot.filePath}, state export ${result.stateExport.filePath}, ` +
+              `money backup ${result.money.filePath} (${result.money.userCount} users, ${result.money.totalMoney} $ total)`
+            );
+          }
+        } catch (err) {
+          console.error("[MoneyBackup] Backup failed:", err);
+        }
+      }, 24 * 60 * 60 * 1000);
+    }, msUntil4AM);
+  };
+  scheduleMoneyBackup();
 
   // ── Startup catch-up sync (recover messages missed during downtime) ──
   // Runs async so it doesn't block other startup tasks.
@@ -203,17 +272,17 @@ async function startSchedulers(ctx) {
       await new Promise(r => setTimeout(r, 5_000));
 
       for (const guild of client.guilds.cache.values()) {
-        const watermark = await getWatermark(db, guild.id);
+        const ensured = await ensureWatermarkForGuild(client, db, guild.id);
 
-        if (!watermark || !watermark.last_message_id) {
-          // No watermark → initialize one from current state so future syncs work
-          console.log(`[Startup Sync] No watermark for ${guild.name} — initializing…`);
-          const init = await initializeWatermark(client, db, guild.id);
-          if (init.success) {
-            console.log(`[Startup Sync] ✅ Watermark initialized for ${guild.name}: ${init.messageId}`);
-          } else {
-            console.warn(`[Startup Sync] ⚠️ Could not initialize watermark for ${guild.name}: ${init.error}`);
-          }
+        if (!ensured.success) {
+          console.warn(`[Startup Sync] ⚠️ Could not initialize watermark for ${guild.name}: ${ensured.error}`);
+          continue;
+        }
+
+        if (ensured.source === "index") {
+          console.log(`[Startup Sync] Restored watermark from indexed history for ${guild.name}: ${ensured.messageId}`);
+        } else if (ensured.source === "live-init") {
+          console.log(`[Startup Sync] Initialized live baseline for ${guild.name}: ${ensured.messageId}`);
           continue;
         }
 
@@ -284,49 +353,64 @@ async function startSchedulers(ctx) {
 
       setTimeout(async () => {
         try {
-          // Resolve channel first, then post only for its guild (not all guilds)
-          const channel = await client.channels.fetch(AWARDS_CHANNEL_ID).catch(() => null);
-          if (!channel || !channel.guildId) {
-            console.error("[WeeklyAwards] Could not resolve awards channel or channel has no guild");
-          } else {
+          await runExclusiveTask("weekly-awards-cycle", async () => {
+            const channel = await client.channels.fetch(AWARDS_CHANNEL_ID).catch(() => null);
+            if (!channel || !channel.guildId) {
+              console.error("[WeeklyAwards] Could not resolve awards channel or channel has no guild");
+              return;
+            }
+
             const guild = client.guilds.cache.get(channel.guildId);
-            if (guild) {
-              const result = await postWeeklyAwards(db, client, guild.id, AWARDS_CHANNEL_ID);
-              if (result.posted) {
-                console.log(`[WeeklyAwards] Posted ${result.awards} awards for ${guild.name}`);
-                // Grant SAMP money + XP rewards to winners
-                if (result.awardsList && result.awardsList.length > 0) {
-                  const rewardResult = await grantWeeklyRewards(db, guild.id, result.awardsList);
-                  console.log(`[WeeklyAwards] Rewards granted: ${rewardResult.rewarded} winners`);
-                  // Reset weekly counters after awards
-                  await resetWeeklyCounters(db);
-                  // Draw weekly lottery
-                  try {
-                    const lotteryResult = await drawLottery(db);
-                    if (lotteryResult?.winner) {
-                      console.log(`[WeeklyAwards] Lottery drawn: winner=${lotteryResult.winner}, prize=${lotteryResult.prize}`);
-                    } else {
-                      console.log("[WeeklyAwards] Lottery drawn: no winner (rollover)");
-                    }
-                  } catch (e) {
-                    console.error("[WeeklyAwards] Lottery draw failed:", e);
-                  }
+            if (!guild) return;
+
+            const weekStart = getWeekStart();
+            const postResult = await postWeeklyAwards(db, client, guild.id, AWARDS_CHANNEL_ID);
+            const awardsList = postResult.awardsList || await getStoredWeeklyAwards(db, guild.id, weekStart);
+            const runState = await getWeeklyAwardRun(db, guild.id, weekStart);
+
+            if (postResult.posted) {
+              console.log(`[WeeklyAwards] Posted ${postResult.awards} awards for ${guild.name}`);
+            } else {
+              console.log(`[WeeklyAwards] Post stage status for ${guild.name}: ${postResult.reason}`);
+            }
+
+            if (!runState?.rewards_granted_at && awardsList.length > 0) {
+              const rewardResult = await grantWeeklyRewards(db, guild.id, awardsList);
+              console.log(`[WeeklyAwards] Rewards granted: ${rewardResult.rewarded} winners`);
+            }
+
+            if (!runState?.counters_reset_at) {
+              await resetWeeklyCounters(db, guild.id, weekStart);
+            }
+
+            const refreshedRunState = await getWeeklyAwardRun(db, guild.id, weekStart);
+
+            if (!refreshedRunState?.lottery_drawn_at) {
+              try {
+                const lotteryResult = await drawLottery(db);
+                await markWeeklyAwardRunStage(db, guild.id, weekStart, "lottery_drawn_at");
+                if (lotteryResult?.winner) {
+                  console.log(`[WeeklyAwards] Lottery drawn: winner=${lotteryResult.winner}, winnings=${lotteryResult.winnings}`);
+                } else {
+                  console.log("[WeeklyAwards] Lottery already drawn or no tickets this week");
                 }
-                // Rotate weekly spotlight roles
-                const TOP_CHATTER_ROLE_ID = process.env.WEEKLY_TOP_CHATTER_ROLE_ID;
-                const NIGHT_OWL_ROLE_ID = process.env.WEEKLY_NIGHT_OWL_ROLE_ID;
-                if (TOP_CHATTER_ROLE_ID || NIGHT_OWL_ROLE_ID) {
-                  const rotateResult = await rotateWeeklyRoles(db, guild, {
-                    topChatterRoleId: TOP_CHATTER_ROLE_ID,
-                    nightOwlRoleId: NIGHT_OWL_ROLE_ID,
-                  });
-                  console.log(`[WeeklyAwards] Role rotation: ${JSON.stringify(rotateResult)}`);
-                }
-              } else {
-                console.log(`[WeeklyAwards] Skipped ${guild.name}: ${result.reason}`);
+              } catch (e) {
+                console.error("[WeeklyAwards] Lottery draw failed:", e);
               }
             }
-          }
+
+            const latestRunState = await getWeeklyAwardRun(db, guild.id, weekStart);
+            const TOP_CHATTER_ROLE_ID = process.env.WEEKLY_TOP_CHATTER_ROLE_ID;
+            const NIGHT_OWL_ROLE_ID = process.env.WEEKLY_NIGHT_OWL_ROLE_ID;
+            if (!latestRunState?.roles_rotated_at && (TOP_CHATTER_ROLE_ID || NIGHT_OWL_ROLE_ID)) {
+              const rotateResult = await rotateWeeklyRoles(db, guild, {
+                topChatterRoleId: TOP_CHATTER_ROLE_ID,
+                nightOwlRoleId: NIGHT_OWL_ROLE_ID,
+              });
+              await markWeeklyAwardRunStage(db, guild.id, weekStart, "roles_rotated_at");
+              console.log(`[WeeklyAwards] Role rotation: ${JSON.stringify(rotateResult)}`);
+            }
+          });
         } catch (err) {
           console.error("[WeeklyAwards] Auto-post failed:", err);
         }

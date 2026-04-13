@@ -11,6 +11,7 @@
 
 require("dotenv").config({ path: require("path").resolve(__dirname, "../.env") });
 const { REST, Routes } = require("discord.js");
+const { buildGameFaqDocsPosts } = require("../src/features/game-faq");
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const rest = new REST({ version: "10" }).setToken(TOKEN);
@@ -53,6 +54,50 @@ function validateEmbed(embed) {
 
 async function editMessage(channelId, messageId, payload) {
   return rest.patch(Routes.channelMessage(channelId, messageId), { body: payload });
+}
+
+async function createMessage(channelId, payload) {
+  return rest.post(Routes.channelMessages(channelId), { body: payload });
+}
+
+async function deleteMessage(channelId, messageId) {
+  return rest.delete(Routes.channelMessage(channelId, messageId));
+}
+
+async function fetchChannelMessages(channelId, limit = 100) {
+  return rest.get(Routes.channelMessages(channelId), { query: new URLSearchParams({ limit: String(limit) }) });
+}
+
+async function resolvePostMessages(post) {
+  if (post.id) {
+    return { primaryId: post.id, duplicateIds: [] };
+  }
+
+  const lookupTitles = Array.isArray(post.lookupTitles) && post.lookupTitles.length > 0
+    ? post.lookupTitles
+    : post.lookupTitle
+      ? [post.lookupTitle]
+      : [];
+
+  if (!lookupTitles.length) {
+    return { primaryId: null, duplicateIds: [] };
+  }
+
+  const messages = await fetchChannelMessages(post.channelId, 100);
+  const matches = (messages || []).filter((message) => {
+    const title = message?.embeds?.[0]?.title || "";
+    return lookupTitles.includes(title);
+  });
+
+  if (!matches.length) {
+    return { primaryId: null, duplicateIds: [] };
+  }
+
+  const exactMatch = matches.find((message) => (message?.embeds?.[0]?.title || "") === post.lookupTitle);
+  const primary = exactMatch || matches[0];
+  const duplicateIds = matches.filter((message) => message.id !== primary.id).map((message) => message.id);
+
+  return { primaryId: primary.id, duplicateIds };
 }
 
 const channelPosts = [
@@ -112,7 +157,9 @@ const channelPosts = [
               "**`/dealership`** — список доступных авто",
               "**`/buy type:car id:<id>`** — купить машину",
               "**`/garage`** — посмотреть гараж и тюнинг",
-              "**`/tunecar car:<id> upgrade:<id>`** — установить апгрейд",
+              "**`/switchcar car:<id>`** — сменить активную машину",
+              "**`/tune install car:<id> part:<id>`** — установить деталь и собрать билд",
+              "**`/tune inspect car:<id>`** — посмотреть билд, уровень и износ",
               "**`/race user:@игрок bet:<$>`** — гонка на деньги",
               "**`/sellcar user:@игрок car:<id> price:<$>`** — создать оффер",
               "**`/buycar offer:<id>`** — купить машину по офферу"
@@ -316,6 +363,10 @@ const channelPosts = [
       },
     ],
   },
+  ...buildGameFaqDocsPosts().map((post) => ({
+    channelId: COMMANDS_CHANNEL,
+    ...post,
+  })),
 ];
 
 (async () => {
@@ -327,8 +378,19 @@ const channelPosts = [
     console.log("Syncing command docs...");
 
     for (const post of channelPosts) {
-      await editMessage(post.channelId, post.id, { content: "", embeds: post.embeds });
-      console.log(`   ✓ Updated ${post.label}: ${post.channelId}/${post.id}`);
+      const { primaryId, duplicateIds } = await resolvePostMessages(post);
+      if (primaryId) {
+        await editMessage(post.channelId, primaryId, { content: "", embeds: post.embeds });
+        console.log(`   ✓ Updated ${post.label}: ${post.channelId}/${primaryId}`);
+      } else {
+        const created = await createMessage(post.channelId, { content: "", embeds: post.embeds });
+        console.log(`   ✓ Created ${post.label}: ${post.channelId}/${created.id}`);
+      }
+
+      for (const duplicateId of duplicateIds) {
+        await deleteMessage(post.channelId, duplicateId);
+        console.log(`   ✓ Deleted duplicate ${post.label}: ${post.channelId}/${duplicateId}`);
+      }
     }
 
     console.log("\nDone!");

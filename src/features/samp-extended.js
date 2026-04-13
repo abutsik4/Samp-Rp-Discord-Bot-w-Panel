@@ -1,14 +1,35 @@
 "use strict";
 
 const { dbRun, dbGet, dbAll } = require("../utils/db-helpers");
+const { withSerializedTransaction } = require("../utils/sqlite-transaction");
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require("discord.js");
-const { CARS, ITEMS } = require("./samp-life");
+const {
+  CARS,
+  ITEMS,
+  getCarVehicleProfile,
+  getInstalledCarUpgradeRows,
+  getOrCreateCarTuningProgress,
+  getUserRaceStats,
+} = require("./samp-life");
+const { getUserBadges } = require("./badges");
+const { addWantedStar } = require("./wanted-stars");
 const {
   COSMETICS,
   getUserCosmetics,
   applyUserCosmeticsToEmbed,
   getCosmeticBenefitText,
 } = require("./samp-cosmetics");
+const {
+  CAR_TUNING_PARTS,
+  TUNE_LEVEL_MAX,
+  TUNE_REMOVE_REFUND_RATIO,
+  formatTuningPartStatSummary,
+  formatTuningRequirementStatus,
+  getNextTuningLevelProgress,
+  getTuningPart,
+  getTuningRequirementStatus,
+  listTuningParts,
+} = require("./constants/car-tuning");
 
 // Helpers
 function fmtMoney(n) { return `${Number(n || 0).toLocaleString("ru-RU")} $`; }
@@ -16,11 +37,19 @@ function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) 
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 function nowMs() { return Date.now(); }
 function clampInt(n, min, max) { const x = Math.floor(Number(n)); return Number.isFinite(x) && x >= min && x <= max ? x : null; }
+function makeInteractionOpKey(interaction, suffix = "") {
+  const base = String(interaction?.id || interaction?.token || "").trim();
+  if (!base) return null;
+  return suffix ? `${base}:${suffix}` : base;
+}
 
 async function withTx(db, fn) {
-  await dbRun(db, "BEGIN IMMEDIATE");
-  try { const r = await fn(); await dbRun(db, "COMMIT"); return r; }
-  catch (e) { try { await dbRun(db, "ROLLBACK"); } catch (_) {} throw e; }
+  return withSerializedTransaction(db, fn);
+}
+
+async function tableHasColumn(db, tableName, columnName) {
+  const rows = await dbAll(db, `PRAGMA table_info(${tableName})`);
+  return (rows || []).some((row) => String(row?.name || "") === String(columnName));
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -50,14 +79,10 @@ const TERRITORY_DISTRICTS = {
   vinewood: { name: "Vinewood", claimCost: 32_000, takeoverCost: 42_000, businessBuff: 0.12 },
 };
 
-const CAR_UPGRADES = {
-  nos: { name: "NOS", price: 15_000, speedBonus: 10 },
-  turbo: { name: "Турбо", price: 30_000, speedBonus: 15 },
-  hydraulics: { name: "Гидравлика", price: 10_000, speedBonus: 0 },
-  wheels: { name: "Диски Chrome", price: 8_000, speedBonus: 3 },
-  bodykit: { name: "Обвес", price: 20_000, speedBonus: 5 },
-  engine: { name: "Двигатель V8", price: 50_000, speedBonus: 20 },
-};
+const CAR_UPGRADES = CAR_TUNING_PARTS;
+
+const GARAGE_SWITCH_BUTTON_PREFIX = "garage_switch:";
+const GARAGE_SWITCH_BUTTON_LIMIT = 5;
 
 const HEIST_TIERS = {
   store: { name: "24/7", minPlayers: 2, maxPlayers: 3, payout: [5_000, 15_000], failChance: 0.25, jailMs: 3 * 60_000 },
@@ -65,6 +90,19 @@ const HEIST_TIERS = {
   casino_heist: { name: "Казино Caligula's", minPlayers: 3, maxPlayers: 4, payout: [50_000, 120_000], failChance: 0.45, jailMs: 8 * 60_000 },
   military: { name: "Area 69", minPlayers: 4, maxPlayers: 4, payout: [100_000, 300_000], failChance: 0.55, jailMs: 10 * 60_000 },
 };
+
+const HEIST_LOBBY_LOCK_MS = 60 * 1000;
+const HEIST_COOLDOWN_MS = 15 * 60_000;
+const HEIST_MIN_COOLDOWN_MS = 10 * 60_000;
+const HEIST_ACTIVE_ACTION = "heist:active";
+const HEIST_COOLDOWN_ACTION = "heist";
+const HEIST_COOLDOWN_BADGE_TIERS = [
+  { badgeId: "msg_5000", cooldownMs: 10 * 60_000 },
+  { badgeId: "msg_2500", cooldownMs: 11 * 60_000 },
+  { badgeId: "msg_1000", cooldownMs: 12 * 60_000 },
+  { badgeId: "msg_500", cooldownMs: 13 * 60_000 },
+  { badgeId: "msg_100", cooldownMs: 14 * 60_000 },
+];
 
 const JOB_TEMPLATES = [
   { name: "Доставка пиццы", basePay: [500, 1500], requirement: null },
@@ -84,7 +122,140 @@ const BLACK_MARKET_ITEMS = [
   { name: "Нитро (x3)", type: "nos_boost", basePrice: [8_000, 20_000] },
   { name: "Фальшивые документы", type: "jail_pass", basePrice: [15_000, 40_000] },
   { name: "Аптечка", type: "medkit", basePrice: [3_000, 10_000] },
+  { name: "Подслушка", type: "wiretap", basePrice: [12_000, 30_000] },
+  { name: "Подрыв", type: "sabotage", basePrice: [15_000, 35_000] },
+  { name: "Отмывка", type: "laundering", basePrice: [20_000, 50_000] },
+  { name: "Чёрный ящик", type: "mystery_crate", basePrice: [10_000, 25_000] },
+  { name: "Набор для ремонта", type: "repair_kit", basePrice: [8_000, 20_000] },
+  { name: "Маскировка", type: "disguise", basePrice: [10_000, 25_000] },
+  { name: "Наводка", type: "hot_tip", basePrice: [5_000, 15_000] },
+  { name: "Контракт на убийство", type: "hit_contract", basePrice: [25_000, 60_000] },
 ];
+
+const BLACK_MARKET_GRANTS = {
+  weapon_skin: {
+    inventoryItemId: "deagle",
+    inventoryQty: 1,
+    cosmeticType: "weapon_skin_deagle",
+    cosmeticValue: "gold",
+    autoEquipWeaponId: "deagle",
+    summary: "Скин на Desert Eagle выдан навсегда и пушка поставлена активной.",
+  },
+  armor: {
+    inventoryItemId: "bm_armor",
+    inventoryQty: 1,
+    summary: "Бронежилет добавлен в тайник.",
+  },
+  map: {
+    inventoryItemId: "bm_map",
+    inventoryQty: 1,
+    summary: "Секретная карта добавлена в тайник.",
+  },
+  nos_boost: {
+    inventoryItemId: "bm_nos_boost",
+    inventoryQty: 3,
+    summary: "Три баллона нитро добавлены в тайник.",
+  },
+  jail_pass: {
+    inventoryItemId: "bm_jail_pass",
+    inventoryQty: 1,
+    summary: "Фальшивые документы добавлены в тайник.",
+  },
+  medkit: {
+    inventoryItemId: "bm_medkit",
+    inventoryQty: 1,
+    summary: "Аптечка добавлена в тайник.",
+  },
+  wiretap: {
+    inventoryItemId: "bm_wiretap",
+    inventoryQty: 1,
+    summary: "Подслушка добавлена в тайник. Используй /wiretap @цель.",
+  },
+  sabotage: {
+    inventoryItemId: "bm_sabotage",
+    inventoryQty: 1,
+    summary: "Подрыв добавлен в тайник. Используй /sabotage @цель.",
+  },
+  laundering: {
+    inventoryItemId: "bm_laundering",
+    inventoryQty: 1,
+    summary: "Отмывка активна — штрафы за /rob снижены на 40% пока есть в тайнике.",
+  },
+  mystery_crate: {
+    inventoryItemId: null,
+    inventoryQty: 0,
+    isInstant: true,
+    summary: "Открываем ящик...",
+  },
+  repair_kit: {
+    inventoryItemId: "bm_repair_kit",
+    inventoryQty: 1,
+    summary: "Набор для ремонта добавлен в тайник. Используй /userepairkit.",
+  },
+  disguise: {
+    inventoryItemId: "bm_disguise",
+    inventoryQty: 1,
+    summary: "Маскировка добавлена в тайник. Используй /disguise.",
+  },
+  hot_tip: {
+    inventoryItemId: "bm_hot_tip",
+    inventoryQty: 1,
+    summary: "Наводка добавлена в тайник. Используй /hottip.",
+  },
+  hit_contract: {
+    inventoryItemId: null,
+    inventoryQty: 0,
+    isInstant: true,
+    summary: "Контракт оформлен...",
+  },
+};
+
+// --- Black Market Atmosphere & Mechanics ---
+const BM_DEALER_NAMES = [
+  "Толстый Борис", "Одноглазый Серёга", "Тётя Зина", "Хромой Аслан",
+  "Немой Валера", "Крыса", "MadDog", "Шнырь", "Профессор",
+  "Рыжий Миша", "Батя", "Тень", "Фокстрот", "Гвоздь",
+];
+const BM_DEALER_LINES = [
+  "Тихо... У меня есть кое-что для тебя.",
+  "Не спрашивай откуда это. Берёшь?",
+  "Сегодня хороший товар, успей пока менты не пронюхали.",
+  "Подходи, не стесняйся. Всё чистое... почти.",
+  "Только для своих, понял? Чужим ни слова.",
+  "Один раз живём. Хочешь — бери, нет — вали.",
+  "У меня всё есть. Вопрос — есть ли у тебя бабки.",
+  "Ты знаешь правила: без гарантий, без возвратов.",
+  "Уникальный товар. Завтра такого не будет.",
+  "Шёпотом: у меня есть кое-что... особенное.",
+  "Копы? Какие копы? Тут нет никаких копов.",
+  "Скидка сегодня? Щас, ага. Иди к ОБС скидки.",
+  "Слышал, ты ищешь кое-что... необычное?",
+  "Товар свежий, прямиком из... ну, не важно откуда.",
+  "Бери два — третий... нет, шучу. Полная цена.",
+];
+
+const BM_STING_CHANCE = 0.08;
+const BM_STING_STARS = 2;
+const BM_REP_TIERS = [
+  { minPurchases: 0, name: "Новичок", discount: 0 },
+  { minPurchases: 5, name: "Постоянный клиент", discount: 0 },
+  { minPurchases: 15, name: "VIP покупатель", discount: 0.10 },
+  { minPurchases: 30, name: "Криминальный авторитет", discount: 0.15 },
+];
+const BM_DAILY_DEAL_COUNT = 4;
+const BM_MYSTERY_CRATE_LOOT = [
+  { weight: 30, type: "money_back", label: "Двойная выручка" },
+  { weight: 25, type: "random_weapon", label: "Случайное оружие" },
+  { weight: 20, type: "nos_charges", label: "Три баллона нитро" },
+  { weight: 15, type: "empty", label: "Пустая коробка..." },
+  { weight: 10, type: "jackpot", label: "Джекпот" },
+];
+const BM_SECRET_HEIST = {
+  name: "Секретный бункер",
+  payout: [30_000, 80_000],
+  failChance: 0.50,
+  jailMs: 10 * 60_000,
+};
 
 const BUSINESS_OPERATIONS = {
   carwash: { label: "открыл экспресс-мойку", reward: [1_600, 3_000], conditionGain: 7, suppliesGain: 12, repGain: 1, cooldownMs: 30 * 60_000 },
@@ -234,7 +405,49 @@ async function ensureSampExtendedTables(db) {
 
   await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_car_upgrades (
     user_id TEXT NOT NULL, car_id TEXT NOT NULL, upgrade_id TEXT NOT NULL,
+    durability INTEGER NOT NULL DEFAULT 100,
+    installed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    cosmetic_variant TEXT,
     PRIMARY KEY (user_id, car_id, upgrade_id)
+  )`);
+  try { await dbRun(db, `ALTER TABLE samp_car_upgrades ADD COLUMN durability INTEGER NOT NULL DEFAULT 100`); } catch (_) {}
+  if (!(await tableHasColumn(db, "samp_car_upgrades", "installed_at"))) {
+    try { await dbRun(db, `ALTER TABLE samp_car_upgrades ADD COLUMN installed_at TEXT`); } catch (_) {}
+  }
+  try { await dbRun(db, `ALTER TABLE samp_car_upgrades ADD COLUMN cosmetic_variant TEXT`); } catch (_) {}
+  const hasCarUpgradeDurability = await tableHasColumn(db, "samp_car_upgrades", "durability");
+  const hasCarUpgradeInstalledAt = await tableHasColumn(db, "samp_car_upgrades", "installed_at");
+  if (hasCarUpgradeDurability && hasCarUpgradeInstalledAt) {
+    await dbRun(
+      db,
+      `UPDATE samp_car_upgrades
+       SET durability = COALESCE(durability, 100),
+           installed_at = COALESCE(NULLIF(installed_at, ''), datetime('now'))`
+    );
+  } else if (hasCarUpgradeDurability) {
+    await dbRun(
+      db,
+      `UPDATE samp_car_upgrades
+       SET durability = COALESCE(durability, 100)`
+    );
+  }
+
+  await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_car_tuning_level (
+    user_id TEXT NOT NULL,
+    car_id TEXT NOT NULL,
+    level INTEGER NOT NULL DEFAULT 1,
+    exp INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, car_id)
+  )`);
+
+  await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_race_stats (
+    user_id TEXT PRIMARY KEY,
+    races_total INTEGER NOT NULL DEFAULT 0,
+    races_won INTEGER NOT NULL DEFAULT 0,
+    max_speed_reached INTEGER NOT NULL DEFAULT 0,
+    total_winnings INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`);
 
   await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_bounties (
@@ -286,6 +499,124 @@ function getWeekStart() {
   const d = new Date(); const day = d.getDay();
   d.setDate(d.getDate() - day + (day === 0 ? -6 : 1));
   return d.toISOString().split("T")[0];
+}
+
+function formatDuration(ms) {
+  const totalSeconds = Math.max(1, Math.ceil(Number(ms || 0) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds}с`;
+  if (seconds === 0) return `${minutes}м`;
+  return `${minutes}м ${seconds}с`;
+}
+
+async function getCooldownReadyAt(db, userId, action) {
+  const row = await dbGet(
+    db,
+    "SELECT ready_at FROM samp_cooldowns WHERE user_id = ? AND action = ?",
+    [String(userId), String(action)]
+  );
+  return row ? Number(row.ready_at || 0) : 0;
+}
+
+async function setCooldownReadyAt(db, userId, action, readyAt) {
+  await dbRun(
+    db,
+    `INSERT INTO samp_cooldowns(user_id, action, ready_at) VALUES(?, ?, ?)
+     ON CONFLICT(user_id, action) DO UPDATE SET ready_at = excluded.ready_at`,
+    [String(userId), String(action), Number(readyAt)]
+  );
+}
+
+async function clearCooldownAction(db, userId, action) {
+  await dbRun(db, "DELETE FROM samp_cooldowns WHERE user_id = ? AND action = ?", [String(userId), String(action)]);
+}
+
+function getHeistCooldownMsForBadges(badges) {
+  const badgeIds = new Set((badges || []).map((badge) => String(badge.badge_id || badge.id || "")).filter(Boolean));
+  for (const tier of HEIST_COOLDOWN_BADGE_TIERS) {
+    if (badgeIds.has(tier.badgeId)) return tier.cooldownMs;
+  }
+  return HEIST_COOLDOWN_MS;
+}
+
+async function getUserHeistCooldownMs(db, guildId, userId) {
+  if (!guildId) return HEIST_COOLDOWN_MS;
+  try {
+    const badges = await getUserBadges(db, guildId, userId);
+    return Math.max(HEIST_MIN_COOLDOWN_MS, getHeistCooldownMsForBadges(badges));
+  } catch (_) {
+    return HEIST_COOLDOWN_MS;
+  }
+}
+
+async function buildHeistCooldownEntries(db, guildId, participantIds) {
+  const uniqueIds = Array.from(new Set((participantIds || []).map((participantId) => String(participantId)).filter(Boolean)));
+  const entries = [];
+  for (const participantId of uniqueIds) {
+    const cooldownMs = await getUserHeistCooldownMs(db, guildId, participantId);
+    entries.push({
+      userId: participantId,
+      cooldownMs,
+      readyAt: nowMs() + cooldownMs,
+    });
+  }
+  return entries;
+}
+
+function formatHeistCooldownSummary(entries) {
+  const cooldowns = (entries || []).map((entry) => Number(entry.cooldownMs || 0)).filter((value) => value > 0);
+  if (!cooldowns.length) return formatDuration(HEIST_COOLDOWN_MS);
+  const minCooldown = Math.min(...cooldowns);
+  const maxCooldown = Math.max(...cooldowns);
+  if (minCooldown === maxCooldown) return formatDuration(minCooldown);
+  return `${formatDuration(minCooldown)} — ${formatDuration(maxCooldown)}`;
+}
+
+async function tryReserveHeistParticipant(db, userId, lockMs = HEIST_LOBBY_LOCK_MS) {
+  return withTx(db, async () => {
+    const now = nowMs();
+    const activeReadyAt = await getCooldownReadyAt(db, userId, HEIST_ACTIVE_ACTION);
+    if (activeReadyAt > now) {
+      return { ok: false, reason: "active", remainingMs: activeReadyAt - now };
+    }
+
+    const cooldownReadyAt = await getCooldownReadyAt(db, userId, HEIST_COOLDOWN_ACTION);
+    if (cooldownReadyAt > now) {
+      return { ok: false, reason: "cooldown", remainingMs: cooldownReadyAt - now };
+    }
+
+    await setCooldownReadyAt(db, userId, HEIST_ACTIVE_ACTION, now + lockMs);
+    return { ok: true };
+  });
+}
+
+async function releaseHeistParticipants(db, participantIds) {
+  for (const participantId of participantIds || []) {
+    await clearCooldownAction(db, participantId, HEIST_ACTIVE_ACTION);
+  }
+}
+
+async function applyHeistCooldown(db, participantIds, options = {}) {
+  const entries = Array.isArray(options?.entries)
+    ? options.entries
+    : options?.guildId
+      ? await buildHeistCooldownEntries(db, options.guildId, participantIds)
+      : (participantIds || []).map((participantId) => ({ userId: participantId, readyAt: options?.readyAt || (nowMs() + HEIST_COOLDOWN_MS), cooldownMs: HEIST_COOLDOWN_MS }));
+
+  for (const entry of entries) {
+    await setCooldownReadyAt(db, entry.userId, HEIST_COOLDOWN_ACTION, entry.readyAt);
+  }
+
+  return entries;
+}
+
+function getHeistLockMessage(result) {
+  if (!result || result.ok) return null;
+  if (result.reason === "active") {
+    return `Ты уже числишься в другом ограблении. Дождись завершения или распада лобби (**${formatDuration(result.remainingMs)}**).`;
+  }
+  return `⏳ После ограбления нужен откат. Следующий заход через **${formatDuration(result.remainingMs)}**.`;
 }
 
 function getDailySeed() {
@@ -353,6 +684,15 @@ function buildPagedLineEmbeds({ title, description, color, lines, linesPerPage =
     if (footer) embed.setFooter({ text: footer });
     return embed;
   });
+}
+
+function createGangAliasInteraction(interaction, subcommand) {
+  const aliasInteraction = Object.create(interaction);
+  const aliasOptions = Object.create(interaction.options);
+  aliasOptions.getSubcommand = () => subcommand;
+  aliasInteraction.commandName = "gang";
+  aliasInteraction.options = aliasOptions;
+  return aliasInteraction;
 }
 
 function normalizeSampLiveOpsConfig(input = {}) {
@@ -719,10 +1059,48 @@ function getDailyJobs() {
 function getDailyBlackMarketDeals() {
   const rng = seededRandom(getDailySeed() + 42);
   const shuffled = [...BLACK_MARKET_ITEMS].sort(() => rng() - 0.5);
-  return shuffled.slice(0, 3).map((item, i) => {
+  return shuffled.slice(0, BM_DAILY_DEAL_COUNT).map((item, i) => {
     const price = Math.floor(item.basePrice[0] + rng() * (item.basePrice[1] - item.basePrice[0]));
     return { ...item, price, slot: i + 1 };
   });
+}
+
+function getDailyDealer() {
+  const rng = seededRandom(getDailySeed() + 99);
+  const name = BM_DEALER_NAMES[Math.floor(rng() * BM_DEALER_NAMES.length)];
+  const line = BM_DEALER_LINES[Math.floor(rng() * BM_DEALER_LINES.length)];
+  return { name, line };
+}
+
+function getBmRepTier(purchases) {
+  let tier = BM_REP_TIERS[0];
+  for (const t of BM_REP_TIERS) {
+    if (purchases >= t.minPurchases) tier = t;
+  }
+  return tier;
+}
+
+async function getBmPurchaseCount(db, userId) {
+  const row = await dbGet(db, "SELECT value FROM samp_user_settings WHERE user_id = ? AND key = 'bm_purchases'", [String(userId)]);
+  return Number(row?.value || 0);
+}
+
+async function incrementBmPurchaseCount(db, userId) {
+  const current = await getBmPurchaseCount(db, userId);
+  await setUserSetting(db, userId, "bm_purchases", String(current + 1));
+  return current + 1;
+}
+
+async function getInventoryQty(db, userId, itemId) {
+  const row = await dbGet(db, "SELECT qty FROM samp_inventory WHERE user_id = ? AND item_id = ?", [String(userId), String(itemId)]);
+  return Number(row?.qty || 0);
+}
+
+async function consumeInventoryItem(db, userId, itemId, amount = 1) {
+  const qty = await getInventoryQty(db, userId, itemId);
+  if (qty < amount) return false;
+  await dbRun(db, "UPDATE samp_inventory SET qty = qty - ? WHERE user_id = ? AND item_id = ?", [amount, String(userId), String(itemId)]);
+  return true;
 }
 
 async function getSampUser(db, uid) {
@@ -736,6 +1114,101 @@ async function adjustMoney(db, uid, delta) {
 async function addLedger(db, type, from, to, amount, meta = {}) {
   await dbRun(db, `INSERT INTO samp_ledger(type, from_user, to_user, amount, meta_json) VALUES(?, ?, ?, ?, ?)`,
     [type, from ? String(from) : null, to ? String(to) : null, Number(amount), JSON.stringify(meta)]);
+}
+
+async function addLedgerUnique(db, type, from, to, amount, idempotencyKey, meta = {}) {
+  const key = String(idempotencyKey || "").trim();
+  if (!key) {
+    await addLedger(db, type, from, to, amount, meta);
+    return true;
+  }
+
+  const payload = { ...(meta || {}), idempotencyKey: key };
+  const result = await dbRun(
+    db,
+    `INSERT INTO samp_ledger(type, from_user, to_user, amount, meta_json)
+     SELECT ?, ?, ?, ?, ?
+     WHERE NOT EXISTS (
+       SELECT 1
+       FROM samp_ledger
+       WHERE type = ?
+         AND COALESCE(from_user, '') = COALESCE(?, '')
+         AND COALESCE(to_user, '') = COALESCE(?, '')
+         AND json_extract(meta_json, '$.idempotencyKey') = ?
+     )`,
+    [
+      type,
+      from ? String(from) : null,
+      to ? String(to) : null,
+      Number(amount || 0),
+      JSON.stringify(payload),
+      type,
+      from ? String(from) : null,
+      to ? String(to) : null,
+      key,
+    ]
+  );
+  return Number(result?.changes || 0) > 0;
+}
+
+async function addInventoryItem(db, userId, itemId, qty) {
+  await dbRun(
+    db,
+    `INSERT INTO samp_inventory(user_id, item_id, qty)
+     VALUES(?, ?, ?)
+     ON CONFLICT(user_id, item_id) DO UPDATE SET qty = MAX(0, qty + excluded.qty)`,
+    [String(userId), String(itemId), Number(qty || 0)]
+  );
+}
+
+async function setUserSetting(db, userId, key, value) {
+  await dbRun(
+    db,
+    `INSERT INTO samp_user_settings(user_id, key, value)
+     VALUES(?, ?, ?)
+     ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value`,
+    [String(userId), String(key), String(value)]
+  );
+}
+
+async function getUserSetting(db, userId, key) {
+  const row = await dbGet(db, "SELECT value FROM samp_user_settings WHERE user_id = ? AND key = ?", [String(userId), String(key)]);
+  return row ? row.value : null;
+}
+
+async function alreadyOwnsBlackMarketDeal(db, userId, deal) {
+  const grant = BLACK_MARKET_GRANTS[deal?.type];
+  if (!grant?.cosmeticType) return false;
+  const row = await dbGet(
+    db,
+    "SELECT 1 FROM samp_cosmetics WHERE user_id = ? AND cosmetic_type = ? AND cosmetic_value = ?",
+    [String(userId), grant.cosmeticType, grant.cosmeticValue]
+  );
+  return Boolean(row);
+}
+
+async function grantBlackMarketDeal(db, userId, deal) {
+  const grant = BLACK_MARKET_GRANTS[deal?.type];
+  if (!grant) {
+    return { summary: "Покупка записана в лог, но для этого товара пока нет отдельного хранилища." };
+  }
+
+  if (grant.inventoryItemId && grant.inventoryQty) {
+    await addInventoryItem(db, userId, grant.inventoryItemId, grant.inventoryQty);
+  }
+  if (grant.cosmeticType) {
+    await dbRun(
+      db,
+      `INSERT OR REPLACE INTO samp_cosmetics(user_id, cosmetic_type, cosmetic_value)
+       VALUES(?, ?, ?)`,
+      [String(userId), grant.cosmeticType, grant.cosmeticValue]
+    );
+  }
+  if (grant.autoEquipWeaponId) {
+    await setUserSetting(db, userId, "weapon", grant.autoEquipWeaponId);
+  }
+
+  return { summary: grant.summary };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -855,14 +1328,16 @@ async function handleBuyBiz(interaction, db) {
   if (existing) { await interaction.reply({ content: "У тебя уже есть этот бизнес.", ephemeral: true }); return; }
   if (Number(user.money) < prop.price) { await interaction.reply({ content: "Не хватает виртов.", ephemeral: true }); return; }
 
+  const opKey = makeInteractionOpKey(interaction, "buy_property");
   await withTx(db, async () => {
+    const inserted = await addLedgerUnique(db, "buy_property", userId, null, prop.price, opKey, { property_id: bizId });
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
     await adjustMoney(db, userId, -prop.price);
     await dbRun(
       db,
       `INSERT INTO samp_properties(user_id, property_id, last_maintained, last_state_tick) VALUES(?, ?, datetime('now'), datetime('now'))`,
       [userId, bizId]
     );
-    await addLedger(db, "buy_property", userId, null, prop.price, { property_id: bizId });
   });
 
   const after = await getSampUser(db, userId);
@@ -889,28 +1364,52 @@ async function handleCollectIncome(interaction, db) {
   const membership = await getUserGangMembership(db, userId);
   const territoryControlMap = await getTerritoryControlMap(db);
   const summaryLines = [];
+  const plannedCollections = [];
   let totalGross = 0;
   let totalUpkeep = 0;
   let totalNet = 0;
 
+  for (const row of props) {
+    const prop = PROPERTIES[row.property_id];
+    if (!prop) continue;
+
+    const state = getBusinessState(prop, row, now);
+    if (state.hoursElapsed < 0.1) continue;
+
+    const territory = getTerritoryBoost(prop, territoryControlMap, membership?.gang_id);
+    const income = getBusinessIncomeBreakdown(prop, state, liveOps, territory.multiplier);
+    totalGross += income.gross;
+    totalUpkeep += income.upkeep;
+    totalNet += income.net;
+
+    summaryLines.push(
+      `• **${prop.name}**: ${fmtMoney(income.net)} чистыми (${Math.round(state.efficiency * 100)}% эфф.${territory.isControlled ? `, ${territory.districtName} +${Math.round((territory.multiplier - 1) * 100)}%` : ""})`
+    );
+    plannedCollections.push({
+      propertyId: row.property_id,
+      projectedCondition: state.projectedCondition,
+      projectedSupplies: state.projectedSupplies,
+      net: income.net,
+    });
+  }
+
+  if (summaryLines.length === 0) { await interaction.editReply("⏳ Ещё рано. Подожди хотя бы несколько минут."); return; }
+
   await withTx(db, async () => {
-    for (const row of props) {
-      const prop = PROPERTIES[row.property_id];
-      if (!prop) continue;
+    if (totalNet > 0) {
+      const insertedIncome = await addLedgerUnique(db, "property_income", null, userId, totalNet, makeInteractionOpKey(interaction, "property_income"), {
+        gross: totalGross,
+        upkeep: totalUpkeep,
+        properties: summaryLines.length,
+      });
+      if (!insertedIncome) throw new Error("DUPLICATE_OPERATION");
+    }
+    if (totalUpkeep > 0) {
+      const insertedUpkeep = await addLedgerUnique(db, "property_upkeep", userId, null, totalUpkeep, makeInteractionOpKey(interaction, "property_upkeep"), { properties: summaryLines.length });
+      if (!insertedUpkeep) throw new Error("DUPLICATE_OPERATION");
+    }
 
-      const state = getBusinessState(prop, row, now);
-      if (state.hoursElapsed < 0.1) continue;
-
-      const territory = getTerritoryBoost(prop, territoryControlMap, membership?.gang_id);
-      const income = getBusinessIncomeBreakdown(prop, state, liveOps, territory.multiplier);
-      totalGross += income.gross;
-      totalUpkeep += income.upkeep;
-      totalNet += income.net;
-
-      summaryLines.push(
-        `• **${prop.name}**: ${fmtMoney(income.net)} чистыми (${Math.round(state.efficiency * 100)}% эфф.${territory.isControlled ? `, ${territory.districtName} +${Math.round((territory.multiplier - 1) * 100)}%` : ""})`
-      );
-
+    for (const item of plannedCollections) {
       await dbRun(
         db,
         `UPDATE samp_properties
@@ -920,24 +1419,14 @@ async function handleCollectIncome(interaction, db) {
              last_state_tick = datetime('now'),
              total_collected = COALESCE(total_collected, 0) + ?
          WHERE user_id = ? AND property_id = ?`,
-        [state.projectedCondition, state.projectedSupplies, income.net, userId, row.property_id]
+        [item.projectedCondition, item.projectedSupplies, item.net, userId, item.propertyId]
       );
     }
 
     if (totalNet > 0) {
       await adjustMoney(db, userId, totalNet);
-      await addLedger(db, "property_income", null, userId, totalNet, {
-        gross: totalGross,
-        upkeep: totalUpkeep,
-        properties: summaryLines.length,
-      });
-    }
-    if (totalUpkeep > 0) {
-      await addLedger(db, "property_upkeep", userId, null, totalUpkeep, { properties: summaryLines.length });
     }
   });
-
-  if (summaryLines.length === 0) { await interaction.editReply("⏳ Ещё рано. Подожди хотя бы несколько минут."); return; }
 
   const after = await getSampUser(db, userId);
   const lines = summaryLines.slice(0, 6).join("\n");
@@ -984,7 +1473,13 @@ async function handleMaintainBiz(interaction, db) {
   if (updates.length === 0) { await interaction.reply({ content: "Все выбранные бизнесы уже в порядке.", ephemeral: true }); return; }
   if (Number(user.money) < totalCost) { await interaction.reply({ content: `Нужно **${fmtMoney(totalCost)}**, а у тебя **${fmtMoney(user.money)}**.`, ephemeral: true }); return; }
 
+  const opKey = makeInteractionOpKey(interaction, "property_maintenance");
   await withTx(db, async () => {
+    const inserted = await addLedgerUnique(db, "property_maintenance", userId, null, totalCost, opKey, {
+      properties: updates.map((item) => item.propertyId),
+      count: updates.length,
+    });
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
     await adjustMoney(db, userId, -totalCost);
     for (const update of updates) {
       await dbRun(
@@ -998,10 +1493,6 @@ async function handleMaintainBiz(interaction, db) {
         [userId, update.propertyId]
       );
     }
-    await addLedger(db, "property_maintenance", userId, null, totalCost, {
-      properties: updates.map((item) => item.propertyId),
-      count: updates.length,
-    });
   });
 
   const after = await getSampUser(db, userId);
@@ -1048,7 +1539,10 @@ async function handleBizRun(interaction, db) {
   const nextCondition = Math.min(100, state.projectedCondition + operation.conditionGain + (state.isGangBoosted ? 3 : 0));
   const nextSupplies = Math.min(100, state.projectedSupplies + operation.suppliesGain + (state.isGangBoosted ? 5 : 0));
 
+  const opKey = makeInteractionOpKey(interaction, "business_run");
   await withTx(db, async () => {
+    const inserted = await addLedgerUnique(db, "business_run", null, userId, payout, opKey, { business_id: bizId, label: operation.label, rep_gain: repGain });
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
     await adjustMoney(db, userId, payout);
     if (repGain > 0) {
       await dbRun(db, `UPDATE samp_users SET rep = rep + ?, updated_at = datetime('now') WHERE user_id = ?`, [repGain, userId]);
@@ -1068,7 +1562,6 @@ async function handleBizRun(interaction, db) {
        ON CONFLICT(user_id, action) DO UPDATE SET ready_at = excluded.ready_at`,
       [userId, cooldownAction, nowMs() + operation.cooldownMs]
     );
-    await addLedger(db, "business_run", null, userId, payout, { business_id: bizId, label: operation.label, rep_gain: repGain });
   });
 
   const after = await getSampUser(db, userId);
@@ -1084,37 +1577,311 @@ async function handleBizRun(interaction, db) {
 }
 
 // --- Car Tuning ---
-async function handleTuneCar(interaction, db) {
+function formatTuningProgressLine(progress) {
+  const next = progress?.next || getNextTuningLevelProgress(progress?.exp || 0);
+  if (!next || next.level >= TUNE_LEVEL_MAX) {
+    return `Тюнинг-уровень: **${progress?.level || TUNE_LEVEL_MAX}/${TUNE_LEVEL_MAX}** (макс.)`;
+  }
+  return `Тюнинг-уровень: **${progress?.level || 1}/${TUNE_LEVEL_MAX}** • XP: **${next.currentExp}/${next.nextLevelExp}**`;
+}
+
+function formatInstalledPartLabel(part) {
+  return `${part.name} • ${part.durability}% • ${formatTuningPartStatSummary(part)}`;
+}
+
+async function handleTuneInspect(interaction, db) {
   const userId = interaction.user.id;
   const carId = String(interaction.options.getString("car", true)).toLowerCase();
-  const upgradeId = String(interaction.options.getString("upgrade", true)).toLowerCase();
-  const car = CARS[carId]; const upgrade = CAR_UPGRADES[upgradeId];
+  const car = CARS[carId];
+  if (!car) { await interaction.reply({ content: "Такой тачки нет.", ephemeral: true }); return; }
+
+  const owned = await dbGet(db, "SELECT 1 FROM samp_garage WHERE user_id = ? AND car_id = ?", [userId, carId]);
+  if (!owned) { await interaction.reply({ content: "У тебя нет этой тачки.", ephemeral: true }); return; }
+
+  const [profile, progress, raceStats, cosmetics] = await Promise.all([
+    getCarVehicleProfile(db, userId, carId),
+    getOrCreateCarTuningProgress(db, userId, carId),
+    getUserRaceStats(db, userId),
+    getUserCosmetics(db, userId),
+  ]);
+
+  const installedNames = profile.installedParts.length
+    ? profile.installedParts.map((part) => `• ${formatInstalledPartLabel(part)}`).join("\n")
+    : "—";
+  const lockedParts = listTuningParts()
+    .filter((part) => !profile.installedParts.some((installed) => installed.id === part.id))
+    .map((part) => ({ part, status: getTuningRequirementStatus(part, progress, raceStats) }))
+    .filter(({ status }) => !status.ok)
+    .slice(0, 4)
+    .map(({ part, status }) => `• ${part.name} — ${formatTuningRequirementStatus(part, status)}`)
+    .join("\n") || "—";
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🔧 Tune Bay — ${profile.name}`)
+    .setDescription(joinLines([
+      `ID: **${carId}** • Сборка: **${profile.buildType}**`,
+      formatTuningProgressLine(progress),
+    ]))
+    .addFields(
+      {
+        name: "📊 Статы",
+        value: joinLines([
+          `Скорость: **${profile.topSpeed}**${profile.topSpeedBonus > 0 ? ` (база ${profile.baseTopSpeed} + ${profile.topSpeedBonus})` : ""}`,
+          `Старт: **${profile.launch}** | Зацеп: **${profile.grip}**`,
+          `Стабильность: **${profile.stability}** | Ресурс: **${profile.durability}**`,
+          `Износ сборки: **${profile.averageDurability}%** | Race score: **${profile.raceScore}**`,
+        ]),
+        inline: false,
+      },
+      {
+        name: "🧩 Установлено",
+        value: installedNames,
+        inline: false,
+      },
+      {
+        name: "🔒 Следующие анлоки",
+        value: lockedParts,
+        inline: false,
+      }
+    )
+    .setFooter({ text: "Установка: /tune install car:<id> part:<id> • Сервис: /tune maintain car:<id>" })
+    .setTimestamp();
+
+  applyUserCosmeticsToEmbed(embed, cosmetics, interaction.user.username, 0x2563eb);
+  await interaction.reply({ embeds: [embed] });
+}
+
+async function handleTuneInstall(interaction, db, { partOptionName = "part" } = {}) {
+  const userId = interaction.user.id;
+  const carId = String(interaction.options.getString("car", true)).toLowerCase();
+  const upgradeId = String(interaction.options.getString(partOptionName, true)).toLowerCase();
+  const car = CARS[carId]; const upgrade = getTuningPart(upgradeId);
   if (!car) { await interaction.reply({ content: "Такой тачки нет.", ephemeral: true }); return; }
   if (!upgrade) { await interaction.reply({ content: "Такого тюнинга нет.", ephemeral: true }); return; }
 
   const owned = await dbGet(db, "SELECT 1 FROM samp_garage WHERE user_id = ? AND car_id = ?", [userId, carId]);
   if (!owned) { await interaction.reply({ content: "У тебя нет этой тачки.", ephemeral: true }); return; }
 
-  const alreadyTuned = await dbGet(db, "SELECT 1 FROM samp_car_upgrades WHERE user_id = ? AND car_id = ? AND upgrade_id = ?", [userId, carId, upgradeId]);
+  const installedRows = await getInstalledCarUpgradeRows(db, userId, carId);
+  const alreadyTuned = installedRows.find((row) => row.upgrade_id === upgradeId);
   if (alreadyTuned) { await interaction.reply({ content: "Этот тюнинг уже установлен.", ephemeral: true }); return; }
+
+  const conflictingPart = installedRows
+    .map((row) => getTuningPart(row.upgrade_id))
+    .find((part) => part && part.slot === upgrade.slot);
+  if (conflictingPart) {
+    await interaction.reply({
+      content: `Слот уже занят деталью **${conflictingPart.name}**. Сними её через /tune remove car:${carId} part:${conflictingPart.id}.`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const [progress, raceStats] = await Promise.all([
+    getOrCreateCarTuningProgress(db, userId, carId),
+    getUserRaceStats(db, userId),
+  ]);
+  const requirementStatus = getTuningRequirementStatus(upgrade, progress, raceStats);
+  if (!requirementStatus.ok) {
+    await interaction.reply({ content: formatTuningRequirementStatus(upgrade, requirementStatus), ephemeral: true });
+    return;
+  }
 
   const user = await getSampUser(db, userId);
   if (!user || Number(user.money) < upgrade.price) { await interaction.reply({ content: "Не хватает виртов.", ephemeral: true }); return; }
 
+  const opKey = makeInteractionOpKey(interaction, "tune_install");
   await withTx(db, async () => {
+    const inserted = await addLedgerUnique(db, "tune_install", userId, null, upgrade.price, opKey, { car_id: carId, upgrade_id: upgradeId, slot: upgrade.slot });
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
     await adjustMoney(db, userId, -upgrade.price);
-    await dbRun(db, `INSERT INTO samp_car_upgrades(user_id, car_id, upgrade_id) VALUES(?, ?, ?)`, [userId, carId, upgradeId]);
-    await addLedger(db, "car_tune", userId, null, upgrade.price, { car_id: carId, upgrade_id: upgradeId });
+    await dbRun(
+      db,
+      `INSERT INTO samp_car_upgrades(user_id, car_id, upgrade_id, durability, installed_at)
+       VALUES(?, ?, ?, 100, datetime('now'))`,
+      [userId, carId, upgradeId]
+    );
+  });
+
+  const [after, profile] = await Promise.all([
+    getSampUser(db, userId),
+    getCarVehicleProfile(db, userId, carId),
+  ]);
+  await interaction.reply(
+    `🔧 Установлен **${upgrade.name}** на **${car.name}**.\n` +
+    `${formatTuningPartStatSummary(upgrade)}\n` +
+    `Сборка: **${profile.buildType}** • Скорость: **${profile.topSpeed}** • Старт: **${profile.launch}** • Зацеп: **${profile.grip}**\n` +
+    `Цена: **${fmtMoney(upgrade.price)}** | Баланс: **${fmtMoney(after.money)}**`
+  );
+}
+
+async function handleTuneRemove(interaction, db) {
+  const userId = interaction.user.id;
+  const carId = String(interaction.options.getString("car", true)).toLowerCase();
+  const partId = String(interaction.options.getString("part", true)).toLowerCase();
+  const part = getTuningPart(partId);
+  if (!part) { await interaction.reply({ content: "Такой детали нет.", ephemeral: true }); return; }
+
+  const installedRows = await getInstalledCarUpgradeRows(db, userId, carId);
+  const installed = installedRows.find((row) => row.upgrade_id === partId);
+  if (!installed) { await interaction.reply({ content: "Эта деталь не установлена на выбранную тачку.", ephemeral: true }); return; }
+
+  const durability = Math.max(0, Math.floor(Number(installed.durability || 100)));
+  const refund = Math.max(0, Math.round(part.price * TUNE_REMOVE_REFUND_RATIO * (durability / 100)));
+  const opKey = makeInteractionOpKey(interaction, "tune_remove");
+  await withTx(db, async () => {
+    await dbRun(db, "DELETE FROM samp_car_upgrades WHERE user_id = ? AND car_id = ? AND upgrade_id = ?", [userId, carId, partId]);
+    if (refund > 0) {
+      const inserted = await addLedgerUnique(db, "tune_remove", null, userId, refund, opKey, { car_id: carId, upgrade_id: partId, durability });
+      if (!inserted) throw new Error("DUPLICATE_OPERATION");
+      await adjustMoney(db, userId, refund);
+    }
   });
 
   const after = await getSampUser(db, userId);
-  await interaction.reply(`🔧 Установлен **${upgrade.name}** на **${car.name}** (+${upgrade.speedBonus} скорость)!\nЦена: **${fmtMoney(upgrade.price)}** | Баланс: **${fmtMoney(after.money)}**`);
+  await interaction.reply(
+    `🧰 Деталь **${part.name}** снята с **${carId}**.\n` +
+    `Возврат: **${fmtMoney(refund)}** | Баланс: **${fmtMoney(after.money)}**`
+  );
 }
 
-async function handleGarage(interaction, db) {
+async function handleTuneMaintain(interaction, db) {
   const userId = interaction.user.id;
+  const carId = String(interaction.options.getString("car", true)).toLowerCase();
+  const partId = String(interaction.options.getString("part", false) || "").toLowerCase();
+  const installedRows = await getInstalledCarUpgradeRows(db, userId, carId);
+  if (!installedRows.length) { await interaction.reply({ content: "На этой тачке пока нет деталей для обслуживания.", ephemeral: true }); return; }
+
+  const targetRows = partId
+    ? installedRows.filter((row) => row.upgrade_id === partId)
+    : installedRows;
+  if (!targetRows.length) { await interaction.reply({ content: "Эта деталь не установлена на выбранную тачку.", ephemeral: true }); return; }
+
+  const costBreakdown = targetRows
+    .map((row) => {
+      const part = getTuningPart(row.upgrade_id);
+      if (!part) return null;
+      const durability = Math.max(0, Math.floor(Number(row.durability || 100)));
+      return {
+        part,
+        durability,
+        cost: Math.max(0, Math.round(part.price * 0.35 * ((100 - durability) / 100))),
+      };
+    })
+    .filter(Boolean);
+
+  const totalCost = costBreakdown.reduce((sum, item) => sum + item.cost, 0);
+  if (totalCost <= 0) {
+    await interaction.reply({ content: "Все выбранные детали уже в идеальном состоянии.", ephemeral: true });
+    return;
+  }
+
+  const user = await getSampUser(db, userId);
+  if (!user || Number(user.money) < totalCost) { await interaction.reply({ content: "Не хватает виртов на обслуживание.", ephemeral: true }); return; }
+
+  const opKey = makeInteractionOpKey(interaction, "tune_maintain");
+  await withTx(db, async () => {
+    const inserted = await addLedgerUnique(db, "tune_maintain", userId, null, totalCost, opKey, {
+      car_id: carId,
+      upgrade_ids: costBreakdown.map((item) => item.part.id),
+    });
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
+    await adjustMoney(db, userId, -totalCost);
+    for (const item of costBreakdown) {
+      await dbRun(
+        db,
+        `UPDATE samp_car_upgrades SET durability = 100 WHERE user_id = ? AND car_id = ? AND upgrade_id = ?`,
+        [userId, carId, item.part.id]
+      );
+    }
+  });
+
+  const after = await getSampUser(db, userId);
+  await interaction.reply(
+    `🛠️ Обслуживание **${carId}** завершено.\n` +
+    `Деталей восстановлено: **${costBreakdown.length}** | Списано: **${fmtMoney(totalCost)}**\n` +
+    `Баланс: **${fmtMoney(after.money)}**`
+  );
+}
+
+async function handleTuneCommand(interaction, db) {
+  const subcommand = interaction.options.getSubcommand();
+  if (subcommand === "install") return handleTuneInstall(interaction, db, { partOptionName: "part" });
+  if (subcommand === "inspect") return handleTuneInspect(interaction, db);
+  if (subcommand === "remove") return handleTuneRemove(interaction, db);
+  if (subcommand === "maintain") return handleTuneMaintain(interaction, db);
+  await interaction.reply({ content: "Неизвестная команда тюнинга.", ephemeral: true });
+}
+
+async function handleTuneCar(interaction, db) {
+  return handleTuneInstall(interaction, db, { partOptionName: "upgrade" });
+}
+
+function buildGarageSwitchCustomId(carId) {
+  return `${GARAGE_SWITCH_BUTTON_PREFIX}${String(carId)}`;
+}
+
+function getGarageSwitchCarId(customId) {
+  const raw = String(customId || "");
+  if (!raw.startsWith(GARAGE_SWITCH_BUTTON_PREFIX)) return null;
+  return raw.slice(GARAGE_SWITCH_BUTTON_PREFIX.length).trim().toLowerCase() || null;
+}
+
+function getSwitchCarErrorMessage(code) {
+  if (code === "NO_PROFILE") return "Сначала зарегистрируйся через /reg.";
+  if (code === "UNKNOWN_CAR") return "Такой тачки нет.";
+  if (code === "NOT_OWNED") return "У тебя нет этой тачки в гараже.";
+  return "Не удалось сменить активную тачку.";
+}
+
+async function setActiveGarageCar(db, userId, carId) {
+  const normalizedCarId = String(carId || "").toLowerCase();
+  const car = CARS[normalizedCarId];
+  if (!car) return { ok: false, code: "UNKNOWN_CAR" };
+
+  return withTx(db, async () => {
+    const user = await getSampUser(db, userId);
+    if (!user) return { ok: false, code: "NO_PROFILE" };
+
+    const owned = await dbGet(db, "SELECT 1 FROM samp_garage WHERE user_id = ? AND car_id = ?", [String(userId), normalizedCarId]);
+    if (!owned) return { ok: false, code: "NOT_OWNED" };
+
+    if (String(user.car_id || "") === normalizedCarId) {
+      return { ok: true, changed: false, carId: normalizedCarId, car };
+    }
+
+    await dbRun(
+      db,
+      "UPDATE samp_users SET car_id = ?, updated_at = datetime('now') WHERE user_id = ?",
+      [normalizedCarId, String(userId)]
+    );
+
+    return { ok: true, changed: true, carId: normalizedCarId, car };
+  });
+}
+
+function buildGarageSwitchRows(orderedCars, activeCarId) {
+  const switchableCars = (orderedCars || [])
+    .filter((row) => row.car_id !== activeCarId && CARS[row.car_id])
+    .slice(0, GARAGE_SWITCH_BUTTON_LIMIT);
+
+  if (!switchableCars.length) return [];
+
+  return [
+    new ActionRowBuilder().addComponents(
+      switchableCars.map((row) =>
+        new ButtonBuilder()
+          .setCustomId(buildGarageSwitchCustomId(row.car_id))
+          .setLabel(CARS[row.car_id].name.slice(0, 80))
+          .setStyle(ButtonStyle.Secondary)
+      )
+    ),
+  ];
+}
+
+async function buildGarageReplyPayload(db, userId, username) {
   const cars = await dbAll(db, "SELECT car_id FROM samp_garage WHERE user_id = ?", [userId]);
-  if (!cars || cars.length === 0) { await interaction.reply({ content: "Твой гараж пуст.", ephemeral: true }); return; }
+  if (!cars || cars.length === 0) return null;
 
   const user = await getSampUser(db, userId);
   const cosmetics = await getUserCosmetics(db, userId);
@@ -1129,24 +1896,36 @@ async function handleGarage(interaction, db) {
   for (const row of orderedCars) {
     const car = CARS[row.car_id];
     if (!car) continue;
-    const upgrades = await dbAll(db, "SELECT upgrade_id FROM samp_car_upgrades WHERE user_id = ? AND car_id = ?", [userId, row.car_id]);
-    const speedBonus = (upgrades || []).reduce((s, u) => s + (CAR_UPGRADES[u.upgrade_id]?.speedBonus || 0), 0);
-    const upgradeNames = (upgrades || []).map(u => CAR_UPGRADES[u.upgrade_id]?.name || u.upgrade_id).join(", ") || "—";
-    if (speedBonus > 0) tunedCount += 1;
+    const [profile, progress] = await Promise.all([
+      getCarVehicleProfile(db, userId, row.car_id),
+      getOrCreateCarTuningProgress(db, userId, row.car_id),
+    ]);
+    const upgradeNames = profile.installedParts.length
+      ? profile.installedParts.map((part) => `${part.name} (${part.durability}%)`).join(", ")
+      : "—";
+    if (profile.installedParts.length > 0) tunedCount += 1;
     carFields.push({
       name: `${row.car_id === user?.car_id ? "🟢 Активная" : "🚘"} ${car.name}`,
       value: joinLines([
         `ID: **${row.car_id}**`,
-        `Скорость: **${car.speed + speedBonus}** (${speedBonus > 0 ? `база ${car.speed} + ${speedBonus}` : `база ${car.speed}`})`,
+        `Сборка: **${profile.buildType}** • Скорость: **${profile.topSpeed}** (${profile.topSpeedBonus > 0 ? `база ${profile.baseTopSpeed} + ${profile.topSpeedBonus}` : `база ${profile.baseTopSpeed}`})`,
+        `Старт/зацеп/стабильность: **${profile.launch} / ${profile.grip} / ${profile.stability}**`,
+        `Тюнинг-уровень: **${progress.level}/${TUNE_LEVEL_MAX}** • Износ: **${profile.averageDurability}%**`,
         `Тюнинг: ${upgradeNames}`,
       ]),
       inline: false,
     });
   }
 
+  const switchRows = buildGarageSwitchRows(orderedCars, user?.car_id);
+  const hasSwitchShortcuts = switchRows.length > 0;
+  const shortcutHint = hasSwitchShortcuts
+    ? " Быстрый выбор доступен на кнопках ниже, остальные машины переключай через /switchcar."
+    : "";
+
   const overview = new EmbedBuilder()
     .setTitle("🏎️ Твой гараж")
-    .setDescription("Машины отсортированы с активной тачкой сверху.")
+    .setDescription(`Машины отсортированы с активной тачкой сверху.${shortcutHint}`)
     .addFields(
       { name: "Всего машин", value: `${carFields.length}`, inline: true },
       { name: "С тюнингом", value: `${tunedCount}`, inline: true },
@@ -1154,19 +1933,91 @@ async function handleGarage(interaction, db) {
     )
     .setTimestamp();
 
-  applyUserCosmeticsToEmbed(overview, cosmetics, interaction.user.username, 0x3498db);
+  applyUserCosmeticsToEmbed(overview, cosmetics, username, 0x3498db);
 
   const detailEmbeds = buildPagedFieldEmbeds({
     title: "🚗 Машины в гараже",
-    description: "Скорость уже учитывает установленные апгрейды.",
+    description: "Гараж показывает готовую сборку машины: скорость, старт, зацеп, стабильность и износ деталей.",
     color: 0x2563eb,
     fields: carFields,
     fieldsPerPage: 4,
-    footer: "Тюнинг: /tunecar car:<id> upgrade:<id>",
-  }).map((embed) => applyUserCosmeticsToEmbed(embed, cosmetics, interaction.user.username, 0x2563eb));
+    footer: "Тюнинг: /tune inspect car:<id> | Установка: /tune install car:<id> part:<id> | Смена активной: /switchcar car:<id>",
+  }).map((embed) => applyUserCosmeticsToEmbed(embed, cosmetics, username, 0x2563eb));
 
-  const embeds = [overview, ...detailEmbeds];
-  await interaction.reply({ embeds: embeds.slice(0, 10) });
+  return {
+    embeds: [overview, ...detailEmbeds].slice(0, 10),
+    components: switchRows,
+  };
+}
+
+async function handleSwitchCar(interaction, db) {
+  const userId = interaction.user.id;
+  const carId = String(interaction.options.getString("car", true)).toLowerCase();
+  const result = await setActiveGarageCar(db, userId, carId);
+
+  if (!result.ok) {
+    await interaction.reply({ content: getSwitchCarErrorMessage(result.code), ephemeral: true });
+    return;
+  }
+
+  if (!result.changed) {
+    await interaction.reply(`🚘 **${result.car.name}** уже активна.`);
+    return;
+  }
+
+  await interaction.reply(`🚘 Активная тачка изменена: **${result.car.name}**.\nID: **${result.carId}**`);
+}
+
+async function handleGarage(interaction, db) {
+  const userId = interaction.user.id;
+  const payload = await buildGarageReplyPayload(db, userId, interaction.user.username);
+  if (!payload) { await interaction.reply({ content: "Твой гараж пуст.", ephemeral: true }); return; }
+
+  const shouldCollectButtons = payload.components.length > 0;
+  const reply = await interaction.reply({
+    embeds: payload.embeds,
+    components: payload.components,
+    fetchReply: shouldCollectButtons,
+  });
+
+  if (!shouldCollectButtons || !reply || typeof reply.createMessageComponentCollector !== "function") return;
+
+  const collector = reply.createMessageComponentCollector({ componentType: ComponentType.Button, time: 60_000 });
+
+  collector.on("collect", async (btnInt) => {
+    if (btnInt.user.id !== userId) {
+      await btnInt.reply({ content: "Эта панель не для тебя. Используй /garage или /switchcar у себя.", ephemeral: true });
+      return;
+    }
+
+    const carId = getGarageSwitchCarId(btnInt.customId);
+    if (!carId) {
+      await btnInt.reply({ content: "Эта кнопка больше неактуальна.", ephemeral: true });
+      return;
+    }
+
+    const result = await setActiveGarageCar(db, userId, carId);
+    if (!result.ok) {
+      await btnInt.reply({ content: getSwitchCarErrorMessage(result.code), ephemeral: true });
+      return;
+    }
+
+    const refreshedPayload = await buildGarageReplyPayload(db, userId, interaction.user.username);
+    if (!refreshedPayload) {
+      await btnInt.update({ content: "Твой гараж пуст.", embeds: [], components: [] });
+      return;
+    }
+
+    const content = result.changed
+      ? `🚘 Активная тачка: **${result.car.name}**.`
+      : `🚘 **${result.car.name}** уже активна.`;
+
+    await btnInt.update({ content, embeds: refreshedPayload.embeds, components: refreshedPayload.components });
+  });
+
+  collector.on("end", async () => {
+    await interaction.editReply({ components: [] }).catch(() => {});
+  });
 }
 
 // --- Bounty ---
@@ -1179,10 +2030,12 @@ async function handleBounty(interaction, db) {
   const user = await getSampUser(db, userId);
   if (!user || Number(user.money) < amount) { await interaction.reply({ content: "Не хватает виртов.", ephemeral: true }); return; }
 
+  const opKey = makeInteractionOpKey(interaction, "bounty_place");
   await withTx(db, async () => {
+    const inserted = await addLedgerUnique(db, "bounty_place", userId, null, amount, opKey, { target: target.id });
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
     await adjustMoney(db, userId, -amount);
     await dbRun(db, `INSERT INTO samp_bounties(target_user_id, placed_by, amount) VALUES(?, ?, ?)`, [target.id, userId, amount]);
-    await addLedger(db, "bounty_place", userId, null, amount, { target: target.id });
   });
 
   await interaction.reply(`🎯 Награда **${fmtMoney(amount)}** за голову <@${target.id}>!\nКто победит в дуэли — заберёт всё.`);
@@ -1222,6 +2075,7 @@ async function checkAndCollectBounty(db, winnerId, loserId) {
 // --- Heists ---
 async function handleHeist(interaction, db) {
   const userId = interaction.user.id;
+  const guildId = interaction.guild?.id || interaction.guildId || null;
   const tierKey = interaction.options.getString("tier", true);
   const tier = HEIST_TIERS[tierKey];
   if (!tier) { await interaction.reply({ content: "Неизвестный тип ограбления.", ephemeral: true }); return; }
@@ -1230,7 +2084,15 @@ async function handleHeist(interaction, db) {
   if (!user) { await interaction.reply({ content: "Сначала /reg.", ephemeral: true }); return; }
   if (Number(user.jail_until || 0) > nowMs()) { await interaction.reply({ content: "Ты в тюрьме!", ephemeral: true }); return; }
 
+  const organizerReservation = await tryReserveHeistParticipant(db, userId);
+  if (!organizerReservation.ok) {
+    await interaction.reply({ content: getHeistLockMessage(organizerReservation), ephemeral: true });
+    return;
+  }
+
   const participants = new Set([userId]);
+
+  const organizerCooldownMs = await getUserHeistCooldownMs(db, guildId, userId);
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("heist_join").setLabel(`Присоединиться (${participants.size}/${tier.maxPlayers})`).setStyle(ButtonStyle.Success),
@@ -1239,7 +2101,7 @@ async function handleHeist(interaction, db) {
 
   const embed = new EmbedBuilder()
     .setTitle(`🏦 Ограбление: ${tier.name}`)
-    .setDescription(`Организатор: <@${userId}>\nНужно: **${tier.minPlayers}-${tier.maxPlayers}** игроков\nВыплата: **${fmtMoney(tier.payout[0])} — ${fmtMoney(tier.payout[1])}**\nРиск: **${Math.round(tier.failChance * 100)}%**\n\nУчастники: <@${userId}>`)
+    .setDescription(`Организатор: <@${userId}>\nНужно: **${tier.minPlayers}-${tier.maxPlayers}** игроков\nВыплата: **${fmtMoney(tier.payout[0])} — ${fmtMoney(tier.payout[1])}**\nРиск: **${Math.round(tier.failChance * 100)}%**\nКулдаун после запуска: **${formatDuration(organizerCooldownMs)}** для тебя, у опытных игроков может снизиться до **${formatDuration(HEIST_MIN_COOLDOWN_MS)}**\n\nУчастники: <@${userId}>`)
     .setColor(0x9b59b6).setFooter({ text: "60 секунд на сбор команды" });
 
   const reply = await interaction.reply({ embeds: [embed], components: [row], fetchReply: true });
@@ -1252,45 +2114,58 @@ async function handleHeist(interaction, db) {
       if (participants.size >= tier.maxPlayers) { await btnInt.reply({ content: "Команда полная.", ephemeral: true }); return; }
       const joinUser = await getSampUser(db, btnInt.user.id);
       if (!joinUser) { await btnInt.reply({ content: "Сначала /reg.", ephemeral: true }); return; }
+      if (Number(joinUser.jail_until || 0) > nowMs()) { await btnInt.reply({ content: "Ты сейчас в тюрьме и не можешь идти на дело.", ephemeral: true }); return; }
+      const joinReservation = await tryReserveHeistParticipant(db, btnInt.user.id);
+      if (!joinReservation.ok) { await btnInt.reply({ content: getHeistLockMessage(joinReservation), ephemeral: true }); return; }
       participants.add(btnInt.user.id);
+      const joiningCooldownMs = await getUserHeistCooldownMs(db, guildId, btnInt.user.id);
       const updRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId("heist_join").setLabel(`Присоединиться (${participants.size}/${tier.maxPlayers})`).setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId("heist_start").setLabel("Начать!").setStyle(ButtonStyle.Primary)
       );
-      embed.setDescription(`Организатор: <@${userId}>\nНужно: **${tier.minPlayers}-${tier.maxPlayers}** игроков\n\nУчастники: ${[...participants].map(p => `<@${p}>`).join(", ")}`);
+      embed.setDescription(`Организатор: <@${userId}>\nНужно: **${tier.minPlayers}-${tier.maxPlayers}** игроков\nВыплата: **${fmtMoney(tier.payout[0])} — ${fmtMoney(tier.payout[1])}**\nРиск: **${Math.round(tier.failChance * 100)}%**\nКулдаун после запуска: **${formatDuration(Math.min(organizerCooldownMs, joiningCooldownMs))} — ${formatDuration(Math.max(organizerCooldownMs, joiningCooldownMs))}** с учётом ачивок\n\nУчастники: ${[...participants].map(p => `<@${p}>`).join(", ")}`);
       await btnInt.update({ embeds: [embed], components: [updRow] });
     } else if (btnInt.customId === "heist_start") {
       if (btnInt.user.id !== userId) { await btnInt.reply({ content: "Только организатор может начать.", ephemeral: true }); return; }
       if (participants.size < tier.minPlayers) { await btnInt.reply({ content: `Нужно минимум ${tier.minPlayers} игроков.`, ephemeral: true }); return; }
       collector.stop("started");
 
+      const participantIds = [...participants];
+      const cooldownEntries = await buildHeistCooldownEntries(db, guildId, participantIds);
+      const cooldownText = formatHeistCooldownSummary(cooldownEntries);
+
       const failed = Math.random() < tier.failChance;
       if (failed) {
-        for (const pid of participants) {
-          try {
+        await withTx(db, async () => {
+          await releaseHeistParticipants(db, participantIds);
+          await applyHeistCooldown(db, participantIds, { entries: cooldownEntries });
+          for (const pid of participantIds) {
             await dbRun(db, `UPDATE samp_users SET jail_until = ? WHERE user_id = ?`, [nowMs() + tier.jailMs, pid]);
-          } catch (_) {}
-        }
+          }
+        });
         const jailMin = Math.ceil(tier.jailMs / 60_000);
-        const failEmbed = new EmbedBuilder().setTitle(`🚔 Провал: ${tier.name}`).setDescription(`Полиция перехватила команду!\nВсе участники в тюрьме на **${jailMin} мин**.`).setColor(0xe74c3c);
+        const failEmbed = new EmbedBuilder().setTitle(`🚔 Провал: ${tier.name}`).setDescription(`Полиция перехватила команду!\nВсе участники в тюрьме на **${jailMin} мин**.\nСледующая попытка через **${cooldownText}**.`).setColor(0xe74c3c);
         await btnInt.update({ embeds: [failEmbed], components: [] });
       } else {
         const totalPayout = randInt(tier.payout[0], tier.payout[1]);
         const share = Math.floor(totalPayout / participants.size);
-        for (const pid of participants) {
-          try {
+        await withTx(db, async () => {
+          await releaseHeistParticipants(db, participantIds);
+          await applyHeistCooldown(db, participantIds, { entries: cooldownEntries });
+          for (const pid of participantIds) {
             await adjustMoney(db, pid, share);
-            await addLedger(db, "heist", null, pid, share, { tier: tierKey });
-          } catch (_) {}
-        }
-        const winEmbed = new EmbedBuilder().setTitle(`🎉 Успех: ${tier.name}`).setDescription(`Команда взяла **${fmtMoney(totalPayout)}**!\nКаждый получил: **${fmtMoney(share)}**`).setColor(0x2ecc71);
+            await addLedger(db, "heist", null, pid, share, { tier: tierKey, crew_size: participantIds.length });
+          }
+        });
+        const winEmbed = new EmbedBuilder().setTitle(`🎉 Успех: ${tier.name}`).setDescription(`Команда взяла **${fmtMoney(totalPayout)}**!\nКаждый получил: **${fmtMoney(share)}**\nСледующий заход через **${cooldownText}**.`).setColor(0x2ecc71);
         await btnInt.update({ embeds: [winEmbed], components: [] });
       }
     }
   });
 
-  collector.on("end", (_, reason) => {
+  collector.on("end", async (_, reason) => {
     if (reason !== "started") {
+      await releaseHeistParticipants(db, [...participants]).catch(() => {});
       const timeoutEmbed = new EmbedBuilder().setTitle(`⏱️ Время вышло`).setDescription("Не удалось собрать команду.").setColor(0x95a5a6);
       interaction.editReply({ embeds: [timeoutEmbed], components: [] }).catch(() => {});
     }
@@ -1334,10 +2209,11 @@ async function handleDoJob(interaction, db) {
   if (job.requirement) {
     if (job.requirement.startsWith("car_speed_")) {
       const needed = parseInt(job.requirement.split("_")[2]);
-      const car = CARS[user.car_id];
-      const upgrades = await dbAll(db, "SELECT upgrade_id FROM samp_car_upgrades WHERE user_id = ? AND car_id = ?", [userId, user.car_id]);
-      const bonus = (upgrades || []).reduce((s, u) => s + (CAR_UPGRADES[u.upgrade_id]?.speedBonus || 0), 0);
-      if ((car?.speed || 0) + bonus < needed) { await interaction.editReply(`Нужна тачка со скоростью ${needed}+. Твоя: ${(car?.speed || 0) + bonus}`); return; }
+      const profile = await getCarVehicleProfile(db, userId, user.car_id);
+      if ((profile?.topSpeed || 0) < needed) {
+        await interaction.editReply(`Нужна тачка со скоростью ${needed}+. Твоя сборка даёт: ${profile?.topSpeed || 0}.`);
+        return;
+      }
     } else if (job.requirement === "weapon") {
       const wRow = await dbGet(db, "SELECT value FROM samp_user_settings WHERE user_id = ? AND key = 'weapon'", [userId]);
       if (!wRow?.value) { await interaction.editReply("Нужно оружие. Купи в /weaponshop."); return; }
@@ -1361,10 +2237,13 @@ async function handleDoJob(interaction, db) {
   }
 
   const pay = randInt(job.basePay[0], job.basePay[1]);
-  await adjustMoney(db, userId, pay);
-  await addLedger(db, "job", null, userId, pay, { job: job.name });
-  await dbRun(db, `INSERT INTO samp_cooldowns(user_id, action, ready_at) VALUES(?, 'job', ?)
-    ON CONFLICT(user_id, action) DO UPDATE SET ready_at = excluded.ready_at`, [userId, nowMs() + 30 * 60_000]);
+  await withTx(db, async () => {
+    const inserted = await addLedgerUnique(db, "job", null, userId, pay, makeInteractionOpKey(interaction, "job"), { job: job.name });
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
+    await adjustMoney(db, userId, pay);
+    await dbRun(db, `INSERT INTO samp_cooldowns(user_id, action, ready_at) VALUES(?, 'job', ?)
+      ON CONFLICT(user_id, action) DO UPDATE SET ready_at = excluded.ready_at`, [userId, nowMs() + 30 * 60_000]);
+  });
 
   const after = await getSampUser(db, userId);
   await interaction.editReply(`✅ Задание «${job.name}» выполнено!\nОплата: **+${fmtMoney(pay)}** | Баланс: **${fmtMoney(after.money)}**`);
@@ -1384,12 +2263,14 @@ async function handleGangCommand(interaction, db) {
     const existing = await dbGet(db, "SELECT 1 FROM samp_gang_members WHERE user_id = ?", [userId]);
     if (existing) { await interaction.reply({ content: "Ты уже в банде. Сначала /gang leave.", ephemeral: true }); return; }
 
+    const opKey = makeInteractionOpKey(interaction, "gang_create");
     await withTx(db, async () => {
+      const inserted = await addLedgerUnique(db, "gang_create", userId, null, 50_000, opKey, { name, tag });
+      if (!inserted) throw new Error("DUPLICATE_OPERATION");
       await adjustMoney(db, userId, -50_000);
       await dbRun(db, "INSERT INTO samp_gangs(name, tag, leader_id) VALUES(?, ?, ?)", [name, tag, userId]);
       const gang = await dbGet(db, "SELECT id FROM samp_gangs WHERE leader_id = ? ORDER BY id DESC LIMIT 1", [userId]);
       await dbRun(db, "INSERT INTO samp_gang_members(gang_id, user_id, role) VALUES(?, ?, 'leader')", [gang.id, userId]);
-      await addLedger(db, "gang_create", userId, null, 50_000, { name, tag });
     });
     await interaction.reply(`🔫 Банда **[${tag}] ${name}** создана! Стоимость: **${fmtMoney(50_000)}**`);
 
@@ -1438,10 +2319,12 @@ async function handleGangCommand(interaction, db) {
     if (!member) { await interaction.reply({ content: "Ты не в банде.", ephemeral: true }); return; }
     const user = await getSampUser(db, userId);
     if (!user || Number(user.money) < amount) { await interaction.reply({ content: "Не хватает виртов.", ephemeral: true }); return; }
+    const opKey = makeInteractionOpKey(interaction, "gang_deposit");
     await withTx(db, async () => {
+      const inserted = await addLedgerUnique(db, "gang_deposit", userId, null, amount, opKey, { gang_id: member.gang_id });
+      if (!inserted) throw new Error("DUPLICATE_OPERATION");
       await adjustMoney(db, userId, -amount);
       await dbRun(db, "UPDATE samp_gangs SET treasury = treasury + ? WHERE id = ?", [amount, member.gang_id]);
-      await addLedger(db, "gang_deposit", userId, null, amount, { gang_id: member.gang_id });
     });
     await interaction.reply(`💰 Внесено **${fmtMoney(amount)}** в казну банды.`);
 
@@ -1473,7 +2356,14 @@ async function handleGangCommand(interaction, db) {
     const nextCondition = Math.min(100, state.projectedCondition + 12);
     const nextSupplies = Math.min(100, state.projectedSupplies + 18);
 
+    const opKey = makeInteractionOpKey(interaction, "gang_business_support");
     await withTx(db, async () => {
+      const inserted = await addLedgerUnique(db, "gang_business_support", userId, target.id, cost, opKey, {
+        gang_id: member.gang_id,
+        property_id: businessId,
+        boost_until: toSqliteDate(boostUntil),
+      });
+      if (!inserted) throw new Error("DUPLICATE_OPERATION");
       await dbRun(db, "UPDATE samp_gangs SET treasury = treasury - ? WHERE id = ?", [cost, member.gang_id]);
       await dbRun(
         db,
@@ -1486,11 +2376,6 @@ async function handleGangCommand(interaction, db) {
          WHERE user_id = ? AND property_id = ?`,
         [nextCondition, nextSupplies, toSqliteDate(boostUntil), member.gang_id, target.id, businessId]
       );
-      await addLedger(db, "gang_business_support", userId, target.id, cost, {
-        gang_id: member.gang_id,
-        property_id: businessId,
-        boost_until: toSqliteDate(boostUntil),
-      });
     });
 
     await interaction.reply(
@@ -1543,7 +2428,14 @@ async function handleGangCommand(interaction, db) {
       return;
     }
 
-    const current = await dbGet(db, "SELECT district_id, gang_id, pressure FROM samp_gang_territories WHERE district_id = ?", [districtId]);
+    const current = await dbGet(
+      db,
+      `SELECT t.district_id, t.gang_id, t.pressure, g.name AS gang_name, g.tag AS gang_tag
+       FROM samp_gang_territories t
+       LEFT JOIN samp_gangs g ON g.id = t.gang_id
+       WHERE t.district_id = ?`,
+      [districtId]
+    );
     const isOwn = current && Number(current.gang_id) === Number(member.gang_id);
     const isNeutral = !current;
     const actionCost = isNeutral ? district.claimCost : isOwn ? Math.max(8_000, Math.round(district.claimCost * 0.5)) : district.takeoverCost;
@@ -1553,7 +2445,17 @@ async function handleGangCommand(interaction, db) {
     }
 
     let summary = "";
+    const territoryAction = isNeutral
+      ? "gang_territory_claim"
+      : isOwn
+        ? "gang_territory_reinforce"
+        : (Number(current?.pressure || 0) - TERRITORY_ATTACK_PRESSURE <= 0 ? "gang_territory_takeover" : "gang_territory_attack");
     await withTx(db, async () => {
+      const inserted = await addLedgerUnique(db, territoryAction, userId, null, actionCost, makeInteractionOpKey(interaction, territoryAction), {
+        gang_id: member.gang_id,
+        district_id: districtId,
+      });
+      if (!inserted) throw new Error("DUPLICATE_OPERATION");
       await dbRun(db, "UPDATE samp_gangs SET treasury = treasury - ? WHERE id = ?", [actionCost, member.gang_id]);
 
       if (isNeutral) {
@@ -1565,7 +2467,6 @@ async function handleGangCommand(interaction, db) {
           [districtId, member.gang_id, TERRITORY_CAPTURE_PRESSURE]
         );
         summary = `🗺️ Банда **[${member.tag}] ${member.name}** взяла район **${district.name}** под контроль.\nДавление: **${TERRITORY_CAPTURE_PRESSURE}%** | Бонус бизнесам района: **+${Math.round(district.businessBuff * 100)}%**`;
-        await addLedger(db, "gang_territory_claim", userId, null, actionCost, { gang_id: member.gang_id, district_id: districtId, pressure: TERRITORY_CAPTURE_PRESSURE });
       } else if (isOwn) {
         const nextPressure = Math.min(100, Number(current.pressure || 0) + TERRITORY_REINFORCE_PRESSURE);
         await dbRun(
@@ -1574,7 +2475,6 @@ async function handleGangCommand(interaction, db) {
           [nextPressure, districtId]
         );
         summary = `🛡️ Банда **[${member.tag}] ${member.name}** укрепила район **${district.name}**.\nДавление: **${nextPressure}%** | Бонус бизнесам района: **+${Math.round(district.businessBuff * 100)}%**`;
-        await addLedger(db, "gang_territory_reinforce", userId, null, actionCost, { gang_id: member.gang_id, district_id: districtId, pressure: nextPressure });
       } else {
         const nextPressure = Number(current.pressure || 0) - TERRITORY_ATTACK_PRESSURE;
         if (nextPressure <= 0) {
@@ -1586,15 +2486,16 @@ async function handleGangCommand(interaction, db) {
             [member.gang_id, TERRITORY_CAPTURE_PRESSURE, districtId]
           );
           summary = `🔥 Банда **[${member.tag}] ${member.name}** перехватила район **${district.name}**.\nНовый контроль: **${TERRITORY_CAPTURE_PRESSURE}%** | Бонус бизнесам района: **+${Math.round(district.businessBuff * 100)}%**`;
-          await addLedger(db, "gang_territory_takeover", userId, null, actionCost, { gang_id: member.gang_id, district_id: districtId, pressure: TERRITORY_CAPTURE_PRESSURE });
         } else {
           await dbRun(
             db,
             `UPDATE samp_gang_territories SET pressure = ?, updated_at = datetime('now') WHERE district_id = ?`,
             [nextPressure, districtId]
           );
-          summary = `⚔️ Банда **[${member.tag}] ${member.name}** продавила район **${district.name}**.\nКонтроль соперников упал до **${nextPressure}%**.`;
-          await addLedger(db, "gang_territory_attack", userId, null, actionCost, { gang_id: member.gang_id, district_id: districtId, pressure: nextPressure });
+          const defender = current?.gang_name && current?.gang_tag
+            ? `**[${current.gang_tag}] ${current.gang_name}**`
+            : "соперников";
+          summary = `⚔️ Банда **[${member.tag}] ${member.name}** продавила защиту района **${district.name}**.\nКонтроль ${defender} упал до **${nextPressure}%**. Район ещё не захвачен.`;
         }
       }
 
@@ -1632,9 +2533,19 @@ async function handleGangCommand(interaction, db) {
     await interaction.reply({ embeds: [embed] });
 
   } else if (sub === "top") {
-    const gangs = await dbAll(db, "SELECT g.*, COUNT(gm.user_id) as members FROM samp_gangs g JOIN samp_gang_members gm ON gm.gang_id = g.id GROUP BY g.id ORDER BY g.treasury DESC LIMIT 10", []);
+    const gangs = await dbAll(
+      db,
+      `SELECT g.*, COUNT(DISTINCT gm.user_id) as members, COUNT(DISTINCT t.district_id) as territories
+       FROM samp_gangs g
+       LEFT JOIN samp_gang_members gm ON gm.gang_id = g.id
+       LEFT JOIN samp_gang_territories t ON t.gang_id = g.id
+       GROUP BY g.id
+       ORDER BY g.treasury DESC, territories DESC, members DESC, g.id ASC
+       LIMIT 10`,
+      []
+    );
     if (!gangs || gangs.length === 0) { await interaction.reply("Пока нет банд."); return; }
-    const lines = gangs.map((g, i) => `${i < 3 ? ["🥇", "🥈", "🥉"][i] : `\`${i+1}.\``} **[${g.tag}] ${g.name}** — ${fmtMoney(g.treasury)} • ${g.members} чел.`);
+    const lines = gangs.map((g, i) => `${i < 3 ? ["🥇", "🥈", "🥉"][i] : `\`${i+1}.\``} **[${g.tag}] ${g.name}** — ${fmtMoney(g.treasury)} • ${g.members} чел. • ${g.territories || 0} район.`);
     const embeds = buildPagedLineEmbeds({
       title: "🔫 Топ банд San Andreas",
       description: "Рейтинг по размеру казны.",
@@ -1682,10 +2593,12 @@ async function handleBuyCosmetic(interaction, db) {
   const existing = await dbGet(db, "SELECT 1 FROM samp_cosmetics WHERE user_id = ? AND cosmetic_type = ? AND cosmetic_value = ?", [userId, cos.type, cos.value]);
   if (existing) { await interaction.reply({ content: "У тебя уже есть этот предмет.", ephemeral: true }); return; }
 
+  const opKey = makeInteractionOpKey(interaction, "buy_cosmetic");
   await withTx(db, async () => {
+    const inserted = await addLedgerUnique(db, "buy_cosmetic", userId, null, cos.price, opKey, { cosmetic_id: cosId });
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
     await adjustMoney(db, userId, -cos.price);
     await dbRun(db, `INSERT OR REPLACE INTO samp_cosmetics(user_id, cosmetic_type, cosmetic_value) VALUES(?, ?, ?)`, [userId, cos.type, cos.value]);
-    await addLedger(db, "buy_cosmetic", userId, null, cos.price, { cosmetic_id: cosId });
   });
   await interaction.reply(
     `🎨 Ты купил **${cos.name}** за **${fmtMoney(cos.price)}**!\n` +
@@ -1716,10 +2629,12 @@ async function handleRepair(interaction, db) {
   const user = await getSampUser(db, userId);
   if (!user || Number(user.money) < cost) { await interaction.reply({ content: `Ремонт стоит **${fmtMoney(cost)}**. Не хватает.`, ephemeral: true }); return; }
 
+  const opKey = makeInteractionOpKey(interaction, "repair");
   await withTx(db, async () => {
+    const inserted = await addLedgerUnique(db, "repair", userId, null, cost, opKey, { weapon: wRow.value });
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
     await adjustMoney(db, userId, -cost);
     await dbRun(db, "UPDATE samp_inventory SET durability = 100 WHERE user_id = ? AND item_id = ?", [userId, wRow.value]);
-    await addLedger(db, "repair", userId, null, cost, { weapon: wRow.value });
   });
   await interaction.reply(`🔧 **${weapon.name}** починен! Стоимость: **${fmtMoney(cost)}**`);
 }
@@ -1743,10 +2658,12 @@ async function handleLottery(interaction, db) {
     const user = await getSampUser(db, userId);
     if (!user || Number(user.money) < cost) { await interaction.reply({ content: `Нужно **${fmtMoney(cost)}**.`, ephemeral: true }); return; }
 
+    const opKey = makeInteractionOpKey(interaction, "lottery_buy");
     await withTx(db, async () => {
+      const inserted = await addLedgerUnique(db, "lottery_buy", userId, null, cost, opKey, { tickets: qty });
+      if (!inserted) throw new Error("DUPLICATE_OPERATION");
       await adjustMoney(db, userId, -cost);
       await dbRun(db, `INSERT INTO samp_lottery(week_start, user_id, tickets) VALUES(?, ?, ?)`, [week, userId, qty]);
-      await addLedger(db, "lottery_buy", userId, null, cost, { tickets: qty });
     });
     await interaction.reply(`🎫 Куплено **${qty}** билетов за **${fmtMoney(cost)}**! Удачи!`);
 
@@ -1768,24 +2685,29 @@ async function handleLottery(interaction, db) {
 
 async function drawLottery(db) {
   const week = getWeekStart();
-  const already = await dbGet(db, "SELECT 1 FROM samp_lottery_history WHERE week_start = ?", [week]);
-  if (already) return null;
+  return withTx(db, async () => {
+    const already = await dbGet(db, "SELECT 1 FROM samp_lottery_history WHERE week_start = ?", [week]);
+    if (already) return null;
 
-  const allTickets = await dbAll(db, "SELECT user_id, tickets FROM samp_lottery WHERE week_start = ?", [week]);
-  if (!allTickets || allTickets.length === 0) return null;
+    const allTickets = await dbAll(db, "SELECT user_id, tickets FROM samp_lottery WHERE week_start = ?", [week]);
+    if (!allTickets || allTickets.length === 0) return null;
 
-  const pool = [];
-  let pot = 0;
-  for (const row of allTickets) { for (let i = 0; i < row.tickets; i++) pool.push(row.user_id); pot += row.tickets * 1000; }
+    const pool = [];
+    let pot = 0;
+    for (const row of allTickets) {
+      for (let i = 0; i < row.tickets; i += 1) pool.push(row.user_id);
+      pot += row.tickets * 1000;
+    }
 
-  const houseCut = Math.floor(pot * 0.1);
-  const winnings = pot - houseCut;
-  const winner = pick(pool);
+    const houseCut = Math.floor(pot * 0.1);
+    const winnings = pot - houseCut;
+    const winner = pick(pool);
 
-  await adjustMoney(db, winner, winnings);
-  await addLedger(db, "lottery_win", null, winner, winnings, { week, pot });
-  await dbRun(db, "INSERT INTO samp_lottery_history(week_start, winner_id, pot) VALUES(?, ?, ?)", [week, winner, pot]);
-  return { winner, winnings, pot };
+    await adjustMoney(db, winner, winnings);
+    await addLedger(db, "lottery_win", null, winner, winnings, { week, pot });
+    await dbRun(db, "INSERT INTO samp_lottery_history(week_start, winner_id, pot) VALUES(?, ?, ?)", [week, winner, pot]);
+    return { winner, winnings, pot };
+  });
 }
 
 // --- Black Market ---
@@ -1793,41 +2715,380 @@ async function handleBlackMarket(interaction, db) {
   const sub = interaction.options.getSubcommand?.() || "browse";
 
   if (sub === "browse" || !interaction.options.getSubcommand) {
+    const userId = interaction.user.id;
     const deals = getDailyBlackMarketDeals();
-    const fields = deals.map((d, i) => ({
-      name: `#${i+1} ${d.name}`,
-      value: joinLines([
-        `Цена: **${fmtMoney(d.price)}**`,
-        `Тип: **${d.type}**`,
-      ]),
-      inline: false,
-    }));
+    const dealer = getDailyDealer();
+    const purchases = await getBmPurchaseCount(db, userId);
+    const tier = getBmRepTier(purchases);
+
+    const fields = deals.map((d, i) => {
+      const discountedPrice = tier.discount > 0 ? Math.floor(d.price * (1 - tier.discount)) : d.price;
+      const priceText = tier.discount > 0
+        ? `~~${fmtMoney(d.price)}~~ → **${fmtMoney(discountedPrice)}** (-${Math.round(tier.discount * 100)}%)`
+        : `**${fmtMoney(d.price)}**`;
+      return {
+        name: `#${i+1} ${d.name}`,
+        value: joinLines([`Цена: ${priceText}`, `Тип: **${d.type}**`]),
+        inline: false,
+      };
+    });
     const embeds = buildPagedFieldEmbeds({
-      title: "🕶️ Чёрный рынок",
-      description: "Сегодняшние редкие предложения.",
+      title: `🕶️ Чёрный рынок — ${dealer.name}`,
+      description: `_"${dealer.line}"_\n\nТвой статус: **${tier.name}** (${purchases} покупок)`,
       color: 0x2c3e50,
       fields,
-      fieldsPerPage: 3,
-      footer: "Покупка: /blackmarket buy slot:<номер>",
+      fieldsPerPage: 4,
+      footer: `Покупка: /blackmarket buy slot:<1-${BM_DAILY_DEAL_COUNT}> • ⚠️ 8% шанс облавы`,
     });
     await interaction.reply({ embeds });
 
   } else if (sub === "buy") {
     const userId = interaction.user.id;
+    const guildId = interaction.guild?.id || interaction.guildId || null;
     const slot = interaction.options.getInteger("slot", true);
     const deals = getDailyBlackMarketDeals();
     const deal = deals[slot - 1];
-    if (!deal) { await interaction.reply({ content: "Слот 1-3.", ephemeral: true }); return; }
+    if (!deal) { await interaction.reply({ content: `Слот 1-${BM_DAILY_DEAL_COUNT}.`, ephemeral: true }); return; }
 
     const user = await getSampUser(db, userId);
-    if (!user || Number(user.money) < deal.price) { await interaction.reply({ content: "Не хватает виртов.", ephemeral: true }); return; }
+    if (!user) { await interaction.reply({ content: "Сначала /reg.", ephemeral: true }); return; }
+
+    const purchases = await getBmPurchaseCount(db, userId);
+    const tier = getBmRepTier(purchases);
+    const finalPrice = tier.discount > 0 ? Math.floor(deal.price * (1 - tier.discount)) : deal.price;
+
+    if (Number(user.money) < finalPrice) { await interaction.reply({ content: "Не хватает виртов.", ephemeral: true }); return; }
+    if (await alreadyOwnsBlackMarketDeal(db, userId, deal)) {
+      await interaction.reply({ content: "Этот товар у тебя уже есть. Повторно списывать деньги не буду.", ephemeral: true });
+      return;
+    }
+
+    const opKey = makeInteractionOpKey(interaction, "black_market");
+    let grantResult = { summary: "" };
+    let stingTriggered = false;
+    let instantResult = "";
 
     await withTx(db, async () => {
-      await adjustMoney(db, userId, -deal.price);
-      await addLedger(db, "black_market", userId, null, deal.price, { item: deal.name, type: deal.type });
+      const inserted = await addLedgerUnique(db, "black_market", userId, null, finalPrice, opKey, { item: deal.name, type: deal.type, discount: tier.discount });
+      if (!inserted) throw new Error("DUPLICATE_OPERATION");
+      await adjustMoney(db, userId, -finalPrice);
+      grantResult = await grantBlackMarketDeal(db, userId, deal);
+      await incrementBmPurchaseCount(db, userId);
     });
-    await interaction.reply(`🕶️ Куплено: **${deal.name}** за **${fmtMoney(deal.price)}**!`);
+
+    if (deal.type === "mystery_crate") {
+      instantResult = await resolveMysteryCrate(db, userId, finalPrice);
+    } else if (deal.type === "hit_contract") {
+      instantResult = await resolveHitContract(db, userId);
+    }
+
+    if (Math.random() < BM_STING_CHANCE && guildId) {
+      stingTriggered = true;
+      for (let i = 0; i < BM_STING_STARS; i++) {
+        await addWantedStar(db, guildId, userId);
+      }
+    }
+
+    let reply = `🕶️ Куплено: **${deal.name}** за **${fmtMoney(finalPrice)}**!\n${grantResult.summary}`;
+    if (instantResult) reply += `\n${instantResult}`;
+    if (stingTriggered) reply += `\n\n⚠️ **Полиция засекла сделку!** +${BM_STING_STARS} ⭐ розыска!`;
+    await interaction.reply(reply);
   }
+}
+
+// --- Black Market Instant Items ---
+async function resolveMysteryCrate(db, userId, pricePaid) {
+  const roll = randInt(1, 100);
+  let cumulative = 0;
+  let outcome = BM_MYSTERY_CRATE_LOOT[BM_MYSTERY_CRATE_LOOT.length - 1];
+  for (const entry of BM_MYSTERY_CRATE_LOOT) {
+    cumulative += entry.weight;
+    if (roll <= cumulative) { outcome = entry; break; }
+  }
+
+  if (outcome.type === "money_back") {
+    const bonus = pricePaid * 2;
+    await adjustMoney(db, userId, bonus);
+    await addLedger(db, "bm_mystery_crate", null, userId, bonus, { outcome: "money_back" });
+    return `🎁 **${outcome.label}**! Ты получил **${fmtMoney(bonus)}** обратно!`;
+  }
+  if (outcome.type === "random_weapon") {
+    const weaponKeys = Object.keys(ITEMS).filter(k => ITEMS[k].price <= 90_000);
+    const weaponId = pick(weaponKeys);
+    const weapon = ITEMS[weaponId];
+    await addInventoryItem(db, userId, weaponId, 1);
+    return `🎁 **${outcome.label}**: **${weapon.name}**!`;
+  }
+  if (outcome.type === "nos_charges") {
+    await addInventoryItem(db, userId, "bm_nos_boost", 3);
+    return `🎁 **${outcome.label}**! +3 заряда нитро.`;
+  }
+  if (outcome.type === "empty") {
+    return `📦 **${outcome.label}** Тебя развели. Ящик пустой.`;
+  }
+  if (outcome.type === "jackpot") {
+    const jackpotMoney = 100_000;
+    await adjustMoney(db, userId, jackpotMoney);
+    await addLedger(db, "bm_mystery_crate", null, userId, jackpotMoney, { outcome: "jackpot" });
+    await dbRun(db, `INSERT OR REPLACE INTO samp_cosmetics(user_id, cosmetic_type, cosmetic_value) VALUES(?, ?, ?)`,
+      [String(userId), "title_lucky", "🎰 Удачливый"]);
+    return `🎁🎰 **ДЖЕКПОТ!** Ты получил **${fmtMoney(jackpotMoney)}** и уникальный титул **🎰 Удачливый**!`;
+  }
+  return "";
+}
+
+async function resolveHitContract(db, userId) {
+  const targets = await dbAll(db,
+    `SELECT user_id, money FROM samp_users WHERE user_id != ? AND money > 5000 ORDER BY RANDOM() LIMIT 5`,
+    [String(userId)]);
+  if (!targets || targets.length === 0) return "Подходящих целей не нашлось. Контракт аннулирован.";
+  const target = pick(targets);
+  const bountyAmount = randInt(15_000, 40_000);
+  await dbRun(db,
+    `INSERT INTO samp_bounties(target_user_id, placed_by, amount, status) VALUES(?, ?, ?, 'active')`,
+    [target.user_id, String(userId), bountyAmount]);
+  return `💀 Контракт оформлен: награда **${fmtMoney(bountyAmount)}** за голову <@${target.user_id}>. Победи его в дуэли, чтобы забрать.`;
+}
+
+// --- Black Market Item Commands ---
+async function handleUseJailPass(interaction, db) {
+  const userId = interaction.user.id;
+  const user = await getSampUser(db, userId);
+  if (!user) { await interaction.reply({ content: "Сначала /reg.", ephemeral: true }); return; }
+  const until = Number(user.jail_until || 0);
+  if (until <= nowMs()) { await interaction.reply({ content: "✅ Ты и так на свободе.", ephemeral: true }); return; }
+  const qty = await getInventoryQty(db, userId, "bm_jail_pass");
+  if (qty < 1) { await interaction.reply({ content: "У тебя нет фальшивых документов. Купи на /blackmarket.", ephemeral: true }); return; }
+
+  const opKey = makeInteractionOpKey(interaction, "use_jail_pass");
+  await withTx(db, async () => {
+    const inserted = await addLedgerUnique(db, "use_jail_pass", userId, null, 0, opKey, {});
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
+    const consumed = await consumeInventoryItem(db, userId, "bm_jail_pass");
+    if (!consumed) throw new Error("INSUFFICIENT");
+    await dbRun(db, `UPDATE samp_users SET jail_until = 0 WHERE user_id = ?`, [String(userId)]);
+  });
+  await interaction.reply("📄 Фальшивые документы сработали! Ты на свободе. Охранник даже не моргнул.");
+}
+
+async function handleWiretap(interaction, db) {
+  const userId = interaction.user.id;
+  const target = interaction.options.getUser("user", true);
+  if (target.bot) { await interaction.reply({ content: "Ботов нельзя прослушивать.", ephemeral: true }); return; }
+  if (target.id === userId) { await interaction.reply({ content: "Сам себя подслушивать?", ephemeral: true }); return; }
+  const user = await getSampUser(db, userId);
+  if (!user) { await interaction.reply({ content: "Сначала /reg.", ephemeral: true }); return; }
+  const qty = await getInventoryQty(db, userId, "bm_wiretap");
+  if (qty < 1) { await interaction.reply({ content: "У тебя нет подслушки. Купи на /blackmarket.", ephemeral: true }); return; }
+  const targetUser = await getSampUser(db, target.id);
+  if (!targetUser) { await interaction.reply({ content: "Цель не зарегистрирована.", ephemeral: true }); return; }
+
+  const opKey = makeInteractionOpKey(interaction, "wiretap");
+  await withTx(db, async () => {
+    const inserted = await addLedgerUnique(db, "wiretap", userId, target.id, 0, opKey, {});
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
+    await consumeInventoryItem(db, userId, "bm_wiretap");
+  });
+
+  const wRow = await dbGet(db, "SELECT value FROM samp_user_settings WHERE user_id = ? AND key = 'weapon'", [target.id]);
+  const weaponName = wRow?.value ? (ITEMS[wRow.value]?.name || wRow.value) : "нет";
+  const carName = targetUser.car_id ? (CARS[targetUser.car_id]?.name || targetUser.car_id) : "нет";
+  const gangRow = await dbGet(db, `SELECT g.name FROM samp_gang_members m JOIN samp_gangs g ON m.gang_id = g.id WHERE m.user_id = ?`, [target.id]);
+
+  await interaction.reply({ content:
+    `📡 **Разведка по <@${target.id}>:**\n` +
+    `💰 Баланс: **${fmtMoney(targetUser.money)}**\n` +
+    `🔫 Оружие: **${weaponName}**\n` +
+    `🚗 Тачка: **${carName}**\n` +
+    `🏴 Банда: **${gangRow?.name || "нет"}**`, ephemeral: true });
+}
+
+async function handleSabotage(interaction, db) {
+  const userId = interaction.user.id;
+  const target = interaction.options.getUser("user", true);
+  if (target.bot) { await interaction.reply({ content: "Ботов нельзя.", ephemeral: true }); return; }
+  if (target.id === userId) { await interaction.reply({ content: "Нельзя саботировать самого себя.", ephemeral: true }); return; }
+  const user = await getSampUser(db, userId);
+  if (!user) { await interaction.reply({ content: "Сначала /reg.", ephemeral: true }); return; }
+  const qty = await getInventoryQty(db, userId, "bm_sabotage");
+  if (qty < 1) { await interaction.reply({ content: "У тебя нет подрыва. Купи на /blackmarket.", ephemeral: true }); return; }
+  const targetUser = await getSampUser(db, target.id);
+  if (!targetUser) { await interaction.reply({ content: "Цель не зарегистрирована.", ephemeral: true }); return; }
+
+  const opKey = makeInteractionOpKey(interaction, "sabotage");
+  await withTx(db, async () => {
+    const inserted = await addLedgerUnique(db, "sabotage", userId, target.id, 0, opKey, {});
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
+    await consumeInventoryItem(db, userId, "bm_sabotage");
+    await setUserSetting(db, target.id, "sabotaged_until", String(nowMs() + 24 * 60 * 60_000));
+  });
+  await interaction.reply({ content: `🔧 Машина <@${target.id}> повреждена! При следующей гонке он получит -15 к скорости.`, ephemeral: true });
+}
+
+async function handleUseRepairKit(interaction, db) {
+  const userId = interaction.user.id;
+  const user = await getSampUser(db, userId);
+  if (!user) { await interaction.reply({ content: "Сначала /reg.", ephemeral: true }); return; }
+  const wRow = await dbGet(db, "SELECT value FROM samp_user_settings WHERE user_id = ? AND key = 'weapon'", [userId]);
+  if (!wRow?.value) { await interaction.reply({ content: "У тебя нет активного оружия.", ephemeral: true }); return; }
+  const weapon = ITEMS[wRow.value];
+  if (!weapon) { await interaction.reply({ content: "Оружие не найдено.", ephemeral: true }); return; }
+  const inv = await dbGet(db, "SELECT durability FROM samp_inventory WHERE user_id = ? AND item_id = ?", [userId, wRow.value]);
+  if (!inv) { await interaction.reply({ content: "Оружие не в инвентаре.", ephemeral: true }); return; }
+  if (inv.durability >= 100) { await interaction.reply({ content: "Оружие уже в идеальном состоянии.", ephemeral: true }); return; }
+  const qty = await getInventoryQty(db, userId, "bm_repair_kit");
+  if (qty < 1) { await interaction.reply({ content: "У тебя нет набора для ремонта. Купи на /blackmarket.", ephemeral: true }); return; }
+
+  const opKey = makeInteractionOpKey(interaction, "use_repair_kit");
+  await withTx(db, async () => {
+    const inserted = await addLedgerUnique(db, "use_repair_kit", userId, null, 0, opKey, { weapon: wRow.value });
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
+    await consumeInventoryItem(db, userId, "bm_repair_kit");
+    await dbRun(db, "UPDATE samp_inventory SET durability = 100 WHERE user_id = ? AND item_id = ?", [userId, wRow.value]);
+  });
+  await interaction.reply(`🔧 **${weapon.name}** починен набором для ремонта! Прочность: 100%.`);
+}
+
+async function handleDisguise(interaction, db) {
+  const userId = interaction.user.id;
+  const user = await getSampUser(db, userId);
+  if (!user) { await interaction.reply({ content: "Сначала /reg.", ephemeral: true }); return; }
+  const qty = await getInventoryQty(db, userId, "bm_disguise");
+  if (qty < 1) { await interaction.reply({ content: "У тебя нет маскировки. Купи на /blackmarket.", ephemeral: true }); return; }
+  const existing = await dbGet(db, "SELECT value FROM samp_user_settings WHERE user_id = ? AND key = 'disguised_until'", [userId]);
+  if (existing && Number(existing.value) > nowMs()) {
+    const left = Math.ceil((Number(existing.value) - nowMs()) / 60_000);
+    await interaction.reply({ content: `Маскировка уже активна. Осталось **${left} мин**.`, ephemeral: true }); return;
+  }
+
+  const opKey = makeInteractionOpKey(interaction, "disguise");
+  await withTx(db, async () => {
+    const inserted = await addLedgerUnique(db, "disguise", userId, null, 0, opKey, {});
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
+    await consumeInventoryItem(db, userId, "bm_disguise");
+    await setUserSetting(db, userId, "disguised_until", String(nowMs() + 4 * 60 * 60_000));
+  });
+  await interaction.reply("🎭 Маскировка активирована на **4 часа**. Тебя нельзя ограбить через /rob.");
+}
+
+async function handleHotTip(interaction, db) {
+  const userId = interaction.user.id;
+  const user = await getSampUser(db, userId);
+  if (!user) { await interaction.reply({ content: "Сначала /reg.", ephemeral: true }); return; }
+  const qty = await getInventoryQty(db, userId, "bm_hot_tip");
+  if (qty < 1) { await interaction.reply({ content: "У тебя нет наводки. Купи на /blackmarket.", ephemeral: true }); return; }
+
+  const opKey = makeInteractionOpKey(interaction, "hot_tip");
+  await withTx(db, async () => {
+    const inserted = await addLedgerUnique(db, "hot_tip", userId, null, 0, opKey, {});
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
+    await consumeInventoryItem(db, userId, "bm_hot_tip");
+  });
+
+  const richest = await dbAll(db,
+    `SELECT u.user_id, u.money FROM samp_users u
+     LEFT JOIN samp_user_settings s ON u.user_id = s.user_id AND s.key = 'disguised_until'
+     WHERE u.user_id != ? AND u.money > 1000
+       AND (s.value IS NULL OR CAST(s.value AS INTEGER) <= ?)
+     ORDER BY u.money DESC LIMIT 3`,
+    [String(userId), nowMs()]);
+
+  if (!richest || richest.length === 0) {
+    await interaction.reply({ content: "🔍 Наводка пуста — нет подходящих целей.", ephemeral: true }); return;
+  }
+  const lines = richest.map((r, i) => {
+    const approx = Math.round(Number(r.money) / 10_000) * 10_000;
+    return `${i + 1}. <@${r.user_id}> — ~**${fmtMoney(approx)}**`;
+  });
+  await interaction.reply({ content: `🔍 **Наводка на самых богатых:**\n${lines.join("\n")}`, ephemeral: true });
+}
+
+async function handleSecretHeist(interaction, db) {
+  const userId = interaction.user.id;
+  const user = await getSampUser(db, userId);
+  if (!user) { await interaction.reply({ content: "Сначала /reg.", ephemeral: true }); return; }
+  if (Number(user.jail_until || 0) > nowMs()) { await interaction.reply({ content: "Ты в тюрьме!", ephemeral: true }); return; }
+  const qty = await getInventoryQty(db, userId, "bm_map");
+  if (qty < 1) { await interaction.reply({ content: "Нужна секретная карта с чёрного рынка для доступа к бункеру.", ephemeral: true }); return; }
+  const cd = await dbGet(db, "SELECT ready_at FROM samp_cooldowns WHERE user_id = ? AND action = 'secret_heist'", [userId]);
+  if (cd && Number(cd.ready_at) > nowMs()) {
+    const left = Math.ceil((Number(cd.ready_at) - nowMs()) / 60_000);
+    await interaction.reply({ content: `⏳ Бункер на замке. Подожди **${left} мин**.`, ephemeral: true }); return;
+  }
+
+  const opKey = makeInteractionOpKey(interaction, "secret_heist");
+  const heist = BM_SECRET_HEIST;
+  const failed = Math.random() < heist.failChance;
+  const cooldownMs = 20 * 60_000;
+
+  await interaction.deferReply();
+
+  if (failed) {
+    await withTx(db, async () => {
+      const inserted = await addLedgerUnique(db, "secret_heist_fail", userId, null, 0, opKey, {});
+      if (!inserted) throw new Error("DUPLICATE_OPERATION");
+      await consumeInventoryItem(db, userId, "bm_map");
+      await dbRun(db, `UPDATE samp_users SET jail_until = ? WHERE user_id = ?`, [nowMs() + heist.jailMs, String(userId)]);
+      await setCooldownReadyAt(db, userId, "secret_heist", nowMs() + cooldownMs);
+    });
+    await interaction.editReply(`🗺️ **${heist.name}**\n\n🚔 Ловушка! Охрана бункера схватила тебя. Тюрьма: **${Math.ceil(heist.jailMs / 60_000)} мин**.\nКарта уничтожена.`);
+  } else {
+    const payout = randInt(heist.payout[0], heist.payout[1]);
+    await withTx(db, async () => {
+      const inserted = await addLedgerUnique(db, "secret_heist", null, userId, payout, opKey, {});
+      if (!inserted) throw new Error("DUPLICATE_OPERATION");
+      await consumeInventoryItem(db, userId, "bm_map");
+      await adjustMoney(db, userId, payout);
+      await setCooldownReadyAt(db, userId, "secret_heist", nowMs() + cooldownMs);
+    });
+    await interaction.editReply(`🗺️ **${heist.name}**\n\n🎉 Ты проник внутрь и вынес: **${fmtMoney(payout)}**!\nКарта использована.`);
+  }
+}
+
+async function handleGangBmOrder(interaction, db) {
+  const userId = interaction.user.id;
+  const gangMember = await dbGet(db, `SELECT gang_id, role FROM samp_gang_members WHERE user_id = ?`, [userId]);
+  if (!gangMember) { await interaction.reply({ content: "Ты не состоишь в банде.", ephemeral: true }); return; }
+  const gang = await dbGet(db, `SELECT * FROM samp_gangs WHERE id = ?`, [gangMember.gang_id]);
+  if (!gang || String(gang.leader_id) !== String(userId)) {
+    await interaction.reply({ content: "Только лидер банды может заказывать.", ephemeral: true }); return;
+  }
+
+  const itemType = interaction.options.getString("item", true);
+  const count = Math.min(5, Math.max(1, interaction.options.getInteger("count", true)));
+  const bmItem = BLACK_MARKET_ITEMS.find(i => i.type === itemType);
+  if (!bmItem) { await interaction.reply({ content: "Неизвестный товар.", ephemeral: true }); return; }
+  const grant = BLACK_MARKET_GRANTS[itemType];
+  if (!grant?.inventoryItemId) { await interaction.reply({ content: "Этот товар нельзя купить оптом.", ephemeral: true }); return; }
+
+  const avgPrice = Math.floor((bmItem.basePrice[0] + bmItem.basePrice[1]) / 2);
+  const totalPrice = Math.floor(avgPrice * count * 0.85);
+  if (Number(gang.treasury) < totalPrice) {
+    await interaction.reply({ content: `Нужно **${fmtMoney(totalPrice)}** в казне. Сейчас: **${fmtMoney(gang.treasury)}**.`, ephemeral: true }); return;
+  }
+
+  const members = await dbAll(db, `SELECT user_id FROM samp_gang_members WHERE gang_id = ?`, [gangMember.gang_id]);
+  if (!members || members.length === 0) { await interaction.reply({ content: "В банде нет участников.", ephemeral: true }); return; }
+
+  const opKey = makeInteractionOpKey(interaction, "gang_bm_order");
+  await withTx(db, async () => {
+    const inserted = await addLedgerUnique(db, "gang_bm_order", userId, null, totalPrice, opKey, { item: itemType, count });
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
+    await dbRun(db, `UPDATE samp_gangs SET treasury = treasury - ? WHERE id = ?`, [totalPrice, gang.id]);
+    const perMember = Math.floor(count / members.length);
+    let remaining = count;
+    for (const m of members) {
+      const qty = Math.min(perMember || 1, remaining);
+      if (qty > 0) {
+        await addInventoryItem(db, m.user_id, grant.inventoryItemId, grant.inventoryQty * qty);
+        remaining -= qty;
+      }
+    }
+    if (remaining > 0) {
+      await addInventoryItem(db, userId, grant.inventoryItemId, grant.inventoryQty * remaining);
+    }
+  });
+  await interaction.reply(`🏴 Оптовый заказ: **${count}x ${bmItem.name}** за **${fmtMoney(totalPrice)}** из казны (скидка 15%).\nРаспределено по ${members.length} участникам.`);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1849,9 +3110,31 @@ function getSampExtendedCommandBuilders() {
     new SlashCommandBuilder().setName("bizrun").setDescription("SAMP Life: вручную поработать на бизнесе")
       .addStringOption(o => o.setName("id").setDescription("ID бизнеса").setRequired(true).setAutocomplete(true)),
 
-    new SlashCommandBuilder().setName("tunecar").setDescription("SAMP Life: тюнинг тачки")
+    new SlashCommandBuilder().setName("tune").setDescription("SAMP Life: глубокий тюнинг машины")
+      .addSubcommand((subcommand) =>
+        subcommand.setName("install").setDescription("Установить деталь")
+          .addStringOption((option) => option.setName("car").setDescription("ID тачки").setRequired(true).setAutocomplete(true))
+          .addStringOption((option) => option.setName("part").setDescription("ID детали").setRequired(true).setAutocomplete(true))
+      )
+      .addSubcommand((subcommand) =>
+        subcommand.setName("inspect").setDescription("Посмотреть сборку и статы")
+          .addStringOption((option) => option.setName("car").setDescription("ID тачки").setRequired(true).setAutocomplete(true))
+      )
+      .addSubcommand((subcommand) =>
+        subcommand.setName("remove").setDescription("Снять деталь и вернуть часть цены")
+          .addStringOption((option) => option.setName("car").setDescription("ID тачки").setRequired(true).setAutocomplete(true))
+          .addStringOption((option) => option.setName("part").setDescription("ID детали").setRequired(true).setAutocomplete(true))
+      )
+      .addSubcommand((subcommand) =>
+        subcommand.setName("maintain").setDescription("Обслужить детали")
+          .addStringOption((option) => option.setName("car").setDescription("ID тачки").setRequired(true).setAutocomplete(true))
+          .addStringOption((option) => option.setName("part").setDescription("ID детали (если пусто — все)").setRequired(false).setAutocomplete(true))
+      ),
+    new SlashCommandBuilder().setName("tunecar").setDescription("SAMP Life: legacy-алиас для /tune install")
       .addStringOption(o => o.setName("car").setDescription("ID тачки").setRequired(true).setAutocomplete(true))
       .addStringOption(o => o.setName("upgrade").setDescription("ID тюнинга").setRequired(true).setAutocomplete(true)),
+    new SlashCommandBuilder().setName("switchcar").setDescription("SAMP Life: сменить активную тачку")
+      .addStringOption(o => o.setName("car").setDescription("ID тачки из гаража").setRequired(true).setAutocomplete(true)),
     new SlashCommandBuilder().setName("garage").setDescription("SAMP Life: твой гараж (тачки + тюнинг)"),
 
     new SlashCommandBuilder().setName("bounty").setDescription("SAMP Life: назначить награду")
@@ -1895,6 +3178,7 @@ function getSampExtendedCommandBuilders() {
     new SlashCommandBuilder().setName("gsupportbiz").setDescription("SAMP Life: поддержать бизнес участника из казны")
       .addUserOption(o => o.setName("user").setDescription("Участник банды").setRequired(true))
       .addStringOption(o => o.setName("business").setDescription("ID бизнеса").setRequired(true).setAutocomplete(true)),
+    new SlashCommandBuilder().setName("gangtop").setDescription("SAMP Life: топ банд"),
 
     new SlashCommandBuilder().setName("shopcosmetics").setDescription("SAMP Life: магазин косметики"),
     new SlashCommandBuilder().setName("buycosmetic").setDescription("SAMP Life: купить косметику")
@@ -1910,7 +3194,27 @@ function getSampExtendedCommandBuilders() {
     new SlashCommandBuilder().setName("blackmarket").setDescription("SAMP Life: чёрный рынок")
       .addSubcommand(s => s.setName("browse").setDescription("Посмотреть товары"))
       .addSubcommand(s => s.setName("buy").setDescription("Купить товар")
-        .addIntegerOption(o => o.setName("slot").setDescription("Номер слота (1-3)").setRequired(true).setMinValue(1).setMaxValue(3))),
+        .addIntegerOption(o => o.setName("slot").setDescription(`Номер слота (1-${BM_DAILY_DEAL_COUNT})`).setRequired(true).setMinValue(1).setMaxValue(BM_DAILY_DEAL_COUNT))),
+
+    new SlashCommandBuilder().setName("usejailpass").setDescription("SAMP Life: использовать фальшивые документы (выйти из тюрьмы)"),
+    new SlashCommandBuilder().setName("userepairkit").setDescription("SAMP Life: починить оружие набором для ремонта"),
+    new SlashCommandBuilder().setName("disguise").setDescription("SAMP Life: активировать маскировку (защита от /rob 4 часа)"),
+    new SlashCommandBuilder().setName("hottip").setDescription("SAMP Life: наводка на самых богатых"),
+    new SlashCommandBuilder().setName("secretheist").setDescription("SAMP Life: ограбление секретного бункера (нужна карта)"),
+    new SlashCommandBuilder().setName("wiretap").setDescription("SAMP Life: прослушать игрока")
+      .addUserOption(o => o.setName("user").setDescription("Кого прослушать").setRequired(true)),
+    new SlashCommandBuilder().setName("sabotage").setDescription("SAMP Life: саботировать машину игрока")
+      .addUserOption(o => o.setName("user").setDescription("Кого саботировать").setRequired(true)),
+    new SlashCommandBuilder().setName("gangbmorder").setDescription("SAMP Life: оптовый заказ с чёрного рынка для банды")
+      .addStringOption(o => o.setName("item").setDescription("Тип товара").setRequired(true).addChoices(
+        { name: "Бронежилет", value: "armor" },
+        { name: "Нитро (x3)", value: "nos_boost" },
+        { name: "Фальшивые документы", value: "jail_pass" },
+        { name: "Аптечка", value: "medkit" },
+        { name: "Набор для ремонта", value: "repair_kit" },
+        { name: "Маскировка", value: "disguise" },
+      ))
+      .addIntegerOption(o => o.setName("count").setDescription("Количество (1-5)").setRequired(true).setMinValue(1).setMaxValue(5)),
   ];
 }
 
@@ -1924,6 +3228,7 @@ async function handleSampExtendedCommand({ interaction, db }) {
     gmap: "territories",
     gcapture: "claimterritory",
     gsupportbiz: "supportbiz",
+    gangtop: "top",
   };
   try {
     if (name === "businesses") return await handleBusinesses(interaction, db);
@@ -1933,7 +3238,9 @@ async function handleSampExtendedCommand({ interaction, db }) {
     if (name === "collectincome") return await handleCollectIncome(interaction, db);
     if (name === "maintainbiz") return await handleMaintainBiz(interaction, db);
     if (name === "bizrun") return await handleBizRun(interaction, db);
+    if (name === "tune") return await handleTuneCommand(interaction, db);
     if (name === "tunecar") return await handleTuneCar(interaction, db);
+    if (name === "switchcar") return await handleSwitchCar(interaction, db);
     if (name === "garage") return await handleGarage(interaction, db);
     if (name === "bounty") return await handleBounty(interaction, db);
     if (name === "bountylist") return await handleBountyList(interaction, db);
@@ -1942,13 +3249,7 @@ async function handleSampExtendedCommand({ interaction, db }) {
     if (name === "dojob") return await handleDoJob(interaction, db);
     if (name === "gang") return await handleGangCommand(interaction, db);
     if (gangAliasMap[name]) {
-      const aliasOptions = Object.create(interaction.options);
-      aliasOptions.getSubcommand = () => gangAliasMap[name];
-      const aliasInteraction = {
-        ...interaction,
-        commandName: "gang",
-        options: aliasOptions,
-      };
+      const aliasInteraction = createGangAliasInteraction(interaction, gangAliasMap[name]);
       return await handleGangCommand(aliasInteraction, db);
     }
     if (name === "shopcosmetics") return await handleShopCosmetics(interaction);
@@ -1956,6 +3257,14 @@ async function handleSampExtendedCommand({ interaction, db }) {
     if (name === "repair") return await handleRepair(interaction, db);
     if (name === "lottery") return await handleLottery(interaction, db);
     if (name === "blackmarket") return await handleBlackMarket(interaction, db);
+    if (name === "usejailpass") return await handleUseJailPass(interaction, db);
+    if (name === "userepairkit") return await handleUseRepairKit(interaction, db);
+    if (name === "disguise") return await handleDisguise(interaction, db);
+    if (name === "hottip") return await handleHotTip(interaction, db);
+    if (name === "secretheist") return await handleSecretHeist(interaction, db);
+    if (name === "wiretap") return await handleWiretap(interaction, db);
+    if (name === "sabotage") return await handleSabotage(interaction, db);
+    if (name === "gangbmorder") return await handleGangBmOrder(interaction, db);
   } catch (e) {
     console.error("[samp-extended] error", e);
     const msg = "Ошибка. Попробуй позже.";
@@ -1968,6 +3277,8 @@ async function handleSampExtendedAutocomplete(interaction, db) {
   const name = interaction.commandName;
   const focused = interaction.options.getFocused(true);
   const query = String(focused.value || "").toLowerCase();
+  let subcommand = null;
+  try { subcommand = interaction.options.getSubcommand(); } catch (_) { subcommand = null; }
   let choices = [];
 
   if (name === "mbizstats") {
@@ -1986,12 +3297,61 @@ async function handleSampExtendedAutocomplete(interaction, db) {
       name: `${district.name} — бонус +${Math.round((district.businessBuff || 0) * 100)}%`,
       value: id,
     }));
-  } else if (name === "tunecar" && focused.name === "car") {
+  } else if ((name === "tunecar" && focused.name === "car") || (name === "tune" && focused.name === "car")) {
     const userId = interaction.user.id;
     const cars = await dbAll(db, "SELECT car_id FROM samp_garage WHERE user_id = ?", [userId]);
     choices = (cars || []).filter(r => CARS[r.car_id]).map(r => ({ name: CARS[r.car_id].name, value: r.car_id }));
-  } else if (name === "tunecar" && focused.name === "upgrade") {
-    choices = Object.entries(CAR_UPGRADES).map(([id, u]) => ({ name: `${u.name} — ${fmtMoney(u.price)} (+${u.speedBonus})`, value: id }));
+  } else if (name === "switchcar" && focused.name === "car") {
+    const userId = interaction.user.id;
+    const user = await getSampUser(db, userId);
+    const cars = await dbAll(db, "SELECT car_id FROM samp_garage WHERE user_id = ?", [userId]);
+    choices = (cars || [])
+      .filter((row) => CARS[row.car_id])
+      .sort((left, right) => {
+        if (left.car_id === user?.car_id) return -1;
+        if (right.car_id === user?.car_id) return 1;
+        return 0;
+      })
+      .map((row) => ({
+        name: `${row.car_id === user?.car_id ? "🟢 " : ""}${CARS[row.car_id].name} — ${row.car_id}`,
+        value: row.car_id,
+      }));
+  } else if ((name === "tunecar" && focused.name === "upgrade") || (name === "tune" && subcommand === "install" && focused.name === "part")) {
+    const userId = interaction.user.id;
+    const selectedCarId = String(interaction.options.getString("car") || "").toLowerCase();
+    const [installedRows, progress, raceStats] = selectedCarId
+      ? await Promise.all([
+          getInstalledCarUpgradeRows(db, userId, selectedCarId),
+          getOrCreateCarTuningProgress(db, userId, selectedCarId),
+          getUserRaceStats(db, userId),
+        ])
+      : [[], { level: 1, exp: 0 }, { races_total: 0, races_won: 0, max_speed_reached: 0 }];
+    const occupiedSlots = new Set(
+      installedRows
+        .map((row) => getTuningPart(row.upgrade_id))
+        .filter(Boolean)
+        .map((part) => part.slot)
+    );
+    const installedIds = new Set(installedRows.map((row) => row.upgrade_id));
+    choices = listTuningParts()
+      .filter((part) => !installedIds.has(part.id) && !occupiedSlots.has(part.slot))
+      .map((part) => {
+        const status = getTuningRequirementStatus(part, progress, raceStats);
+        const suffix = status.ok ? formatTuningPartStatSummary(part) : `LOCKED • ${formatTuningRequirementStatus(part, status)}`;
+        return { name: `${part.name} — ${fmtMoney(part.price)} • ${suffix}`.slice(0, 100), value: part.id };
+      });
+  } else if (name === "tune" && ["remove", "maintain"].includes(subcommand) && focused.name === "part") {
+    const userId = interaction.user.id;
+    const selectedCarId = String(interaction.options.getString("car") || "").toLowerCase();
+    const installedRows = selectedCarId ? await getInstalledCarUpgradeRows(db, userId, selectedCarId) : [];
+    choices = installedRows
+      .map((row) => {
+        const part = getTuningPart(row.upgrade_id);
+        if (!part) return null;
+        const durability = Math.max(0, Math.floor(Number(row.durability || 100)));
+        return { name: `${part.name} — ${durability}% • ${formatTuningPartStatSummary(part)}`.slice(0, 100), value: part.id };
+      })
+      .filter(Boolean);
   } else if (name === "buycosmetic") {
     choices = Object.entries(COSMETICS).map(([id, c]) => ({ name: `${c.name} — ${fmtMoney(c.price)}`, value: id }));
   }
@@ -2021,4 +3381,16 @@ module.exports = {
   TERRITORY_DISTRICTS,
   CAR_UPGRADES,
   HEIST_TIERS,
+  HEIST_COOLDOWN_MS,
+  HEIST_MIN_COOLDOWN_MS,
+  tryReserveHeistParticipant,
+  releaseHeistParticipants,
+  applyHeistCooldown,
+  getUserHeistCooldownMs,
+  getInventoryQty,
+  consumeInventoryItem,
+  BLACK_MARKET_ITEMS,
+  BLACK_MARKET_GRANTS,
+  getUserSetting,
+  setUserSetting,
 };

@@ -7,8 +7,11 @@
 
 const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
+require("dotenv").config();
 
-const dbPath = path.join(__dirname, "..", "data", "stats.db");
+const dbPath = process.env.STATS_DB_PATH
+  ? path.resolve(process.env.STATS_DB_PATH)
+  : path.join(__dirname, "..", "data", "stats.db");
 const db = new sqlite3.Database(dbPath);
 
 const colors = {
@@ -19,32 +22,54 @@ const colors = {
 };
 
 async function backfillDailyStats() {
-  console.log(`${colors.bright}${colors.cyan}Backfilling daily_channel_stats...${colors.reset}\n`);
+  console.log(`${colors.bright}${colors.cyan}Rebuilding daily_channel_stats from message_index...${colors.reset}\n`);
 
   return new Promise((resolve, reject) => {
-    const sql = `
-      INSERT INTO daily_channel_stats (guild_id, user_id, channel_id, message_date, count)
-      SELECT 
-        guild_id,
-        user_id,
-        channel_id,
-        DATE(created_at) as message_date,
-        COUNT(*) as count
-      FROM message_index
-      WHERE channel_id IS NOT NULL
-      GROUP BY guild_id, user_id, channel_id, DATE(created_at)
-      ON CONFLICT(guild_id, user_id, channel_id, message_date)
-      DO UPDATE SET count = excluded.count
-    `;
+    db.serialize(() => {
+      db.run("BEGIN IMMEDIATE", (beginErr) => {
+        if (beginErr) {
+          reject(beginErr);
+          return;
+        }
 
-    db.run(sql, function(err) {
-      if (err) {
-        console.error(`Error: ${err.message}`);
-        reject(err);
-      } else {
-        console.log(`${colors.green}✓ Backfill complete: ${this.changes} rows updated${colors.reset}`);
-        resolve(this.changes);
-      }
+        db.run(`DELETE FROM daily_channel_stats`, (deleteErr) => {
+          if (deleteErr) {
+            db.run("ROLLBACK", () => reject(deleteErr));
+            return;
+          }
+
+          const sql = `
+            INSERT INTO daily_channel_stats (guild_id, user_id, channel_id, message_date, count)
+            SELECT 
+              guild_id,
+              user_id,
+              channel_id,
+              DATE(created_at) as message_date,
+              COUNT(*) as count
+            FROM message_index
+            WHERE channel_id IS NOT NULL
+            GROUP BY guild_id, user_id, channel_id, DATE(created_at)
+          `;
+
+          db.run(sql, function(insertErr) {
+            if (insertErr) {
+              db.run("ROLLBACK", () => reject(insertErr));
+              return;
+            }
+
+            const inserted = this.changes;
+            db.run("COMMIT", (commitErr) => {
+              if (commitErr) {
+                db.run("ROLLBACK", () => reject(commitErr));
+                return;
+              }
+
+              console.log(`${colors.green}✓ Rebuild complete: ${inserted} rows inserted${colors.reset}`);
+              resolve(inserted);
+            });
+          });
+        });
+      });
     });
   });
 }

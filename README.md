@@ -58,6 +58,7 @@ These are the engineering decisions and challenges that characterise this projec
 ## 📋 Table of Contents
 
 - [Features](#-features)
+- [Gameplay FAQ](#-gameplay-faq)
 - [Architecture](#-architecture)
 - [Installation](#-installation)
 - [Configuration](#-configuration)
@@ -68,6 +69,12 @@ These are the engineering decisions and challenges that characterise this projec
 - [Deployment](#-deployment)
 - [Security](#-security)
 - [License](#-license)
+
+---
+
+## 📘 Gameplay FAQ
+
+Полный пользовательский FAQ по SAMP Life, уровням, бейджам, стрикам, trivia, radio и недельным наградам лежит в `GAMEPLAY_FAQ_RU.md`. Внутри Discord для этого же источника знаний добавлена команда `/faq`.
 
 ---
 

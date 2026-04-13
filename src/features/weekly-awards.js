@@ -2,6 +2,11 @@
 
 const { EmbedBuilder, SlashCommandBuilder } = require("discord.js");
 const { dbRun, dbGet, dbAll } = require("../utils/db-helpers");
+const { withSerializedTransaction } = require("../utils/sqlite-transaction");
+
+async function withTx(db, fn) {
+  return withSerializedTransaction(db, fn);
+}
 
 /**
  * Weekly Awards System — auto-posts weekly superlatives.
@@ -106,6 +111,19 @@ async function ensureWeeklyAwardsTable(db) {
       db,
       `CREATE INDEX IF NOT EXISTS idx_weekly_awards_guild_week ON weekly_awards(guild_id, week_start)`
     );
+    await dbRun(
+      db,
+      `CREATE TABLE IF NOT EXISTS weekly_award_runs (
+        guild_id TEXT NOT NULL,
+        week_start TEXT NOT NULL,
+        posted_at TEXT,
+        rewards_granted_at TEXT,
+        counters_reset_at TEXT,
+        lottery_drawn_at TEXT,
+        roles_rotated_at TEXT,
+        PRIMARY KEY (guild_id, week_start)
+      )`
+    );
 
     // Add weekly tracking columns to existing tables (safe if already exist)
     try { await dbRun(db, `ALTER TABLE user_reactions ADD COLUMN reactions_given_weekly INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
@@ -115,6 +133,63 @@ async function ensureWeeklyAwardsTable(db) {
     console.error("[AWARDS-001] Failed to create weekly_awards table:", err);
     throw err;
   }
+}
+
+async function ensureWeeklyAwardRun(db, guildId, weekStart = getWeekStart()) {
+  await dbRun(
+    db,
+    `INSERT OR IGNORE INTO weekly_award_runs(guild_id, week_start) VALUES(?, ?)`,
+    [guildId, weekStart]
+  );
+  return getWeeklyAwardRun(db, guildId, weekStart);
+}
+
+async function getWeeklyAwardRun(db, guildId, weekStart = getWeekStart()) {
+  await ensureWeeklyAwardsTable(db);
+  await dbRun(
+    db,
+    `INSERT OR IGNORE INTO weekly_award_runs(guild_id, week_start) VALUES(?, ?)`,
+    [guildId, weekStart]
+  );
+  return dbGet(
+    db,
+    `SELECT guild_id, week_start, posted_at, rewards_granted_at, counters_reset_at, lottery_drawn_at, roles_rotated_at
+     FROM weekly_award_runs
+     WHERE guild_id = ? AND week_start = ?`,
+    [guildId, weekStart]
+  );
+}
+
+async function markWeeklyAwardRunStage(db, guildId, weekStart, stageColumn) {
+  const allowedColumns = new Set(["posted_at", "rewards_granted_at", "counters_reset_at", "lottery_drawn_at", "roles_rotated_at"]);
+  if (!allowedColumns.has(stageColumn)) throw new Error("Invalid weekly award stage");
+  await dbRun(
+    db,
+    `UPDATE weekly_award_runs SET ${stageColumn} = COALESCE(${stageColumn}, datetime('now')) WHERE guild_id = ? AND week_start = ?`,
+    [guildId, weekStart]
+  );
+}
+
+async function getStoredWeeklyAwards(db, guildId, weekStart = getWeekStart()) {
+  const rows = await dbAll(
+    db,
+    `SELECT category, user_id, value
+     FROM weekly_awards
+     WHERE guild_id = ? AND week_start = ? AND category != '_no_data'`,
+    [guildId, weekStart]
+  );
+
+  return rows.map((row) => {
+    const cat = AWARD_CATEGORIES.find((item) => item.id === row.category);
+    return {
+      category: row.category,
+      userId: row.user_id,
+      value: row.value,
+      title: cat?.title || row.category,
+      formatted: cat ? cat.format(row.value) : `${row.value}`,
+      emoji: cat?.emoji || "🏅",
+    };
+  });
 }
 
 /**
@@ -205,19 +280,17 @@ function buildWeeklyAwardsEmbed(awards, weekStart) {
  */
 async function postWeeklyAwards(db, client, guildId, channelId) {
   try {
-    // Check if already posted this week
     const weekStart = getWeekStart();
-    const existing = await dbGet(
-      db,
-      `SELECT COUNT(*) AS cnt FROM weekly_awards WHERE guild_id = ? AND week_start = ?`,
-      [guildId, weekStart]
-    );
-
-    if (existing && existing.cnt > 0) {
-      return { posted: false, reason: "Already posted this week" };
+    const run = await ensureWeeklyAwardRun(db, guildId, weekStart);
+    if (run?.posted_at) {
+      const awards = await getStoredWeeklyAwards(db, guildId, weekStart);
+      return { posted: false, reason: "Already posted this week", awards: awards.length, awardsList: awards, weekStart, run };
     }
 
-    const awards = await generateWeeklyAwards(db, guildId);
+    let awards = await getStoredWeeklyAwards(db, guildId, weekStart);
+    if (awards.length === 0) {
+      awards = await generateWeeklyAwards(db, guildId);
+    }
     const embed = buildWeeklyAwardsEmbed(awards, weekStart);
 
     const channel = await client.channels.fetch(channelId).catch(() => null);
@@ -226,18 +299,19 @@ async function postWeeklyAwards(db, client, guildId, channelId) {
       return { posted: false, reason: "Channel not found" };
     }
 
-    // If no awards were generated, insert a sentinel row so we don't post again
-    if (awards.length === 0) {
-      await dbRun(
-        db,
-        `INSERT INTO weekly_awards (guild_id, week_start, category, user_id, value)
-         VALUES (?, ?, '_no_data', '_none', 0)`,
-        [guildId, weekStart]
-      );
-    }
-
     await channel.send({ embeds: [embed] });
-    return { posted: true, awards: awards.length, awardsList: awards };
+    await withTx(db, async () => {
+      if (awards.length === 0) {
+        await dbRun(
+          db,
+          `INSERT OR IGNORE INTO weekly_awards (guild_id, week_start, category, user_id, value)
+           VALUES (?, ?, '_no_data', '_none', 0)`,
+          [guildId, weekStart]
+        );
+      }
+      await markWeeklyAwardRunStage(db, guildId, weekStart, "posted_at");
+    });
+    return { posted: true, awards: awards.length, awardsList: awards, weekStart, run: await getWeeklyAwardRun(db, guildId, weekStart) };
   } catch (err) {
     console.error("[AWARDS-004] Weekly post failed:", err);
     return { posted: false, reason: err.message };
@@ -436,6 +510,12 @@ const AWARD_REWARDS = {
  * @returns {object} { rewarded: number, details: Array }
  */
 async function grantWeeklyRewards(db, guildId, awards) {
+  const weekStart = getWeekStart();
+  const run = await ensureWeeklyAwardRun(db, guildId, weekStart);
+  if (run?.rewards_granted_at) {
+    return { rewarded: 0, details: [], skipped: true };
+  }
+
   const details = [];
 
   for (const award of awards) {
@@ -443,30 +523,60 @@ async function grantWeeklyRewards(db, guildId, awards) {
     if (!reward) continue;
 
     try {
-      // Grant SAMP money (only if user has a SAMP account)
-      const sampUser = await dbGet(db, `SELECT user_id FROM samp_users WHERE user_id = ?`, [award.userId]);
-      if (sampUser && reward.money > 0) {
-        await dbRun(
+      await withTx(db, async () => {
+        const ledgerMeta = JSON.stringify({ category: award.category, week: weekStart, guild_id: guildId });
+        const existingMoneyReward = await dbGet(
           db,
-          `UPDATE samp_users SET money = money + ?, updated_at = datetime('now') WHERE user_id = ?`,
-          [reward.money, award.userId]
+          `SELECT 1 FROM samp_ledger
+           WHERE type = 'weekly_award'
+             AND to_user = ?
+             AND json_extract(meta_json, '$.category') = ?
+             AND json_extract(meta_json, '$.week') = ?
+             AND json_extract(meta_json, '$.guild_id') = ?`,
+          [award.userId, award.category, weekStart, guildId]
         );
-        await dbRun(
-          db,
-          `INSERT INTO samp_ledger(type, from_user, to_user, amount, meta_json)
-           VALUES('weekly_award', NULL, ?, ?, ?)`,
-          [award.userId, reward.money, JSON.stringify({ category: award.category, week: getWeekStart() })]
-        );
-      }
 
-      // Grant XP
-      if (reward.xp > 0) {
-        await dbRun(
-          db,
-          `UPDATE user_levels SET xp = xp + ? WHERE guild_id = ? AND user_id = ?`,
-          [reward.xp, guildId, award.userId]
-        );
-      }
+        const sampUser = await dbGet(db, `SELECT user_id FROM samp_users WHERE user_id = ?`, [award.userId]);
+        if (!existingMoneyReward && sampUser && reward.money > 0) {
+          await dbRun(
+            db,
+            `UPDATE samp_users SET money = money + ?, updated_at = datetime('now') WHERE user_id = ?`,
+            [reward.money, award.userId]
+          );
+          await dbRun(
+            db,
+            `INSERT INTO samp_ledger(type, from_user, to_user, amount, meta_json)
+             VALUES('weekly_award', NULL, ?, ?, ?)`,
+            [award.userId, reward.money, ledgerMeta]
+          );
+        }
+
+        if (reward.xp > 0) {
+          const existingXpReward = await dbGet(
+            db,
+            `SELECT 1 FROM samp_ledger
+             WHERE type = 'weekly_award_xp'
+               AND to_user = ?
+               AND json_extract(meta_json, '$.category') = ?
+               AND json_extract(meta_json, '$.week') = ?
+               AND json_extract(meta_json, '$.guild_id') = ?`,
+            [award.userId, award.category, weekStart, guildId]
+          );
+          if (!existingXpReward) {
+            await dbRun(
+              db,
+              `UPDATE user_levels SET xp = xp + ? WHERE guild_id = ? AND user_id = ?`,
+              [reward.xp, guildId, award.userId]
+            );
+            await dbRun(
+              db,
+              `INSERT INTO samp_ledger(type, from_user, to_user, amount, meta_json)
+               VALUES('weekly_award_xp', NULL, ?, ?, ?)`,
+              [award.userId, reward.xp, ledgerMeta]
+            );
+          }
+        }
+      });
 
       details.push({ userId: award.userId, category: award.category, money: reward.money, xp: reward.xp });
     } catch (err) {
@@ -474,6 +584,7 @@ async function grantWeeklyRewards(db, guildId, awards) {
     }
   }
 
+  await markWeeklyAwardRunStage(db, guildId, weekStart, "rewards_granted_at");
   return { rewarded: details.length, details };
 }
 
@@ -481,13 +592,31 @@ async function grantWeeklyRewards(db, guildId, awards) {
  * Reset weekly counters after awards are posted.
  * Call after postWeeklyAwards() on Mondays.
  */
-async function resetWeeklyCounters(db) {
+async function resetWeeklyCounters(db, guildId, weekStart = getWeekStart()) {
   try {
-    await dbRun(db, `UPDATE user_reactions SET reactions_given_weekly = 0, reactions_received_weekly = 0`);
-    await dbRun(db, `UPDATE trivia_scores SET weekly_points = 0`);
+    const run = await ensureWeeklyAwardRun(db, guildId, weekStart);
+    if (run?.counters_reset_at) return { reset: false, skipped: true };
+
+    await withTx(db, async () => {
+      await dbRun(
+        db,
+        `UPDATE user_reactions
+         SET reactions_given_weekly = 0, reactions_received_weekly = 0
+         WHERE guild_id = ?`,
+        [guildId]
+      );
+      await dbRun(
+        db,
+        `UPDATE trivia_scores SET weekly_points = 0 WHERE guild_id = ?`,
+        [guildId]
+      );
+      await markWeeklyAwardRunStage(db, guildId, weekStart, "counters_reset_at");
+    });
     console.log("[WeeklyAwards] Weekly counters reset");
+    return { reset: true, skipped: false };
   } catch (err) {
     console.error("[AWARDS-006] Failed to reset weekly counters:", err);
+    return { reset: false, skipped: false, error: err.message };
   }
 }
 
@@ -504,5 +633,9 @@ module.exports = {
   rotateWeeklyRoles,
   grantWeeklyRewards,
   resetWeeklyCounters,
+  ensureWeeklyAwardRun,
+  getWeeklyAwardRun,
+  getStoredWeeklyAwards,
+  markWeeklyAwardRunStage,
   AWARD_REWARDS,
 };

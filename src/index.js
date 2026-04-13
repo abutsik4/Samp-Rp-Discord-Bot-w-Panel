@@ -187,6 +187,7 @@ helpers.init({ db, dbRun, dbGet, dbAll });
 const {
   sleep, ruPlural, formatTimeOnServer,
   disableCommand, enableCommand, isCommandDisabled, getDisabledCommands,
+  setCommandCategoryChannel, clearCommandCategoryChannel, getCommandCategoryChannel, listCommandCategoryChannels,
   incrementMessageCount, decrementMessageCount, getUserMessageCount, resetStats,
   getCachedLeaderboard, setCachedLeaderboard, getTopUsers,
   STATUS_POOL, STATUS_ROTATION_ENABLED, STATUS_ROTATION_INTERVAL_MINUTES, setRandomPresence,
@@ -257,7 +258,7 @@ const { registerEventHandlers } = require("./bot/events/handlers");
 registerEventHandlers({
   client, db, TOKEN,
   registerGuildCommands,
-  cacheUserUsername, getUserMessageCount,
+  cacheUserUsername, getCommandCategoryChannel, getUserMessageCount,
   lookupIndexedAuthor, lookupIndexedAuthorsBulk,
   dbAll,
 });
@@ -267,7 +268,7 @@ const { registerCommandHandlers } = require("./bot/commands/dispatcher");
 registerCommandHandlers({
   client, db, dbRun, dbGet, dbAll,
   OWNER_ID, TOKEN,
-  isCommandDisabled, getUserMessageCount,
+  isCommandDisabled, getCommandCategoryChannel, getUserMessageCount,
   ruPlural, formatTimeOnServer, performUndo,
   registerGuildCommands, backfillGuild,
   holidaysScheduler,
@@ -298,6 +299,9 @@ const { app } = createPanelApp({
   getDisabledCommands,
   enableCommand,
   disableCommand,
+  listCommandCategoryChannels,
+  setCommandCategoryChannel,
+  clearCommandCategoryChannel,
 });
 
 const PORT = process.env.PORT || 3000;

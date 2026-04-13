@@ -16,10 +16,15 @@ const {
 } = require("./badges");
 
 const {
+  TRIVIA_QUESTIONS,
   ensureTriviaTable,
   updateTriviaScore,
   getTriviaStats,
   getTriviaLeaderboard,
+  prepareTriviaQuestion,
+  startTriviaSession,
+  finishTriviaSession,
+  resetTriviaSessionState,
 } = require("./trivia");
 
 const {
@@ -27,6 +32,7 @@ const {
   awardMessageXP,
   getUserLevel,
   getLevelsLeaderboard,
+  handleLevelCommand,
   RANK_TIERS,
 } = require("./levels");
 
@@ -137,6 +143,83 @@ test("trivia: table creation and empty stats", async () => {
   await closeDb(db);
 });
 
+test("trivia: question bank integrity", () => {
+  assert.ok(TRIVIA_QUESTIONS.length >= 180, "Trivia bank should be large enough to reduce repeats");
+
+  const seenQuestions = new Set();
+  for (const entry of TRIVIA_QUESTIONS) {
+    assert.equal(typeof entry.q, "string");
+    assert.ok(entry.q.trim().length > 0, "Question text must not be empty");
+    assert.ok(Array.isArray(entry.answers), "Answers must be an array");
+    assert.equal(entry.answers.length, 4, `Question must have exactly 4 answers: ${entry.q}`);
+    assert.equal(typeof entry.correct, "number");
+    assert.ok(entry.correct >= 0 && entry.correct < entry.answers.length, `Correct answer index out of range: ${entry.q}`);
+
+    for (const answer of entry.answers) {
+      assert.equal(typeof answer, "string");
+      assert.ok(answer.trim().length > 0, `Answer must not be empty: ${entry.q}`);
+    }
+
+    assert.ok(!seenQuestions.has(entry.q), `Duplicate question found: ${entry.q}`);
+    seenQuestions.add(entry.q);
+  }
+});
+
+test("trivia: shuffled answers keep the correct option aligned", () => {
+  const prepared = prepareTriviaQuestion(
+    {
+      q: "Test question",
+      answers: ["A", "B", "C", "D"],
+      correct: 2,
+    },
+    () => 0
+  );
+
+  assert.deepStrictEqual(prepared.answers, ["B", "C", "D", "A"]);
+  assert.strictEqual(prepared.correct, 1);
+  assert.strictEqual(prepared.answers[prepared.correct], "C");
+});
+
+test("trivia: start session enforces channel and user throttling", () => {
+  resetTriviaSessionState();
+
+  const first = startTriviaSession(
+    { guildId: GUILD, channelId: "c1", userId: USER1 },
+    { now: 1_000, timeoutMs: 30_000, cooldownMs: 45_000 }
+  );
+  const sameUser = startTriviaSession(
+    { guildId: GUILD, channelId: "c2", userId: USER1 },
+    { now: 2_000, timeoutMs: 30_000, cooldownMs: 45_000 }
+  );
+  const sameChannel = startTriviaSession(
+    { guildId: GUILD, channelId: "c1", userId: USER2 },
+    { now: 2_000, timeoutMs: 30_000, cooldownMs: 45_000 }
+  );
+
+  assert.equal(first.ok, true);
+  assert.equal(sameUser.ok, false);
+  assert.equal(sameUser.reason, "user-active");
+  assert.equal(sameChannel.ok, false);
+  assert.equal(sameChannel.reason, "channel-active");
+
+  finishTriviaSession({ guildId: GUILD, channelId: "c1", userId: USER1 });
+
+  const cooldownBlocked = startTriviaSession(
+    { guildId: GUILD, channelId: "c1", userId: USER1 },
+    { now: 20_000, timeoutMs: 30_000, cooldownMs: 45_000 }
+  );
+  const afterCooldown = startTriviaSession(
+    { guildId: GUILD, channelId: "c1", userId: USER1 },
+    { now: 50_000, timeoutMs: 30_000, cooldownMs: 45_000 }
+  );
+
+  assert.equal(cooldownBlocked.ok, false);
+  assert.equal(cooldownBlocked.reason, "cooldown");
+  assert.equal(afterCooldown.ok, true);
+
+  resetTriviaSessionState();
+});
+
 test("trivia: score updates and streaks", async () => {
   const db = createDb();
   await ensureTriviaTable(db);
@@ -232,6 +315,75 @@ test("levels: leaderboard", async () => {
   const lb = await getLevelsLeaderboard(db, GUILD, 10);
   assert.strictEqual(lb.length, 2);
   assert.strictEqual(lb[0].user_id, USER2);
+
+  await closeDb(db);
+});
+
+test("levels: /level handler supports dispatcher object call", async () => {
+  const db = createDb();
+  await ensureLevelsTable(db);
+
+  await dbRun(
+    db,
+    `INSERT INTO user_levels (guild_id, user_id, xp, level) VALUES (?, ?, 250, 3)`,
+    [GUILD, USER1]
+  );
+
+  const replies = [];
+  const interaction = {
+    commandName: "level",
+    guild: { id: GUILD },
+    user: { id: USER1, tag: "user1#0001" },
+    options: {
+      getUser: () => null,
+    },
+    reply: async (payload) => {
+      replies.push(payload);
+    },
+  };
+
+  await handleLevelCommand({ interaction, db });
+
+  assert.strictEqual(replies.length, 1);
+  assert.strictEqual(replies[0].embeds[0].data.title, "🚶 Бродяга");
+
+  await closeDb(db);
+});
+
+test("levels: /levels-top handler supports legacy positional call", async () => {
+  const db = createDb();
+  await ensureLevelsTable(db);
+
+  await dbRun(
+    db,
+    `INSERT INTO user_levels (guild_id, user_id, xp, level) VALUES (?, ?, 500, 5)`,
+    [GUILD, USER2]
+  );
+  await dbRun(
+    db,
+    `INSERT INTO user_levels (guild_id, user_id, xp, level) VALUES (?, ?, 100, 2)`,
+    [GUILD, USER1]
+  );
+
+  const edits = [];
+  const interaction = {
+    commandName: "levels-top",
+    guild: {
+      id: GUILD,
+      members: {
+        fetch: async (userId) => ({ user: { tag: `${userId}#0001` } }),
+      },
+    },
+    deferReply: async () => {},
+    editReply: async (payload) => {
+      edits.push(payload);
+    },
+  };
+
+  await handleLevelCommand(interaction, db);
+
+  assert.strictEqual(edits.length, 1);
+  assert.strictEqual(edits[0].embeds[0].data.title, "🏆 Топ по уровням");
 
   await closeDb(db);
 });

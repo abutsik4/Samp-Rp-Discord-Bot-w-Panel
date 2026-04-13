@@ -93,6 +93,49 @@ async function getDisabledCommands(guildId) {
   );
 }
 
+async function setCommandCategoryChannel(guildId, commandCategory, channelId, updatedBy = null) {
+  await _dbRun(
+    `INSERT INTO command_channel_restrictions (guild_id, command_category, channel_id, updated_at, updated_by)
+     VALUES (?, ?, ?, datetime('now'), ?)
+     ON CONFLICT(guild_id, command_category)
+     DO UPDATE SET channel_id = excluded.channel_id, updated_at = datetime('now'), updated_by = excluded.updated_by`,
+    [guildId, commandCategory, channelId, updatedBy]
+  );
+}
+
+async function clearCommandCategoryChannel(guildId, commandCategory) {
+  await _dbRun(
+    `DELETE FROM command_channel_restrictions WHERE guild_id = ? AND command_category = ?`,
+    [guildId, commandCategory]
+  );
+}
+
+async function getCommandCategoryChannel(guildId, commandCategory) {
+  const row = await _dbGet(
+    `SELECT channel_id, updated_at, updated_by
+     FROM command_channel_restrictions
+     WHERE guild_id = ? AND command_category = ?`,
+    [guildId, commandCategory]
+  );
+  return row || null;
+}
+
+async function listCommandCategoryChannels(guildId) {
+  return await _dbAll(
+    `SELECT command_category, channel_id, updated_at, updated_by
+     FROM command_channel_restrictions
+     WHERE guild_id = ?
+     ORDER BY command_category`,
+    [guildId]
+  );
+}
+
+async function isCommandCategoryAllowedInChannel(guildId, commandCategory, channelId) {
+  const row = await getCommandCategoryChannel(guildId, commandCategory);
+  if (!row?.channel_id) return true;
+  return row.channel_id === channelId;
+}
+
 // ── Stats: increment / decrement / query ───────────────────────────────
 
 function incrementMessageCount(guildId, userId) {
@@ -373,6 +416,11 @@ module.exports = {
   enableCommand,
   isCommandDisabled,
   getDisabledCommands,
+  setCommandCategoryChannel,
+  clearCommandCategoryChannel,
+  getCommandCategoryChannel,
+  listCommandCategoryChannels,
+  isCommandCategoryAllowedInChannel,
   // Stats
   incrementMessageCount,
   decrementMessageCount,

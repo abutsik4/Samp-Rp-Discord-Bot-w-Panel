@@ -30,7 +30,7 @@ function generateWhitelistPage(bot, PANEL_BASE) {
           <div id="alertContainer"></div>
 
           <div class="alert alert-info" data-scroll data-scroll-class="is-inview">
-            <strong>ℹ️ How it works:</strong> When whitelist is empty, messages are counted in all channels. Add channels to only count messages in specific channels.
+            <strong>ℹ️ How it works:</strong> When whitelist is empty, messages are counted in all channels. Add channels to only count messages in specific channels. Threads inherit the parent channel whitelist automatically.
           </div>
 
           <div class="stat-box" data-scroll data-scroll-class="is-inview">

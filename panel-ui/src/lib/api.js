@@ -249,6 +249,21 @@ export const panelApi = {
     return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/whitelist`, { method: "DELETE" });
   },
 
+  commandChannelList(botKey) {
+    return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/command-channels`, { method: "GET" });
+  },
+  commandChannelSave(botKey, payload) {
+    return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/command-channels`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  commandChannelClear(botKey, commandCategory) {
+    return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/command-channels/${encodeURIComponent(commandCategory)}`, {
+      method: "DELETE",
+    });
+  },
+
   rateLimitConfig(botKey, guildId, channelId) {
     const query = new URLSearchParams({ guildId, channelId }).toString();
     return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/rate-limits/config?${query}`, { method: "GET" });

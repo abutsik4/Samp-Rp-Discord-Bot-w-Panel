@@ -30,6 +30,7 @@ function generateSidebarHTML(options = {}) {
       links: [
         { href: `${PANEL_BASE}/bot/${botKey}/rate-limits`, icon: '🛡️', label: 'Spam Limits', id: 'rate-limits' },
         { href: `${PANEL_BASE}/bot/${botKey}/whitelist`, icon: '📋', label: 'Whitelist', id: 'whitelist' },
+        { href: `${PANEL_BASE}/bot/${botKey}/command-channels`, icon: '🎮', label: 'Command Channels', id: 'command-channels' },
         { href: `${PANEL_BASE}/bot/${botKey}/automod`, icon: '🛡️', label: 'Automod', id: 'automod' },
         { href: `${PANEL_BASE}/bot/${botKey}/holidays`, icon: '🎉', label: 'Holidays', id: 'holidays' },
         { href: `${PANEL_BASE}/bot/${botKey}/channels`, icon: '🗑️', label: 'Channels', id: 'channels' },

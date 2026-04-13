@@ -271,6 +271,17 @@ async function initSchema(dbRun, dbPath, db = null) {
   `);
 
   await dbRun(`
+    CREATE TABLE IF NOT EXISTS command_channel_restrictions (
+      guild_id TEXT NOT NULL,
+      command_category TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_by TEXT,
+      PRIMARY KEY (guild_id, command_category)
+    )
+  `);
+
+  await dbRun(`
     CREATE INDEX IF NOT EXISTS idx_message_index_created 
     ON message_index(created_at)
   `);

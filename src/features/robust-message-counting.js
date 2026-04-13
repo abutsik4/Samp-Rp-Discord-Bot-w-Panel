@@ -14,6 +14,7 @@
 const { dbRun, dbGet, dbAll } = require("../utils/db-helpers");
 const { updateLeaderboard } = require("./leaderboard-cache");
 const { createLogger, newTraceId } = require("../utils/logger");
+const { withSerializedTransaction } = require("../utils/sqlite-transaction");
 
 const log = createLogger("message-counting");
 
@@ -26,6 +27,10 @@ const RETRY_DELAY_MS = 100; // Base delay, exponential backoff applied
  */
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withTransaction(db, fn) {
+  return withSerializedTransaction(db, fn);
 }
 
 /**
@@ -94,69 +99,61 @@ async function incrementMessageCountRobust(db, guildId, userId, messageId, chann
     const opId = traceId || newTraceId();
     const startMs = Date.now();
 
-    // Extract date for daily stats (YYYY-MM-DD format)
-    const messageDate = messageTimestamp ? new Date(messageTimestamp).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+    const { skipped, newCount } = await withTransaction(db, async () => {
+      const createdAt = messageTimestamp || new Date().toISOString();
+      const messageDate = new Date(createdAt).toISOString().slice(0, 10);
+      const idxResult = await dbRun(
+        db,
+        `INSERT OR IGNORE INTO message_index (guild_id, message_id, user_id, channel_id, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        [guildId, messageId, userId, channelId, createdAt]
+      );
 
-    // 1. Add to message index first to gate duplicates
-    const idxResult = await dbRun(
-      db,
-      `INSERT OR IGNORE INTO message_index (guild_id, message_id, user_id, channel_id, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
-      [guildId, messageId, userId, channelId, messageTimestamp || new Date().toISOString()]
-    );
+      if (!idxResult || idxResult.changes === 0) {
+        const currentCount = await dbGet(db, `SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`, [guildId, userId]);
+        return { skipped: true, newCount: currentCount?.message_count || 0 };
+      }
 
-    // If index insert was ignored, this message was already processed
-    if (!idxResult || idxResult.changes === 0) {
-      await logEvent(db, "increment", guildId, userId, messageId, {
-        newCount: (await dbGet(db, `SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`, [guildId, userId]))?.message_count || 0,
-        attempt,
-        skipped: true,
-        reason: "duplicate messageId",
-        opId,
-      });
-      return true;
-    }
+      await dbRun(
+        db,
+        `INSERT INTO user_stats (guild_id, user_id, message_count)
+         VALUES (?, ?, 1)
+         ON CONFLICT(guild_id, user_id)
+         DO UPDATE SET message_count = message_count + 1`,
+        [guildId, userId]
+      );
 
-    // 2. Increment count in user_stats (only if index insert succeeded)
-    await dbRun(
-      db,
-      `INSERT INTO user_stats (guild_id, user_id, message_count)
-       VALUES (?, ?, 1)
-       ON CONFLICT(guild_id, user_id)
-       DO UPDATE SET message_count = message_count + 1`,
-      [guildId, userId]
-    );
+      await dbRun(
+        db,
+        `INSERT INTO daily_channel_stats (guild_id, user_id, channel_id, message_date, count)
+         VALUES (?, ?, ?, ?, 1)
+         ON CONFLICT(guild_id, user_id, channel_id, message_date)
+         DO UPDATE SET count = count + 1`,
+        [guildId, userId, channelId, messageDate]
+      );
 
-    // 3. Increment daily/channel stats
-    await dbRun(
-      db,
-      `INSERT INTO daily_channel_stats (guild_id, user_id, channel_id, message_date, count)
-       VALUES (?, ?, ?, ?, 1)
-       ON CONFLICT(guild_id, user_id, channel_id, message_date)
-       DO UPDATE SET count = count + 1`,
-      [guildId, userId, channelId, messageDate]
-    );
-
-    // 4. Get new count
-    const newCount = await dbGet(
-      db,
-      `SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`,
-      [guildId, userId]
-    );
+      const nextCount = await dbGet(
+        db,
+        `SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`,
+        [guildId, userId]
+      );
+      return { skipped: false, newCount: nextCount?.message_count || 0 };
+    });
 
     // Log successful event
     await logEvent(db, "increment", guildId, userId, messageId, {
-      newCount: newCount?.message_count || 0,
+      newCount,
       attempt,
-      dailyStats: true,
+      dailyStats: !skipped,
+      skipped,
+      reason: skipped ? "duplicate messageId" : undefined,
       opId,
       ms: Date.now() - startMs,
     });
 
-    // Update leaderboard cache (non-blocking, optional)
-    updateLeaderboard(guildId, userId, 1).catch(err => {
-      // Silently fail - cache is optional
-    });
+    if (!skipped) {
+      updateLeaderboard(guildId, userId, 1).catch(() => {});
+    }
 
     return true;
   } catch (err) {
@@ -208,81 +205,76 @@ async function decrementMessageCountRobust(db, guildId, userId, messageId, attem
     const opId = traceId || newTraceId();
     const startMs = Date.now();
 
-    // 1. First, look up the message details from index (need channel_id and created_at for daily stats)
-    const indexedMessage = await dbGet(
-      db,
-      `SELECT user_id, channel_id, created_at FROM message_index WHERE guild_id = ? AND message_id = ?`,
-      [guildId, messageId]
-    );
+    const result = await withTransaction(db, async () => {
+      const indexedMessage = await dbGet(
+        db,
+        `SELECT user_id, channel_id, created_at FROM message_index WHERE guild_id = ? AND message_id = ?`,
+        [guildId, messageId]
+      );
 
-    const effectiveUserId = indexedMessage?.user_id || userId;
+      const effectiveUserId = indexedMessage?.user_id || userId;
+      const delResult = await dbRun(
+        db,
+        `DELETE FROM message_index WHERE guild_id = ? AND message_id = ?`,
+        [guildId, messageId]
+      );
 
-    // 2. Remove from message index to gate duplicates
-    const delResult = await dbRun(
-      db,
-      `DELETE FROM message_index WHERE guild_id = ? AND message_id = ?`,
-      [guildId, messageId]
-    );
+      if (!delResult || delResult.changes === 0) {
+        const currentCount = await dbGet(
+          db,
+          `SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`,
+          [guildId, effectiveUserId]
+        );
+        return { skipped: true, indexedMessage, effectiveUserId, newCount: currentCount?.message_count || 0 };
+      }
 
-    // If nothing removed from index, skip decrement (duplicate event)
-    if (!delResult || delResult.changes === 0) {
-      await logEvent(db, "decrement", guildId, userId, messageId, {
-        newCount: (await dbGet(db, `SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`, [guildId, userId]))?.message_count || 0,
-        attempt,
-        skipped: true,
-        reason: "messageId not in index",
-        opId,
-      });
-      return true;
-    }
-
-    // 3. Decrement count in user_stats (clamp at 0)
-    await dbRun(
-      db,
-      `UPDATE user_stats
-       SET message_count = CASE
-         WHEN message_count - 1 < 0 THEN 0
-         ELSE message_count - 1
-       END
-       WHERE guild_id = ? AND user_id = ?`,
-      [guildId, effectiveUserId]
-    );
-
-    // 4. Decrement daily stats if we have the indexed message details
-    if (indexedMessage && indexedMessage.channel_id && indexedMessage.created_at) {
-      const messageDate = new Date(indexedMessage.created_at).toISOString().slice(0, 10);
       await dbRun(
         db,
-        `UPDATE daily_channel_stats
-         SET count = CASE
-           WHEN count - 1 < 0 THEN 0
-           ELSE count - 1
+        `UPDATE user_stats
+         SET message_count = CASE
+           WHEN message_count - 1 < 0 THEN 0
+           ELSE message_count - 1
          END
-         WHERE guild_id = ? AND user_id = ? AND channel_id = ? AND message_date = ?`,
-        [guildId, indexedMessage.user_id, indexedMessage.channel_id, messageDate]
+         WHERE guild_id = ? AND user_id = ?`,
+        [guildId, effectiveUserId]
       );
-    }
 
-    // 5. Get new count
-    const newCount = await dbGet(
-      db,
-      `SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`,
-      [guildId, effectiveUserId]
-    );
+      if (indexedMessage && indexedMessage.channel_id && indexedMessage.created_at) {
+        const messageDate = new Date(indexedMessage.created_at).toISOString().slice(0, 10);
+        await dbRun(
+          db,
+          `UPDATE daily_channel_stats
+           SET count = CASE
+             WHEN count - 1 < 0 THEN 0
+             ELSE count - 1
+           END
+           WHERE guild_id = ? AND user_id = ? AND channel_id = ? AND message_date = ?`,
+          [guildId, indexedMessage.user_id, indexedMessage.channel_id, messageDate]
+        );
+      }
+
+      const nextCount = await dbGet(
+        db,
+        `SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`,
+        [guildId, effectiveUserId]
+      );
+      return { skipped: false, indexedMessage, effectiveUserId, newCount: nextCount?.message_count || 0 };
+    });
 
     // Log successful event
-    await logEvent(db, "decrement", guildId, effectiveUserId, messageId, {
-      newCount: newCount?.message_count || 0,
+    await logEvent(db, "decrement", guildId, result.effectiveUserId, messageId, {
+      newCount: result.newCount,
       attempt,
-      dailyStats: !!indexedMessage,
+      dailyStats: !!result.indexedMessage,
+      skipped: result.skipped,
+      reason: result.skipped ? "messageId not in index" : undefined,
       opId,
       ms: Date.now() - startMs,
     });
 
-    // Update leaderboard cache (non-blocking, optional)
-    updateLeaderboard(guildId, effectiveUserId, -1).catch(err => {
-      // Silently fail - cache is optional
-    });
+    if (!result.skipped) {
+      updateLeaderboard(guildId, result.effectiveUserId, -1).catch(() => {});
+    }
 
     return true;
   } catch (err) {
@@ -319,39 +311,83 @@ async function decrementMessageCountRobust(db, guildId, userId, messageId, attem
  */
 async function bulkDecrementRobust(db, guildId, userCounts, messageIds, attempt = 1) {
   try {
-    // 1. Decrement counts for each user
-    for (const [userId, count] of userCounts.entries()) {
-      await dbRun(
-        db,
-        `UPDATE user_stats
-         SET message_count = CASE
-           WHEN message_count - ? < 0 THEN 0
-           ELSE message_count - ?
-         END
-         WHERE guild_id = ? AND user_id = ?`,
-        [count, count, guildId, userId]
-      );
-    }
-
-    // 2. Remove messages from index in batches
+    const actualUserCounts = new Map();
+    const dailyCounts = new Map();
+    const indexedMessageIds = [];
     const chunkSize = 400;
-    for (let i = 0; i < messageIds.length; i += chunkSize) {
-      const chunk = messageIds.slice(i, i + chunkSize);
-      const placeholders = chunk.map(() => "?").join(",");
-      await dbRun(
-        db,
-        `DELETE FROM message_index 
-         WHERE guild_id = ? AND message_id IN (${placeholders})`,
-        [guildId, ...chunk]
-      );
-    }
+
+    await withTransaction(db, async () => {
+      for (let i = 0; i < messageIds.length; i += chunkSize) {
+        const chunk = messageIds.slice(i, i + chunkSize);
+        const placeholders = chunk.map(() => "?").join(",");
+        const rows = await dbAll(
+          db,
+          `SELECT message_id, user_id, channel_id, created_at
+           FROM message_index
+           WHERE guild_id = ? AND message_id IN (${placeholders})`,
+          [guildId, ...chunk]
+        );
+
+        for (const row of rows) {
+          indexedMessageIds.push(row.message_id);
+          actualUserCounts.set(row.user_id, (actualUserCounts.get(row.user_id) || 0) + 1);
+          if (row.channel_id && row.created_at) {
+            const messageDate = new Date(row.created_at).toISOString().slice(0, 10);
+            const dailyKey = `${row.user_id}:${row.channel_id}:${messageDate}`;
+            dailyCounts.set(dailyKey, (dailyCounts.get(dailyKey) || 0) + 1);
+          }
+        }
+      }
+
+      for (const [userId, count] of actualUserCounts.entries()) {
+        await dbRun(
+          db,
+          `UPDATE user_stats
+           SET message_count = CASE
+             WHEN message_count - ? < 0 THEN 0
+             ELSE message_count - ?
+           END
+           WHERE guild_id = ? AND user_id = ?`,
+          [count, count, guildId, userId]
+        );
+      }
+
+      for (const [dailyKey, count] of dailyCounts.entries()) {
+        const [userId, channelId, messageDate] = dailyKey.split(":");
+        await dbRun(
+          db,
+          `UPDATE daily_channel_stats
+           SET count = CASE
+             WHEN count - ? < 0 THEN 0
+             ELSE count - ?
+           END
+           WHERE guild_id = ? AND user_id = ? AND channel_id = ? AND message_date = ?`,
+          [count, count, guildId, userId, channelId, messageDate]
+        );
+      }
+
+      for (let i = 0; i < indexedMessageIds.length; i += chunkSize) {
+        const chunk = indexedMessageIds.slice(i, i + chunkSize);
+        const placeholders = chunk.map(() => "?").join(",");
+        await dbRun(
+          db,
+          `DELETE FROM message_index
+           WHERE guild_id = ? AND message_id IN (${placeholders})`,
+          [guildId, ...chunk]
+        );
+      }
+    });
 
     // Log successful event
     await logEvent(db, "bulk_decrement", guildId, null, null, {
-      userCount: userCounts.size,
-      messageCount: messageIds.length,
+      userCount: actualUserCounts.size || userCounts.size,
+      messageCount: indexedMessageIds.length,
       attempt,
     });
+
+    for (const [userId, count] of actualUserCounts.entries()) {
+      updateLeaderboard(guildId, userId, -count).catch(() => {});
+    }
 
     return true;
   } catch (err) {
@@ -418,6 +454,12 @@ async function processErrorQueue(db) {
             userId: error.user_id,
             messageId: error.message_id,
             errorId: error.id,
+          });
+          await logEvent(db, "skip", error.guild_id, error.user_id, error.message_id, {
+            reason: "missing_channel_id_for_replay",
+            operation: "increment",
+            errorId: error.id,
+            source: "error_queue",
           });
           success = false;
         } else {

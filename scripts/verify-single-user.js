@@ -11,8 +11,12 @@
 const { Client, GatewayIntentBits } = require("discord.js");
 const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
+require("dotenv").config();
+const { createWhitelistSet, isChannelWhitelistedForCounting } = require("../src/features/message-counting-rules");
 
-const DB_PATH = path.join(__dirname, "..", "data", "stats.db");
+const DB_PATH = process.env.STATS_DB_PATH
+  ? path.resolve(process.env.STATS_DB_PATH)
+  : path.join(__dirname, "..", "data", "stats.db");
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 
 if (!DISCORD_TOKEN) {
@@ -54,7 +58,20 @@ async function ensureReferenceTable(db) {
   });
 }
 
-async function getBotCount(db, userId, guildId) {
+async function getUserStatsCount(db, userId, guildId) {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT message_count as count FROM user_stats WHERE user_id = ? AND guild_id = ?`,
+      [userId, guildId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row?.count || 0);
+      }
+    );
+  });
+}
+
+async function getMessageIndexCount(db, userId, guildId) {
   return new Promise((resolve, reject) => {
     db.get(
       `SELECT COUNT(*) as count FROM message_index WHERE user_id = ? AND guild_id = ?`,
@@ -83,27 +100,59 @@ async function storeReference(db, userId, discordCount, botCount) {
   });
 }
 
-async function getDiscordCount(guild, userId) {
-  try {
-    let totalCount = 0;
-    const allChannels = [];
-
-    // Collect text channels
-    guild.channels.cache.forEach((channel) => {
-      if (channel.isTextBased()) {
-        allChannels.push(channel);
+async function getWhitelistSet(db, guildId) {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT channel_id FROM channel_whitelist WHERE guild_id = ?`,
+      [guildId],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(createWhitelistSet(rows || []));
       }
-    });
+    );
+  });
+}
 
-    // Collect active threads
-    try {
-      const activeThreads = await guild.channels.fetchActiveThreads();
-      activeThreads.threads.forEach((thread) => allChannels.push(thread));
-    } catch (err) {
-      console.warn("  ⚠️  Cannot fetch active threads:", err.message);
+async function collectGuildTargets(guild, whitelistSet) {
+  const targets = new Map();
+  const channels = await guild.channels.fetch();
+
+  const addTarget = (channel) => {
+    if (!channel?.id) return;
+    if (!channel.isTextBased || !channel.isTextBased()) return;
+    if (channel.isDMBased && channel.isDMBased()) return;
+    if (channel.viewable === false) return;
+    if (!isChannelWhitelistedForCounting(channel, whitelistSet)) return;
+    targets.set(channel.id, channel);
+  };
+
+  for (const [, channel] of channels) {
+    addTarget(channel);
+
+    if (!channel?.threads || typeof channel.threads.fetch !== "function") {
+      continue;
     }
 
-    console.log(`  📊 Scanning ${allChannels.length} channels/threads (including active threads)...`);
+    try {
+      const fetchedThreads = await channel.threads.fetch({ archived: true });
+      const threadCollection = fetchedThreads?.threads || fetchedThreads;
+      for (const [, thread] of threadCollection) {
+        addTarget(thread);
+      }
+    } catch (_) {
+      // Permission issues are common; keep verification best-effort.
+    }
+  }
+
+  return Array.from(targets.values());
+}
+
+async function getDiscordCount(guild, userId, whitelistSet) {
+  try {
+    let totalCount = 0;
+    const allChannels = await collectGuildTargets(guild, whitelistSet);
+
+    console.log(`  📊 Scanning ${allChannels.length} countable channels/threads...`);
 
     let scannedChannels = 0;
     let skippedChannels = 0;
@@ -167,11 +216,14 @@ async function main() {
     
     await ensureReferenceTable(db);
     
-    const botCount = await getBotCount(db, userId, guildId);
-    console.log(`🤖 Bot count: ${botCount}\n`);
+    const whitelistSet = await getWhitelistSet(db, guildId);
+    const userStatsCount = await getUserStatsCount(db, userId, guildId);
+    const messageIndexCount = await getMessageIndexCount(db, userId, guildId);
+    console.log(`🤖 user_stats count: ${userStatsCount}`);
+    console.log(`🗂️ message_index count: ${messageIndexCount}\n`);
     
     console.log(`🔍 Fetching actual count from Discord...`);
-    const discordCount = await getDiscordCount(guild, userId);
+    const discordCount = await getDiscordCount(guild, userId, whitelistSet);
     
     if (discordCount === null) {
       console.log(`\n❌ Failed to verify`);
@@ -180,29 +232,36 @@ async function main() {
     
     console.log(`\n📱 Discord count: ${discordCount}`);
     
-    const difference = discordCount - botCount;
-    const accuracy = discordCount > 0 ? ((botCount / discordCount) * 100).toFixed(2) : 100;
+    const statsDifference = discordCount - userStatsCount;
+    const indexDifference = discordCount - messageIndexCount;
+    const statsAccuracy = discordCount > 0 ? ((userStatsCount / discordCount) * 100).toFixed(2) : 100;
+    const indexAccuracy = discordCount > 0 ? ((messageIndexCount / discordCount) * 100).toFixed(2) : 100;
     
     console.log(`\n${'='.repeat(64)}`);
-    if (difference === 0) {
-      console.log(`✅ Perfect match!`);
+    if (statsDifference === 0) {
+      console.log(`✅ user_stats matches Discord`);
     } else {
-      console.log(`⚠️  Difference: ${difference >= 0 ? '+' : ''}${difference} messages`);
+      console.log(`⚠️  user_stats difference: ${statsDifference >= 0 ? '+' : ''}${statsDifference} messages`);
     }
-    console.log(`   Accuracy: ${accuracy}%`);
+    console.log(`   user_stats accuracy: ${statsAccuracy}%`);
+    console.log(`   message_index difference: ${indexDifference >= 0 ? '+' : ''}${indexDifference} messages`);
+    console.log(`   message_index accuracy: ${indexAccuracy}%`);
     console.log('='.repeat(64));
     
-    await storeReference(db, userId, discordCount, botCount);
+    await storeReference(db, userId, discordCount, userStatsCount);
     console.log(`\n💾 Result stored in database`);
     
-    if (difference > 0) {
-      console.log(`\nℹ️  Bot is missing ${difference} messages. Possible reasons:`);
-      console.log(`   • Messages in private/archived threads`);
-      console.log(`   • Deleted messages (Discord counts, bot can't fetch)`);
-      console.log(`   • Messages before bot had permissions\n`);
-    } else if (difference < 0) {
-      console.log(`\n⚠️  Bot has ${Math.abs(difference)} MORE messages than Discord.`);
-      console.log(`   This could indicate duplicates. Check the database.\n`);
+    if (statsDifference > 0) {
+      console.log(`\nℹ️  user_stats is missing ${statsDifference} messages.`);
+      if (indexDifference === statsDifference) {
+        console.log(`   message_index is missing the same amount, so this is historical ingestion loss.`);
+      } else {
+        console.log(`   user_stats and message_index diverge, so only part of the loss is visible in indexed history.`);
+      }
+      console.log();
+    } else if (statsDifference < 0) {
+      console.log(`\n⚠️  user_stats has ${Math.abs(statsDifference)} MORE messages than Discord.`);
+      console.log(`   This suggests duplicates or stale repaired totals.\n`);
     }
     
   } catch (err) {
@@ -216,7 +275,7 @@ async function main() {
 
 console.log("🔐 Logging into Discord...");
 
-client.once("ready", async () => {
+client.once("clientReady", async () => {
   console.log("✅ Connected!\n");
   await main();
 });

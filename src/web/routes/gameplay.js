@@ -25,10 +25,14 @@ const {
   PROPERTIES,
   TERRITORY_DISTRICTS,
 } = require("../../features/samp-extended");
+const { withSerializedTransaction } = require("../../utils/sqlite-transaction");
 
 function createGameplayRouter(ctx) {
   const router = Router();
-  const { PANEL_BASE, requireAuth, requireAdmin, apiLimiter, bots, dbRun, dbGet, dbAll, client } = ctx;
+  const { PANEL_BASE, requireAuth, requireAdmin, apiLimiter, bots, db, dbRun, dbGet, dbAll, client } = ctx;
+  const MAX_SAMP_ADMIN_MONEY_DELTA = 2_000_000;
+  const MAX_SAMP_ADMIN_REP_DELTA = 250;
+  const MAX_SAMP_ADMIN_JAIL_MINUTES = 12 * 60;
   const SAMP_HISTORY_TYPES = {
     territory: new Set([
       "gang_territory_claim",
@@ -58,6 +62,10 @@ function createGameplayRouter(ctx) {
   function panelActor(req) {
     const username = String(req.session?.user?.username || "system").trim();
     return `panel:${username || "system"}`;
+  }
+
+  async function withTx(fn) {
+    return withSerializedTransaction(db, fn);
   }
 
   async function appendSampLedger(db, { type, fromUser = null, toUser = null, amount = 0, meta = {} }) {
@@ -897,49 +905,85 @@ function createGameplayRouter(ctx) {
     const repDelta = Number.parseInt(req.body?.repDelta || "0", 10) || 0;
     const jailMinutes = Number.parseInt(req.body?.jailMinutes || "0", 10) || 0;
 
+    if (Math.abs(moneyDelta) > MAX_SAMP_ADMIN_MONEY_DELTA) {
+      return res.status(400).json({ error: `moneyDelta exceeds limit of ${MAX_SAMP_ADMIN_MONEY_DELTA}` });
+    }
+    if (Math.abs(repDelta) > MAX_SAMP_ADMIN_REP_DELTA) {
+      return res.status(400).json({ error: `repDelta exceeds limit of ${MAX_SAMP_ADMIN_REP_DELTA}` });
+    }
+    if (jailMinutes < 0 || jailMinutes > MAX_SAMP_ADMIN_JAIL_MINUTES) {
+      return res.status(400).json({ error: `jailMinutes must be between 0 and ${MAX_SAMP_ADMIN_JAIL_MINUTES}` });
+    }
+
     try {
-      const before = await dbGet(
-        `SELECT user_id, money, car_id, rep, jail_until, created_at, updated_at FROM samp_users WHERE user_id = ?`,
-        [userId]
-      );
-      await dbRun(
-        `INSERT OR IGNORE INTO samp_users (user_id, money, car_id, rep, jail_until)
-         VALUES (?, 500, 'bicycle', 0, 0)`,
-        [userId]
-      );
+      const result = await withTx(async () => {
+        const before = await dbGet(
+          `SELECT user_id, money, car_id, rep, jail_until, created_at, updated_at FROM samp_users WHERE user_id = ?`,
+          [userId]
+        );
+        await dbRun(
+          `INSERT OR IGNORE INTO samp_users (user_id, money, car_id, rep, jail_until)
+           VALUES (?, 500, 'bicycle', 0, 0)`,
+          [userId]
+        );
 
-      if (moneyDelta !== 0) {
-        await dbRun(`UPDATE samp_users SET money = money + ?, updated_at = datetime('now') WHERE user_id = ?`, [moneyDelta, userId]);
-      }
-      if (repDelta !== 0) {
-        await dbRun(`UPDATE samp_users SET rep = rep + ?, updated_at = datetime('now') WHERE user_id = ?`, [repDelta, userId]);
-      }
-      if (jailMinutes > 0) {
-        const jailUntil = Date.now() + (jailMinutes * 60 * 1000);
-        await dbRun(`UPDATE samp_users SET jail_until = ?, updated_at = datetime('now') WHERE user_id = ?`, [jailUntil, userId]);
-      }
+        const current = await dbGet(
+          `SELECT user_id, money, car_id, rep, jail_until, created_at, updated_at FROM samp_users WHERE user_id = ?`,
+          [userId]
+        );
+        const nextMoney = Number(current?.money || 0) + moneyDelta;
+        if (nextMoney < 0) {
+          throw new Error("NEGATIVE_BALANCE");
+        }
 
-      const updated = await dbGet(
-        `SELECT user_id, money, car_id, rep, jail_until, created_at, updated_at FROM samp_users WHERE user_id = ?`,
-        [userId]
-      );
+        if (moneyDelta !== 0) {
+          await dbRun(`UPDATE samp_users SET money = money + ?, updated_at = datetime('now') WHERE user_id = ?`, [moneyDelta, userId]);
+        }
+        if (repDelta !== 0) {
+          await dbRun(`UPDATE samp_users SET rep = rep + ?, updated_at = datetime('now') WHERE user_id = ?`, [repDelta, userId]);
+        }
+        if (jailMinutes > 0) {
+          const jailUntil = Date.now() + (jailMinutes * 60 * 1000);
+          await dbRun(`UPDATE samp_users SET jail_until = ?, updated_at = datetime('now') WHERE user_id = ?`, [jailUntil, userId]);
+        }
+
+        const updated = await dbGet(
+          `SELECT user_id, money, car_id, rep, jail_until, created_at, updated_at FROM samp_users WHERE user_id = ?`,
+          [userId]
+        );
+
+        if (moneyDelta !== 0 || repDelta !== 0 || jailMinutes > 0) {
+          await appendSampLedger(ctx.db, {
+            type: "samp_admin_adjust",
+            fromUser: panelActor(req),
+            toUser: userId,
+            amount: moneyDelta,
+            meta: {
+              before: before || null,
+              after: updated || null,
+              moneyDelta,
+              repDelta,
+              jailMinutes,
+            },
+          });
+        }
+
+        return { before, updated };
+      });
+
+      const updated = result.updated;
       if (moneyDelta !== 0 || repDelta !== 0 || jailMinutes > 0) {
-        await appendSampLedger(ctx.db, {
-          type: "samp_admin_adjust",
-          fromUser: panelActor(req),
-          toUser: userId,
-          amount: moneyDelta,
-          meta: {
-            before: before || null,
-            after: updated || null,
-            moneyDelta,
-            repDelta,
-            jailMinutes,
-          },
-        });
+        return res.json({ ok: true, user: updated, limits: {
+          maxMoneyDelta: MAX_SAMP_ADMIN_MONEY_DELTA,
+          maxRepDelta: MAX_SAMP_ADMIN_REP_DELTA,
+          maxJailMinutes: MAX_SAMP_ADMIN_JAIL_MINUTES,
+        } });
       }
       return res.json({ ok: true, user: updated });
     } catch (e) {
+      if (String(e?.message || e) === "NEGATIVE_BALANCE") {
+        return res.status(400).json({ error: "Adjustment would make balance negative" });
+      }
       console.error("Gameplay SAMP adjust error:", e);
       return res.status(500).json({ error: e?.message || "Failed to adjust SAMP user" });
     }

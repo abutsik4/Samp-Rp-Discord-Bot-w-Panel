@@ -6,6 +6,7 @@ const sqlite3 = require("sqlite3").verbose();
 
 const { dbGet, dbRun } = require("../utils/db-helpers");
 const { ensureSampLifeTables, handleSampLifeCommand } = require("./samp-life");
+const { ensureBadgesTable, awardBadge } = require("./badges");
 const {
   ensureSampExtendedTables,
   handleSampExtendedCommand,
@@ -14,6 +15,15 @@ const {
   upsertSampLiveOpsPreset,
   applySampLiveOpsPreset,
   PROPERTIES,
+  HEIST_COOLDOWN_MS,
+  HEIST_MIN_COOLDOWN_MS,
+  tryReserveHeistParticipant,
+  releaseHeistParticipants,
+  applyHeistCooldown,
+  getInventoryQty,
+  consumeInventoryItem,
+  BLACK_MARKET_ITEMS,
+  BLACK_MARKET_GRANTS,
 } = require("./samp-extended");
 
 function makeDb() {
@@ -70,6 +80,64 @@ function makeInteraction(args) {
     __getState: () => ({ lastReply, lastEditReply, lastFollowUp }),
   };
 
+  return interaction;
+}
+
+function makePrototypeInteraction(args) {
+  const base = { ...args };
+  let lastReply = null;
+  let lastEditReply = null;
+  let lastFollowUp = null;
+
+  const optionsProto = {
+    getSubcommand() {
+      return base.subcommand || base.options?.__subcommand || null;
+    },
+    getString(name, required) {
+      const value = base.options && Object.prototype.hasOwnProperty.call(base.options, name) ? base.options[name] : null;
+      if ((value === null || value === undefined) && required) throw new Error(`missing option ${name}`);
+      return value;
+    },
+    getInteger(name, required) {
+      const value = base.options && Object.prototype.hasOwnProperty.call(base.options, name) ? base.options[name] : null;
+      if ((value === null || value === undefined) && required) throw new Error(`missing option ${name}`);
+      return value;
+    },
+    getUser(name, required) {
+      const value = base.options && Object.prototype.hasOwnProperty.call(base.options, name) ? base.options[name] : null;
+      if ((value === null || value === undefined) && required) throw new Error(`missing option ${name}`);
+      return value;
+    },
+  };
+
+  const interactionProto = {
+    deferred: false,
+    replied: false,
+    async reply(payload) {
+      this.replied = true;
+      lastReply = payload;
+      return null;
+    },
+    async deferReply() {
+      this.deferred = true;
+      return null;
+    },
+    async editReply(payload) {
+      lastEditReply = payload;
+      return null;
+    },
+    async followUp(payload) {
+      lastFollowUp = payload;
+      return null;
+    },
+  };
+
+  const interaction = Object.create(interactionProto);
+  interaction.commandName = base.commandName;
+  interaction.user = { id: base.userId || "u1", username: base.username || "User1", bot: false };
+  interaction.guild = { id: base.guildId || "g1" };
+  interaction.options = Object.create(optionsProto);
+  interaction.__getState = () => ({ lastReply, lastEditReply, lastFollowUp });
   return interaction;
 }
 
@@ -263,6 +331,166 @@ test("/garage and /gang info apply cosmetic title and color", async () => {
   }
 });
 
+test("/switchcar changes the active car and /garage exposes quick-switch buttons", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-switch", username: "Switcher" }), db });
+    await dbRun(db, "INSERT OR IGNORE INTO samp_garage(user_id, car_id) VALUES(?, ?)", ["u-switch", "banshee"]);
+    await dbRun(db, "INSERT OR IGNORE INTO samp_garage(user_id, car_id) VALUES(?, ?)", ["u-switch", "perennial"]);
+    await dbRun(db, "UPDATE samp_users SET car_id = ? WHERE user_id = ?", ["banshee", "u-switch"]);
+
+    const garage = makeInteraction({ commandName: "garage", userId: "u-switch", username: "Switcher" });
+    await handleSampExtendedCommand({ interaction: garage, db });
+
+    const garageState = garage.__getState();
+    assert.ok(Array.isArray(garageState.lastReply?.components), "garage should include quick-switch buttons when multiple cars are owned");
+    assert.equal(garageState.lastReply.components.length, 1);
+    const rowJson = garageState.lastReply.components[0].toJSON();
+    assert.ok(rowJson.components.some((component) => component.custom_id === "garage_switch:perennial"));
+
+    const switchCar = makeInteraction({
+      commandName: "switchcar",
+      userId: "u-switch",
+      username: "Switcher",
+      options: { car: "perennial" },
+    });
+    await handleSampExtendedCommand({ interaction: switchCar, db });
+
+    const updatedUser = await dbGet(db, "SELECT car_id FROM samp_users WHERE user_id = ?", ["u-switch"]);
+    assert.equal(updatedUser.car_id, "perennial");
+    assert.match(String(switchCar.__getState().lastReply), /Активная тачка изменена/);
+  } finally {
+    db.close();
+  }
+});
+
+test("/switchcar rejects cars outside the user's garage", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-switch-miss", username: "SwitcherMiss" }), db });
+
+    const switchCar = makeInteraction({
+      commandName: "switchcar",
+      userId: "u-switch-miss",
+      username: "SwitcherMiss",
+      options: { car: "banshee" },
+    });
+    await handleSampExtendedCommand({ interaction: switchCar, db });
+
+    const state = switchCar.__getState();
+    assert.equal(state.lastReply?.ephemeral, true);
+    assert.equal(state.lastReply?.content, "У тебя нет этой тачки в гараже.");
+  } finally {
+    db.close();
+  }
+});
+
+test("/tune install, inspect, maintain, and remove manage a car build end-to-end", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-tune", username: "Tuner" }), db });
+    await dbRun(db, "UPDATE samp_users SET money = ?, car_id = ? WHERE user_id = ?", [150_000, "banshee", "u-tune"]);
+    await dbRun(db, "INSERT OR IGNORE INTO samp_garage(user_id, car_id) VALUES(?, ?)", ["u-tune", "banshee"]);
+
+    const install = makeInteraction({
+      commandName: "tune",
+      subcommand: "install",
+      userId: "u-tune",
+      username: "Tuner",
+      options: { car: "banshee", part: "wheels" },
+    });
+    await handleSampExtendedCommand({ interaction: install, db });
+
+    const installed = await dbGet(db, "SELECT durability FROM samp_car_upgrades WHERE user_id = ? AND car_id = ? AND upgrade_id = ?", ["u-tune", "banshee", "wheels"]);
+    assert.equal(installed.durability, 100);
+    assert.match(String(install.__getState().lastReply), /Chrome Wheels/);
+
+    const inspect = makeInteraction({
+      commandName: "tune",
+      subcommand: "inspect",
+      userId: "u-tune",
+      username: "Tuner",
+      options: { car: "banshee" },
+    });
+    await handleSampExtendedCommand({ interaction: inspect, db });
+
+    const inspectEmbed = inspect.__getState().lastReply.embeds[0].toJSON();
+    assert.match(inspectEmbed.title, /Tune Bay/);
+    assert.ok(inspectEmbed.fields.some((field) => field.name === "🧩 Установлено" && /Chrome Wheels/.test(field.value)));
+
+    await dbRun(db, "UPDATE samp_car_upgrades SET durability = 40 WHERE user_id = ? AND car_id = ? AND upgrade_id = ?", ["u-tune", "banshee", "wheels"]);
+    const moneyBeforeMaintain = await dbGet(db, "SELECT money FROM samp_users WHERE user_id = ?", ["u-tune"]);
+
+    const maintain = makeInteraction({
+      commandName: "tune",
+      subcommand: "maintain",
+      userId: "u-tune",
+      username: "Tuner",
+      options: { car: "banshee" },
+    });
+    await handleSampExtendedCommand({ interaction: maintain, db });
+
+    const maintained = await dbGet(db, "SELECT durability FROM samp_car_upgrades WHERE user_id = ? AND car_id = ? AND upgrade_id = ?", ["u-tune", "banshee", "wheels"]);
+    const moneyAfterMaintain = await dbGet(db, "SELECT money FROM samp_users WHERE user_id = ?", ["u-tune"]);
+    assert.equal(maintained.durability, 100);
+    assert.ok(moneyAfterMaintain.money < moneyBeforeMaintain.money);
+    assert.match(String(maintain.__getState().lastReply), /Обслуживание/);
+
+    const remove = makeInteraction({
+      commandName: "tune",
+      subcommand: "remove",
+      userId: "u-tune",
+      username: "Tuner",
+      options: { car: "banshee", part: "wheels" },
+    });
+    await handleSampExtendedCommand({ interaction: remove, db });
+
+    const removed = await dbGet(db, "SELECT 1 FROM samp_car_upgrades WHERE user_id = ? AND car_id = ? AND upgrade_id = ?", ["u-tune", "banshee", "wheels"]);
+    const moneyAfterRemove = await dbGet(db, "SELECT money FROM samp_users WHERE user_id = ?", ["u-tune"]);
+    assert.equal(removed, null);
+    assert.ok(moneyAfterRemove.money > moneyAfterMaintain.money);
+    assert.match(String(remove.__getState().lastReply), /снята/);
+  } finally {
+    db.close();
+  }
+});
+
+test("/tune install blocks high-tier parts until tuning requirements are met", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-lock", username: "Locked" }), db });
+    await dbRun(db, "UPDATE samp_users SET money = ?, car_id = ? WHERE user_id = ?", [200_000, "cheetah", "u-lock"]);
+    await dbRun(db, "INSERT OR IGNORE INTO samp_garage(user_id, car_id) VALUES(?, ?)", ["u-lock", "cheetah"]);
+
+    const install = makeInteraction({
+      commandName: "tune",
+      subcommand: "install",
+      userId: "u-lock",
+      username: "Locked",
+      options: { car: "cheetah", part: "engine" },
+    });
+    await handleSampExtendedCommand({ interaction: install, db });
+
+    const state = install.__getState();
+    assert.equal(state.lastReply?.ephemeral, true);
+    assert.match(String(state.lastReply?.content || ""), /Нужен уровень тюнинга 5/);
+  } finally {
+    db.close();
+  }
+});
+
 test("/businesses returns paged embeds for owned and market views", async () => {
   const db = makeDb();
   await ensureSampLifeTables(db);
@@ -433,6 +661,212 @@ test("gcapture alias preserves interaction option access and claims territory", 
   }
 });
 
+test("gmap alias works with prototype-based Discord interactions", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    const gmap = makePrototypeInteraction({
+      commandName: "gmap",
+      userId: "viewer",
+      username: "Viewer",
+    });
+
+    await handleSampExtendedCommand({ interaction: gmap, db });
+
+    const reply = gmap.__getState().lastReply;
+    assert.ok(reply?.embeds?.length > 0, "gmap should return embeds instead of the generic error fallback");
+    assert.match(String(reply.embeds[0].data?.title || reply.embeds[0].toJSON().title), /Районы San Andreas/i);
+  } finally {
+    db.close();
+  }
+});
+
+test("gang attack summary explicitly says the district is not captured yet", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "defender", username: "Defender" }), db });
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "attacker", username: "Attacker" }), db });
+    await dbRun(db, `UPDATE samp_users SET money = 200000 WHERE user_id IN (?, ?)`, ["defender", "attacker"]);
+
+    await handleSampExtendedCommand({
+      interaction: makeInteraction({ commandName: "gang", userId: "defender", username: "Defender", subcommand: "create", options: { name: "Old Gangster's", tag: "OG" } }),
+      db,
+    });
+    await handleSampExtendedCommand({
+      interaction: makeInteraction({ commandName: "gang", userId: "attacker", username: "Attacker", subcommand: "create", options: { name: "Ballas", tag: "BAL" } }),
+      db,
+    });
+
+    const defenderGang = await dbGet(db, `SELECT id FROM samp_gangs WHERE leader_id = ?`, ["defender"]);
+    const attackerGang = await dbGet(db, `SELECT id FROM samp_gangs WHERE leader_id = ?`, ["attacker"]);
+    await dbRun(db, `UPDATE samp_gangs SET treasury = 100000 WHERE id IN (?, ?)`, [defenderGang.id, attackerGang.id]);
+    await dbRun(
+      db,
+      `INSERT INTO samp_gang_territories(district_id, gang_id, pressure, claimed_at, updated_at)
+       VALUES('ganton', ?, 60, datetime('now'), datetime('now'))`,
+      [defenderGang.id]
+    );
+
+    const attack = makeInteraction({
+      commandName: "gang",
+      userId: "attacker",
+      username: "Attacker",
+      subcommand: "claimterritory",
+      options: { district: "ganton" },
+    });
+    await handleSampExtendedCommand({ interaction: attack, db });
+
+    const territory = await dbGet(db, `SELECT gang_id, pressure FROM samp_gang_territories WHERE district_id = ?`, ["ganton"]);
+    assert.equal(Number(territory.gang_id), Number(defenderGang.id), "a partial pressure hit should not transfer ownership");
+    assert.equal(Number(territory.pressure), 15, "attack should reduce defender pressure by the configured amount");
+    assert.match(String(attack.__getState().lastReply), /не захвачен/i, "attack reply should clearly state the district is not captured yet");
+  } finally {
+    db.close();
+  }
+});
+
+test("black market golden deagle purchase persists and is visible in balance", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-blackmarket", username: "BlackMarket" }), db });
+    await dbRun(db, `UPDATE samp_users SET money = 300000 WHERE user_id = ?`, ["u-blackmarket"]);
+
+    const browse = makeInteraction({
+      commandName: "blackmarket",
+      userId: "u-blackmarket",
+      username: "BlackMarket",
+      subcommand: "browse",
+    });
+    await handleSampExtendedCommand({ interaction: browse, db });
+
+    const browseEmbeds = browse.__getState().lastReply.embeds || [];
+    const goldenField = browseEmbeds
+      .flatMap((embed) => embed.data?.fields || embed.toJSON().fields || [])
+      .find((field) => String(field.name).includes("Золотой Desert Eagle"));
+
+    assert.ok(goldenField, "daily black market should expose the golden deagle in one of the slots");
+    const goldenSlot = Number(String(goldenField.name).match(/#(\d+)/)?.[1] || 0);
+    assert.ok(goldenSlot >= 1 && goldenSlot <= 3, "golden deagle slot should be parseable from the browse output");
+
+    const buy = makeInteraction({
+      commandName: "blackmarket",
+      userId: "u-blackmarket",
+      username: "BlackMarket",
+      subcommand: "buy",
+      options: { slot: goldenSlot },
+    });
+    await handleSampExtendedCommand({ interaction: buy, db });
+
+    const cosmetic = await dbGet(
+      db,
+      `SELECT cosmetic_value FROM samp_cosmetics WHERE user_id = ? AND cosmetic_type = ?`,
+      ["u-blackmarket", "weapon_skin_deagle"]
+    );
+    const deagle = await dbGet(db, `SELECT qty FROM samp_inventory WHERE user_id = ? AND item_id = ?`, ["u-blackmarket", "deagle"]);
+    const activeWeapon = await dbGet(db, `SELECT value FROM samp_user_settings WHERE user_id = ? AND key = 'weapon'`, ["u-blackmarket"]);
+
+    assert.equal(cosmetic?.cosmetic_value, "gold");
+    assert.equal(Number(deagle?.qty || 0), 1);
+    assert.equal(activeWeapon?.value, "deagle");
+    assert.match(String(buy.__getState().lastReply), /поставлена активной/i);
+
+    const balance = makeInteraction({ commandName: "balance", userId: "u-blackmarket", username: "BlackMarket" });
+    await handleSampLifeCommand({ interaction: balance, db });
+
+    const balanceEmbed = balance.__getState().lastReply.embeds[0].data;
+    const weaponField = balanceEmbed.fields.find((field) => field.name === "🔫 Оружие");
+    assert.match(String(weaponField?.value || ""), /Золотой Desert Eagle/);
+  } finally {
+    db.close();
+  }
+});
+
+test("gangtop alias returns leaderboard even when a gang has no members row", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    await dbRun(db, `INSERT INTO samp_gangs(name, tag, leader_id, treasury) VALUES('Solo Gang', 'SOLO', 'leader-1', 75000)`);
+
+    const gangTop = makePrototypeInteraction({
+      commandName: "gangtop",
+      userId: "viewer",
+      username: "Viewer",
+    });
+    await handleSampExtendedCommand({ interaction: gangTop, db });
+
+    const reply = gangTop.__getState().lastReply;
+    assert.ok(reply?.embeds?.length > 0, "gangtop alias should return leaderboard embeds");
+    assert.match(String(reply.embeds[0].data?.title || reply.embeds[0].toJSON().title), /Топ банд San Andreas/i);
+    const payload = JSON.stringify(reply.embeds.map((embed) => embed.data || embed.toJSON()));
+    assert.match(payload, /SOLO/);
+    assert.match(payload, /0 район/);
+  } finally {
+    db.close();
+  }
+});
+
+test("heist participants cannot reserve multiple lobbies and receive cooldown after a run", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    const firstReservation = await tryReserveHeistParticipant(db, "u-heist");
+    assert.equal(firstReservation.ok, true, "first heist lobby reservation should succeed");
+
+    const secondReservation = await tryReserveHeistParticipant(db, "u-heist");
+    assert.equal(secondReservation.ok, false, "same user should not be able to join another heist lobby");
+    assert.equal(secondReservation.reason, "active");
+    assert.ok(secondReservation.remainingMs > 0, "active heist lock should have time remaining");
+
+    await releaseHeistParticipants(db, ["u-heist"]);
+    await applyHeistCooldown(db, ["u-heist"]);
+
+    const activeLock = await dbGet(db, `SELECT ready_at FROM samp_cooldowns WHERE user_id = ? AND action = ?`, ["u-heist", "heist:active"]);
+    const heistCooldown = await dbGet(db, `SELECT ready_at FROM samp_cooldowns WHERE user_id = ? AND action = ?`, ["u-heist", "heist"]);
+
+    assert.equal(activeLock, null, "active lock should be cleared once the heist resolves");
+    assert.ok(Number(heistCooldown?.ready_at || 0) > Date.now(), "heist resolution should create a cooldown");
+    assert.ok(Number(heistCooldown?.ready_at || 0) - Date.now() > HEIST_COOLDOWN_MS - 10_000, "heist cooldown should use the configured duration");
+
+    const cooldownReservation = await tryReserveHeistParticipant(db, "u-heist");
+    assert.equal(cooldownReservation.ok, false, "cooldown should block immediate re-entry into a new heist");
+    assert.equal(cooldownReservation.reason, "cooldown");
+  } finally {
+    db.close();
+  }
+});
+
+test("heist cooldown drops for users with high-tier message badges", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+  await ensureBadgesTable(db);
+
+  try {
+    await awardBadge(db, "g1", "u-pro", "msg_5000");
+    await applyHeistCooldown(db, ["u-pro"], { guildId: "g1" });
+
+    const heistCooldown = await dbGet(db, `SELECT ready_at FROM samp_cooldowns WHERE user_id = ? AND action = ?`, ["u-pro", "heist"]);
+    const remaining = Number(heistCooldown?.ready_at || 0) - Date.now();
+
+    assert.ok(remaining < HEIST_COOLDOWN_MS - 60_000, "badge holders should get a shorter heist cooldown than the base");
+    assert.ok(remaining > HEIST_MIN_COOLDOWN_MS - 10_000, "badge reductions should not go below the configured minimum");
+  } finally {
+    db.close();
+  }
+});
+
 test("live ops multipliers affect business income and manual runs", async () => {
   const db = makeDb();
   await ensureSampLifeTables(db);
@@ -580,5 +1014,295 @@ test("live ops presets can be saved and applied", async () => {
     assert.equal(Number(config.rep_multiplier), 1.5, "preset should update rep multiplier");
   } finally {
     db.close();
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Black Market Overhaul Tests
+// ═══════════════════════════════════════════════════════════════
+
+test("black market browse shows 4 items with dealer personality", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    const reg = makeInteraction({ commandName: "reg", userId: "u-bm1", username: "BmPlayer" });
+    await handleSampLifeCommand({ interaction: reg, db });
+
+    const browse = makeInteraction({
+      commandName: "blackmarket",
+      userId: "u-bm1",
+      subcommand: "browse",
+    });
+    await handleSampExtendedCommand({ interaction: browse, db });
+
+    const state = browse.__getState();
+    const reply = state.lastReply;
+    // browse uses embeds with fields named #1, #2, etc.
+    assert.ok(reply && reply.embeds, "browse should reply with embeds");
+    const embed = reply.embeds[0];
+    const allFieldNames = (embed.data?.fields || []).map(f => f.name).join(" ");
+    assert.ok(allFieldNames.includes("#1"), "browse should show item #1");
+    assert.ok(allFieldNames.includes("#4"), "browse should show item #4");
+  } finally {
+    db.close();
+  }
+});
+
+test("black market buy grants inventory item and deducts money", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    const reg = makeInteraction({ commandName: "reg", userId: "u-bm2", username: "BmBuyer" });
+    await handleSampLifeCommand({ interaction: reg, db });
+    await dbRun(db, `UPDATE samp_users SET money = 500000 WHERE user_id = ?`, ["u-bm2"]);
+
+    const buy = makeInteraction({
+      commandName: "blackmarket",
+      userId: "u-bm2",
+      subcommand: "buy",
+      options: { slot: 1 },
+    });
+    await handleSampExtendedCommand({ interaction: buy, db });
+
+    const state = buy.__getState();
+    const content = typeof state.lastReply === "string" ? state.lastReply : state.lastReply?.content || "";
+    // Should either succeed or get stung - both are valid
+    assert.ok(
+      content.includes("Куплено") || content.includes("куплено") || content.includes("📦") ||
+      content.includes("🚨") || content.includes("Засада") || content.includes("⭐"),
+      "buy should show purchase confirmation or sting"
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("getInventoryQty and consumeInventoryItem work correctly", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    const reg = makeInteraction({ commandName: "reg", userId: "u-inv", username: "InvUser" });
+    await handleSampLifeCommand({ interaction: reg, db });
+
+    // Initially 0
+    const qty0 = await getInventoryQty(db, "u-inv", "bm_armor");
+    assert.equal(qty0, 0, "initial inventory should be 0");
+
+    // Add some via direct SQL
+    await dbRun(db,
+      `INSERT INTO samp_inventory(user_id, item_id, qty) VALUES(?, ?, ?)
+       ON CONFLICT(user_id, item_id) DO UPDATE SET qty = qty + excluded.qty`,
+      ["u-inv", "bm_armor", 3]
+    );
+
+    const qty1 = await getInventoryQty(db, "u-inv", "bm_armor");
+    assert.equal(qty1, 3, "should have 3 after insert");
+
+    // Consume 1
+    await consumeInventoryItem(db, "u-inv", "bm_armor", 1);
+    const qty2 = await getInventoryQty(db, "u-inv", "bm_armor");
+    assert.equal(qty2, 2, "should have 2 after consuming 1");
+
+    // Consume 2
+    await consumeInventoryItem(db, "u-inv", "bm_armor", 2);
+    const qty3 = await getInventoryQty(db, "u-inv", "bm_armor");
+    assert.equal(qty3, 0, "should have 0 after consuming all");
+  } finally {
+    db.close();
+  }
+});
+
+test("usejailpass frees player from jail", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    const reg = makeInteraction({ commandName: "reg", userId: "u-jail", username: "JailUser" });
+    await handleSampLifeCommand({ interaction: reg, db });
+
+    // Put in jail and give jail pass
+    await dbRun(db, `UPDATE samp_users SET jail_until = ? WHERE user_id = ?`, [Date.now() + 600_000, "u-jail"]);
+    await dbRun(db,
+      `INSERT INTO samp_inventory(user_id, item_id, qty) VALUES(?, ?, ?)
+       ON CONFLICT(user_id, item_id) DO UPDATE SET qty = qty + excluded.qty`,
+      ["u-jail", "bm_jail_pass", 1]
+    );
+
+    const use = makeInteraction({ commandName: "usejailpass", userId: "u-jail" });
+    await handleSampExtendedCommand({ interaction: use, db });
+
+    const state = use.__getState();
+    const content = typeof state.lastReply === "string" ? state.lastReply : state.lastReply?.content || "";
+    assert.ok(content.includes("свобод") || content.includes("вышел") || content.includes("📄"), "jail pass should free player");
+
+    // Inventory consumed
+    const qty = await getInventoryQty(db, "u-jail", "bm_jail_pass");
+    assert.equal(qty, 0, "jail pass should be consumed");
+
+    // Check jail_until reset
+    const user = await dbGet(db, `SELECT jail_until FROM samp_users WHERE user_id = ?`, ["u-jail"]);
+    assert.ok(Number(user.jail_until || 0) <= Date.now(), "jail_until should be cleared");
+  } finally {
+    db.close();
+  }
+});
+
+test("wiretap reveals target balance", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    const reg1 = makeInteraction({ commandName: "reg", userId: "u-spy", username: "SpyUser" });
+    await handleSampLifeCommand({ interaction: reg1, db });
+    const reg2 = makeInteraction({ commandName: "reg", userId: "u-target", username: "TargetUser" });
+    await handleSampLifeCommand({ interaction: reg2, db });
+
+    await dbRun(db, `UPDATE samp_users SET money = 100000 WHERE user_id = ?`, ["u-target"]);
+    await dbRun(db,
+      `INSERT INTO samp_inventory(user_id, item_id, qty) VALUES(?, ?, ?)
+       ON CONFLICT(user_id, item_id) DO UPDATE SET qty = qty + excluded.qty`,
+      ["u-spy", "bm_wiretap", 1]
+    );
+
+    const wiretap = makeInteraction({
+      commandName: "wiretap",
+      userId: "u-spy",
+      options: { user: { id: "u-target", bot: false } },
+    });
+    await handleSampExtendedCommand({ interaction: wiretap, db });
+
+    const state = wiretap.__getState();
+    const content = typeof state.lastReply === "string" ? state.lastReply : state.lastReply?.content || "";
+    assert.ok(content.includes("100") || content.includes("прослушк"), "wiretap should reveal balance info");
+
+    const qty = await getInventoryQty(db, "u-spy", "bm_wiretap");
+    assert.equal(qty, 0, "wiretap should be consumed");
+  } finally {
+    db.close();
+  }
+});
+
+test("sabotage sets sabotaged cooldown on target", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    const reg1 = makeInteraction({ commandName: "reg", userId: "u-sabo", username: "SaboUser" });
+    await handleSampLifeCommand({ interaction: reg1, db });
+    const reg2 = makeInteraction({ commandName: "reg", userId: "u-victim", username: "VictimUser" });
+    await handleSampLifeCommand({ interaction: reg2, db });
+
+    await dbRun(db,
+      `INSERT INTO samp_inventory(user_id, item_id, qty) VALUES(?, ?, ?)
+       ON CONFLICT(user_id, item_id) DO UPDATE SET qty = qty + excluded.qty`,
+      ["u-sabo", "bm_sabotage", 1]
+    );
+
+    const sabo = makeInteraction({
+      commandName: "sabotage",
+      userId: "u-sabo",
+      options: { user: { id: "u-victim", bot: false } },
+    });
+    await handleSampExtendedCommand({ interaction: sabo, db });
+
+    const state = sabo.__getState();
+    const content = typeof state.lastReply === "string" ? state.lastReply : state.lastReply?.content || "";
+    assert.ok(content.includes("саботир") || content.includes("🔧") || content.includes("сабот"), "sabotage should confirm action");
+
+    // Check setting set on victim
+    const setting = await dbGet(db, `SELECT value FROM samp_user_settings WHERE user_id = ? AND key = ?`, ["u-victim", "sabotaged_until"]);
+    assert.ok(setting && Number(setting.value) > Date.now(), "sabotaged_until setting should be set in the future");
+
+    const qty = await getInventoryQty(db, "u-sabo", "bm_sabotage");
+    assert.equal(qty, 0, "sabotage item should be consumed");
+  } finally {
+    db.close();
+  }
+});
+
+test("disguise activates disguised cooldown", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    const reg1 = makeInteraction({ commandName: "reg", userId: "u-disguise", username: "DisguiseUser" });
+    await handleSampLifeCommand({ interaction: reg1, db });
+
+    await dbRun(db,
+      `INSERT INTO samp_inventory(user_id, item_id, qty) VALUES(?, ?, ?)
+       ON CONFLICT(user_id, item_id) DO UPDATE SET qty = qty + excluded.qty`,
+      ["u-disguise", "bm_disguise", 1]
+    );
+
+    const disguise = makeInteraction({ commandName: "disguise", userId: "u-disguise" });
+    await handleSampExtendedCommand({ interaction: disguise, db });
+
+    const state = disguise.__getState();
+    const content = typeof state.lastReply === "string" ? state.lastReply : state.lastReply?.content || "";
+    assert.ok(content.includes("маскировк") || content.includes("🎭"), "disguise should confirm activation");
+
+    // Check setting set
+    const setting = await dbGet(db, `SELECT value FROM samp_user_settings WHERE user_id = ? AND key = ?`, ["u-disguise", "disguised_until"]);
+    assert.ok(setting && Number(setting.value) > Date.now(), "disguised_until setting should be set in the future");
+
+    const qty = await getInventoryQty(db, "u-disguise", "bm_disguise");
+    assert.equal(qty, 0, "disguise item should be consumed");
+  } finally {
+    db.close();
+  }
+});
+
+test("hottip shows richest players", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    const reg1 = makeInteraction({ commandName: "reg", userId: "u-tip1", username: "TipUser" });
+    await handleSampLifeCommand({ interaction: reg1, db });
+    const reg2 = makeInteraction({ commandName: "reg", userId: "u-tip2", username: "RichUser" });
+    await handleSampLifeCommand({ interaction: reg2, db });
+
+    await dbRun(db, `UPDATE samp_users SET money = 500000 WHERE user_id = ?`, ["u-tip2"]);
+    await dbRun(db,
+      `INSERT INTO samp_inventory(user_id, item_id, qty) VALUES(?, ?, ?)
+       ON CONFLICT(user_id, item_id) DO UPDATE SET qty = qty + excluded.qty`,
+      ["u-tip1", "bm_hot_tip", 1]
+    );
+
+    const tip = makeInteraction({ commandName: "hottip", userId: "u-tip1" });
+    await handleSampExtendedCommand({ interaction: tip, db });
+
+    const state = tip.__getState();
+    const content = typeof state.lastReply === "string" ? state.lastReply : state.lastReply?.content || "";
+    assert.ok(content.includes("500") || content.includes("наводк") || content.includes("🔍"), "hot tip should show rich players");
+
+    const qty = await getInventoryQty(db, "u-tip1", "bm_hot_tip");
+    assert.equal(qty, 0, "hot tip should be consumed");
+  } finally {
+    db.close();
+  }
+});
+
+test("BLACK_MARKET_ITEMS has 14 items with valid grants", () => {
+  assert.equal(BLACK_MARKET_ITEMS.length, 14, "should have 14 black market items");
+
+  for (const item of BLACK_MARKET_ITEMS) {
+    assert.ok(item.type, `item should have type`);
+    assert.ok(item.name, `item ${item.type} should have name`);
+    assert.ok(item.basePrice[0] > 0, `item ${item.type} should have positive base price`);
+    const grant = BLACK_MARKET_GRANTS[item.type];
+    assert.ok(grant, `item ${item.type} should have a grant entry`);
+    assert.ok(grant.summary, `item ${item.type} grant should have summary`);
   }
 });

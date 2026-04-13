@@ -1,7 +1,7 @@
 const { EmbedBuilder } = require("discord.js");
 
 // Direct imports – no pass-through from index.js
-const { incrementMessageCountRobust, decrementMessageCountRobust, bulkDecrementRobust } = require("../../features/robust-message-counting");
+const { incrementMessageCountRobust, decrementMessageCountRobust, bulkDecrementRobust, logEvent } = require("../../features/robust-message-counting");
 const { runSecurityPipeline } = require("../../features/security-pipeline");
 const { updateStreak, getStreak } = require("../../features/streaks");
 const { incrementWeeklyCount, decrementWeeklyCount } = require("../../features/weekly-stats");
@@ -12,6 +12,11 @@ const { getUserReactionStats, incrementReactionsGiven, incrementReactionsReceive
 const { getEngagementSettings, tryEngageWithMessage } = require("../../features/ai-engagement");
 const { updateWatermark } = require("../../features/incremental-sync");
 const { applyRoleGrants } = require("../../features/perks");
+const { tryAnswerGameFaqInChat } = require("../../features/game-faq");
+const { createWhitelistSet, getCountableChannelIds, isChannelWhitelistedForCounting } = require("../../features/message-counting-rules");
+
+const SAMP_GAME_COMMAND_CATEGORY = "samp_game";
+const SAMP_GAME_COMMAND_BYPASS_USER_ID = "143160841225633792";
 
 /**
  * Register all Discord event handlers on the client.
@@ -22,6 +27,7 @@ function registerEventHandlers(ctx) {
     client, db, TOKEN,
     // Bot helpers (runtime-constructed, must come from ctx)
     registerGuildCommands, cacheUserUsername,
+    getCommandCategoryChannel,
     getUserMessageCount,
     lookupIndexedAuthor, lookupIndexedAuthorsBulk,
     dbAll,
@@ -54,9 +60,29 @@ function registerEventHandlers(ctx) {
       }
       const userRoles = member?.roles?.cache?.map(r => r.id) || [];
 
+      try {
+        const restriction = await getCommandCategoryChannel?.(guildId, SAMP_GAME_COMMAND_CATEGORY);
+        const isCommandChannelBypassUser = userId === SAMP_GAME_COMMAND_BYPASS_USER_ID;
+        if (restriction?.channel_id && restriction.channel_id === channelId && !isCommandChannelBypassUser) {
+          if (message.deletable) {
+            await message.delete().catch(() => null);
+          }
+          return;
+        }
+      } catch (err) {
+        console.error("command-only channel enforcement error:", err);
+      }
+
       // Security pipeline (spam prevention, automod)
       const securityResult = await runSecurityPipeline(db, message, userRoles);
-      if (securityResult.stop) return;
+      if (securityResult.stop) {
+        await logEvent(db, "skip", guildId, userId, message.id, {
+          reason: "security_pipeline",
+          channelId,
+          source: "messageCreate",
+        });
+        return;
+      }
 
       // April Fools 2026 badge — channel 541024085283700741, April 1st only
       if (channelId === "541024085283700741") {
@@ -85,10 +111,18 @@ function registerEventHandlers(ctx) {
         [guildId]
       );
 
-      if (whitelistedChannels && whitelistedChannels.length > 0) {
-        const isWhitelisted = whitelistedChannels.some(row => row.channel_id === channelId);
+      const whitelistSet = createWhitelistSet(whitelistedChannels);
+
+      if (whitelistSet.size > 0) {
+        const isWhitelisted = isChannelWhitelistedForCounting(message.channel, whitelistSet);
         if (!isWhitelisted) {
           console.log(`[Whitelist] Skipping count for channel ${channelId} - not whitelisted`);
+          await logEvent(db, "skip", guildId, userId, message.id, {
+            reason: "channel_not_whitelisted",
+            channelId,
+            matchedChannelIds: getCountableChannelIds(message.channel),
+            source: "messageCreate",
+          });
           return;
         }
       }
@@ -97,14 +131,15 @@ function registerEventHandlers(ctx) {
       cacheUserUsername(guildId, userId, message.author.username, message.author.avatarURL()).catch(() => {});
 
       // Core stats tracking - robust version with transaction + retry
-      await incrementMessageCountRobust(db, guildId, userId, message.id, message.channelId, message.createdAt.toISOString());
+      const counted = await incrementMessageCountRobust(db, guildId, userId, message.id, message.channelId, message.createdAt.toISOString());
+      if (!counted) return;
 
       // Advance watermark so startup catch-up sync knows where to resume
       updateWatermark(db, guildId, message.id, 0).catch(() => {});
 
       // Streak + weekly
       await updateStreak(db, guildId, userId);
-      await incrementWeeklyCount(db, guildId, userId);
+      await incrementWeeklyCount(db, guildId, userId, message.createdAt);
 
       // XP/Levels
       const levelUp = await awardMessageXP(db, guildId, userId, userRoles);
@@ -192,6 +227,9 @@ function registerEventHandlers(ctx) {
         } catch {}
       }
 
+      const faqAnswered = await tryAnswerGameFaqInChat(message);
+      if (faqAnswered) return;
+
       // AI engagement
       const aiSettings = await getEngagementSettings(db, guildId);
       if (aiSettings.enabled) {
@@ -214,15 +252,24 @@ function registerEventHandlers(ctx) {
       const msgId = message.id;
 
       if (message.author && !message.author.bot) {
-        await decrementMessageCountRobust(db, guildId, message.author.id, msgId);
-        await decrementWeeklyCount(db, guildId, message.author.id);
+        const decremented = await decrementMessageCountRobust(db, guildId, message.author.id, msgId);
+        if (decremented) {
+          await decrementWeeklyCount(db, guildId, message.author.id, message.createdAt || new Date());
+        }
         return;
       }
 
-      const userId = await lookupIndexedAuthor(guildId, msgId);
-      if (userId) {
-        await decrementMessageCountRobust(db, guildId, userId, msgId);
-        await decrementWeeklyCount(db, guildId, userId);
+      const indexedMessage = await dbAll(
+        `SELECT user_id, created_at FROM message_index WHERE guild_id = ? AND message_id = ? LIMIT 1`,
+        [guildId, msgId]
+      );
+      const indexedRow = indexedMessage?.[0] || null;
+      const effectiveUserId = indexedRow?.user_id || await lookupIndexedAuthor(guildId, msgId);
+      if (effectiveUserId) {
+        const decremented = await decrementMessageCountRobust(db, guildId, effectiveUserId, msgId);
+        if (decremented) {
+          await decrementWeeklyCount(db, guildId, effectiveUserId, indexedRow?.created_at || new Date());
+        }
       }
     } catch (err) {
       console.error("messageDelete handler error:", err);
@@ -268,6 +315,13 @@ function registerEventHandlers(ctx) {
 
       const userCounts = new Map();
       const allMessageIds = [];
+      const weeklyCounts = new Map();
+
+      const bumpWeeklyCount = (userId, createdAt) => {
+        const dateKey = new Date(createdAt || Date.now()).toISOString();
+        const mapKey = `${userId}:${dateKey}`;
+        weeklyCounts.set(mapKey, (weeklyCounts.get(mapKey) || 0) + 1);
+      };
 
       for (const msg of messages.values()) {
         if (!msg?.id) continue;
@@ -275,6 +329,7 @@ function registerEventHandlers(ctx) {
 
         if (msg.author && !msg.author.bot) {
           userCounts.set(msg.author.id, (userCounts.get(msg.author.id) || 0) + 1);
+          bumpWeeklyCount(msg.author.id, msg.createdAt || new Date());
         }
       }
 
@@ -287,14 +342,27 @@ function registerEventHandlers(ctx) {
       }
 
       if (unknownIds.length > 0) {
-        const indexed = await lookupIndexedAuthorsBulk(guildId, unknownIds);
-        for (const [userId, count] of indexed.entries()) {
-          userCounts.set(userId, (userCounts.get(userId) || 0) + count);
+        const indexedRows = await dbAll(
+          `SELECT message_id, user_id, created_at FROM message_index
+           WHERE guild_id = ? AND message_id IN (${unknownIds.map(() => "?").join(",")})`,
+          [guildId, ...unknownIds]
+        );
+        for (const row of indexedRows) {
+          userCounts.set(row.user_id, (userCounts.get(row.user_id) || 0) + 1);
+          bumpWeeklyCount(row.user_id, row.created_at || new Date());
         }
       }
 
       if (userCounts.size > 0 || allMessageIds.length > 0) {
-        await bulkDecrementRobust(db, guildId, userCounts, allMessageIds);
+        const decremented = await bulkDecrementRobust(db, guildId, userCounts, allMessageIds);
+        if (decremented) {
+          for (const [mapKey, count] of weeklyCounts.entries()) {
+            const splitIndex = mapKey.indexOf(":");
+            const targetUserId = mapKey.slice(0, splitIndex);
+            const createdAt = mapKey.slice(splitIndex + 1);
+            await decrementWeeklyCount(db, guildId, targetUserId, createdAt, count);
+          }
+        }
       }
     } catch (err) {
       console.error("messageDeleteBulk handler error:", err);

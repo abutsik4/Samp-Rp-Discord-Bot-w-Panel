@@ -5,7 +5,7 @@ import { SectionCard } from "../components/SectionCard";
 import { Alert } from "../components/Alert";
 import { LoadingSkeleton } from "../components/LoadingSkeleton";
 import {
-  Shield, Ban, Hash, Gauge, AlertOctagon, Layers, Plus, X, Save,
+  Shield, Ban, Hash, Gauge, AlertOctagon, Layers, Plus, X, Save, Gamepad2,
 } from "lucide-react";
 
 export function ModerationPage({ bot }) {
@@ -13,11 +13,13 @@ export function ModerationPage({ bot }) {
   const [channels, setChannels] = useState([]);
   const [automod, setAutomod] = useState([]);
   const [whitelist, setWhitelist] = useState([]);
+  const [commandRestrictions, setCommandRestrictions] = useState([]);
   const [strikes, setStrikes] = useState([]);
   const [rateConfig, setRateConfig] = useState(null);
   const [selectedChannel, setSelectedChannel] = useState("");
   const [newWord, setNewWord] = useState("");
   const [newWhitelistChannel, setNewWhitelistChannel] = useState("");
+  const [sampGameChannel, setSampGameChannel] = useState("");
   const [deleteChannelIds, setDeleteChannelIds] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -26,15 +28,19 @@ export function ModerationPage({ bot }) {
   async function loadAll() {
     setError("");
     try {
-      const [ch, am, wl, st] = await Promise.all([
+      const [ch, am, wl, cc, st] = await Promise.all([
         panelApi.channels(bot.key),
         panelApi.automodList(bot.key),
         panelApi.whitelistList(bot.key),
+        panelApi.commandChannelList(bot.key),
         panelApi.rateLimitStrikes(bot.key, guildId),
       ]);
       setChannels(ch.channels || []);
       setAutomod(am.words || []);
       setWhitelist(wl.channels || []);
+      const restrictions = cc.restrictions || [];
+      setCommandRestrictions(restrictions);
+      setSampGameChannel(restrictions.find((item) => item.command_category === "samp_game")?.channel_id || "");
       setStrikes(st.users || []);
     } catch (e) {
       setError(e.message || "Failed to load moderation data");
@@ -66,7 +72,7 @@ export function ModerationPage({ bot }) {
       <PageHeader
         icon={Shield}
         title="Moderation"
-        subtitle="AutoMod, whitelist, rate limits and channel management."
+        subtitle="AutoMod, whitelist, rate limits, and command-channel restrictions."
       />
 
       {error ? <Alert type="error">{error}</Alert> : null}
@@ -83,6 +89,12 @@ export function ModerationPage({ bot }) {
           onClick={() => setTab("whitelist")}
         >
           <Hash size={13} />Whitelist
+        </button>
+        <button
+          className={`page-tab${tab === "gamecommands" ? " active" : ""}`}
+          onClick={() => setTab("gamecommands")}
+        >
+          <Gamepad2 size={13} />Game Commands
         </button>
         <button
           className={`page-tab${tab === "ratelimits" ? " active" : ""}`}
@@ -232,6 +244,85 @@ export function ModerationPage({ bot }) {
                         </td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </SectionCard>
+      )}
+
+      {tab === "gamecommands" && (
+        <SectionCard
+          title="SAMP Game Command Channel"
+          icon={Gamepad2}
+          actions={
+            <button
+              className="btn--ghost btn--sm btn--danger"
+              onClick={async () => {
+                await panelApi.commandChannelClear(bot.key, "samp_game");
+                setSampGameChannel("");
+                loadAll();
+              }}
+            >
+              Clear restriction
+            </button>
+          }
+        >
+          {loading ? (
+            <LoadingSkeleton type="card" rows={3} />
+          ) : (
+            <>
+              <Alert type="info">
+                Restrict all SAMP Life gameplay commands to one Discord channel. Outside that channel, users get a Russian warning in Discord. Non-game stats commands still work everywhere.
+              </Alert>
+              <div className="form-row">
+                <select
+                  value={sampGameChannel}
+                  onChange={(e) => setSampGameChannel(e.target.value)}
+                >
+                  <option value="">Select channel</option>
+                  {channels.map((ch) => (
+                    <option key={ch.id} value={ch.id}>{ch.name} ({ch.id})</option>
+                  ))}
+                </select>
+                <button
+                  className="btn--ghost btn--sm"
+                  onClick={async () => {
+                    if (!sampGameChannel) return;
+                    await panelApi.commandChannelSave(bot.key, {
+                      command_category: "samp_game",
+                      channel_id: sampGameChannel,
+                    });
+                    loadAll();
+                  }}
+                >
+                  <Save size={13} />Save channel
+                </button>
+              </div>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Category</th>
+                      <th>Channel</th>
+                      <th>ID</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {commandRestrictions.length > 0 ? commandRestrictions.map((item) => (
+                      <tr key={item.command_category}>
+                        <td>{item.label}</td>
+                        <td>{item.channel_name}</td>
+                        <td>{item.channel_id}</td>
+                      </tr>
+                    )) : (
+                      <tr>
+                        <td colSpan={3} className="text-muted" style={{ padding: "18px", textAlign: "center" }}>
+                          No command channel restriction configured. SAMP commands are currently usable in any channel.
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>

@@ -9,6 +9,7 @@
 
 const { dbRun, dbGet, dbAll } = require('../utils/db-helpers');
 const { incrementMessageCountRobust } = require('./robust-message-counting');
+const { createWhitelistSet, isChannelWhitelistedForCounting } = require('./message-counting-rules');
 
 const GLOBAL_WATERMARK_CHANNEL_ID = '__guild__';
 
@@ -144,6 +145,78 @@ async function updateWatermark(db, guildId, messageId, messagesSynced = 0) {
   );
 }
 
+async function getLatestIndexedMessage(db, guildId) {
+  return dbGet(
+    db,
+    `SELECT message_id, created_at
+     FROM message_index
+     WHERE guild_id = ?
+     ORDER BY COALESCE(created_at, '') DESC, CAST(message_id AS INTEGER) DESC
+     LIMIT 1`,
+    [guildId]
+  );
+}
+
+async function ensureWatermarkForGuild(client, db, guildId) {
+  const watermark = await getWatermark(db, guildId);
+  if (watermark?.last_message_id) {
+    return {
+      success: true,
+      source: 'existing',
+      messageId: watermark.last_message_id,
+    };
+  }
+
+  const indexedMessage = await getLatestIndexedMessage(db, guildId);
+  if (indexedMessage?.message_id) {
+    await updateWatermark(db, guildId, indexedMessage.message_id, 0);
+    return {
+      success: true,
+      source: 'index',
+      messageId: indexedMessage.message_id,
+    };
+  }
+
+  const initialized = await initializeWatermark(client, db, guildId);
+  return {
+    ...initialized,
+    source: initialized.success ? 'live-init' : 'none',
+  };
+}
+
+async function collectSyncTargets(guild) {
+  const targets = new Map();
+  const channels = await guild.channels.fetch();
+
+  const addTarget = (channel) => {
+    if (!channel?.id) return;
+    if (!channel.isTextBased || !channel.isTextBased()) return;
+    if (channel.isDMBased && channel.isDMBased()) return;
+    if (channel.viewable === false) return;
+    targets.set(channel.id, channel);
+  };
+
+  for (const [, channel] of channels) {
+    addTarget(channel);
+
+    if (!channel?.threads || typeof channel.threads.fetch !== 'function') {
+      continue;
+    }
+
+    try {
+      const fetchedThreads = await channel.threads.fetch({ archived: true });
+      const threadCollection = fetchedThreads?.threads || fetchedThreads;
+      for (const [, thread] of threadCollection) {
+        addTarget(thread);
+      }
+    } catch (err) {
+      console.warn(`[Incremental Sync] Could not fetch threads for ${channel.name}: ${err.message}`);
+    }
+  }
+
+  return Array.from(targets.values());
+}
+
 /**
  * Sync missing messages for a guild
  * Fetches messages AFTER the watermark
@@ -164,6 +237,12 @@ async function syncMissingMessages(client, db, guildId, progressCallback = null)
     }
 
     const lastKnownId = watermark.last_message_id;
+    const whitelistRows = await dbAll(
+      db,
+      `SELECT channel_id FROM channel_whitelist WHERE guild_id = ?`,
+      [guildId]
+    );
+    const whitelistSet = createWhitelistSet(whitelistRows);
     console.log(`[Incremental Sync] Starting from message ID: ${lastKnownId}`);
 
     let totalSynced = 0;
@@ -171,14 +250,16 @@ async function syncMissingMessages(client, db, guildId, progressCallback = null)
     const channelStats = new Map();
 
     // Get all text-based channels
-    const channels = guild.channels.cache.filter(
-      ch => ch.isTextBased() && !ch.isDMBased() && ch.viewable
-    );
+    const channels = await collectSyncTargets(guild);
 
-    console.log(`[Incremental Sync] Scanning ${channels.size} channels...`);
+    console.log(`[Incremental Sync] Scanning ${channels.length} channels...`);
 
-    for (const [, channel] of channels) {
+    for (const channel of channels) {
       try {
+        if (!isChannelWhitelistedForCounting(channel, whitelistSet)) {
+          continue;
+        }
+
         let afterId = lastKnownId;
         let channelSynced = 0;
         let hasMore = true;
@@ -281,12 +362,13 @@ async function syncMissingMessages(client, db, guildId, progressCallback = null)
 async function initializeWatermark(client, db, guildId) {
   try {
     const guild = await client.guilds.fetch(guildId);
+    const channels = await guild.channels.fetch();
     
     // Find the most recent message across all channels
     let latestMessage = null;
     let latestTimestamp = 0;
 
-    for (const [, channel] of guild.channels.cache) {
+    for (const [, channel] of channels) {
       if (!channel.isTextBased() || channel.isDMBased()) continue;
       
       try {
@@ -338,6 +420,7 @@ async function getSyncStats(db) {
 }
 
 module.exports = {
+  ensureWatermarkForGuild,
   syncMissingMessages,
   initializeWatermark,
   getWatermark,

@@ -24,6 +24,7 @@ const { createAIEngagementRouter } = require("./routes/ai-engagement");
 const { createRateLimitsRouter } = require("./routes/rate-limits");
 const { createCountdownRouter } = require("./routes/countdown");
 const { createWhitelistRouter } = require("./routes/whitelist");
+const { createCommandChannelsRouter } = require("./routes/command-channels");
 const { createAutomodRouter } = require("./routes/automod");
 const { createHistoryRouter } = require("./routes/history");
 const { createChannelsRouter } = require("./routes/channels");
@@ -49,6 +50,9 @@ function createPanelApp({
   getDisabledCommands,
   enableCommand,
   disableCommand,
+  listCommandCategoryChannels,
+  setCommandCategoryChannel,
+  clearCommandCategoryChannel,
   PANEL_LEGACY_PAGES,
 } = {}) {
   if (!client) throw new Error("createPanelApp: client is required");
@@ -245,6 +249,9 @@ function createPanelApp({
     getDisabledCommands,
     enableCommand,
     disableCommand,
+    listCommandCategoryChannels,
+    setCommandCategoryChannel,
+    clearCommandCategoryChannel,
     useLegacyPages,
   };
 
@@ -263,6 +270,7 @@ function createPanelApp({
   app.use(createRateLimitsRouter(routeCtx));
   app.use(createCountdownRouter(routeCtx));
   app.use(createWhitelistRouter(routeCtx));
+  app.use(createCommandChannelsRouter(routeCtx));
   app.use(createAutomodRouter(routeCtx));
   app.use(createHistoryRouter(routeCtx));
   app.use(createChannelsRouter(routeCtx));

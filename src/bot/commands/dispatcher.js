@@ -15,10 +15,42 @@ const { handleAwardsCommand } = require("../../features/weekly-awards");
 const { handleRadioVote, handleRadioTop, handleRadioInfo, handleRadioFans } = require("../../features/radio-vote");
 const { handleSampExtendedCommand, handleSampExtendedAutocomplete } = require("../../features/samp-extended");
 const { handleEventsCommand } = require("../../features/seasonal-events");
+const { handleGameFaqCommand } = require("../../features/game-faq");
 const { getUserBadges, getBadgeDefinitions } = require("../../features/badges");
 const { SAMPStatusTracker } = require("../../features/samp-status");
 const { getLeaderboard } = require("../../features/leaderboard-cache");
 const { handleGiveawayButton } = require("../../features/giveaway");
+
+const SAMP_GAME_COMMAND_CATEGORY = "samp_game";
+const SAMP_LIFE_COMMANDS = [
+  "reg", "balance", "work", "truck", "rob",
+  "dealership", "weaponshop", "buy", "race", "duel",
+  "sellcar", "buycar", "weapon",
+  "bail", "richest", "daily",
+  "pay", "slots", "blackjack", "roulette",
+];
+const SAMP_EXTENDED_COMMANDS = [
+  "businesses", "bizstats", "mbizstats", "buybiz", "collectincome",
+  "maintainbiz", "bizrun",
+  "tune", "tunecar", "switchcar", "garage",
+  "bounty", "bountylist",
+  "heist",
+  "jobs", "dojob",
+  "gang", "gmap", "gcapture", "gsupportbiz", "gangtop",
+  "shopcosmetics", "buycosmetic",
+  "repair",
+  "lottery",
+  "blackmarket",
+  "usejailpass", "userepairkit", "disguise", "hottip", "secretheist",
+  "wiretap", "sabotage", "gangbmorder",
+];
+const SAMP_LIFE_AUTOCOMPLETE_COMMANDS = ["buy", "weapon", "sellcar"];
+const SAMP_EXTENDED_AUTOCOMPLETE_COMMANDS = ["buybiz", "bizstats", "mbizstats", "maintainbiz", "bizrun", "tune", "tunecar", "switchcar", "buycosmetic", "gang", "gcapture", "gsupportbiz"];
+const SAMP_GAME_COMMANDS = new Set([...SAMP_LIFE_COMMANDS, ...SAMP_EXTENDED_COMMANDS]);
+
+function buildRestrictedChannelWarning(channelId) {
+  return `❌ Команды SAMP Life доступны только в канале <#${channelId}>.`;
+}
 
 /**
  * Register the interactionCreate handler for slash command dispatch.
@@ -29,7 +61,7 @@ function registerCommandHandlers(ctx) {
     client, db, dbRun, dbGet, dbAll,
     OWNER_ID, TOKEN,
     // Bot helpers (runtime-constructed, must come from ctx)
-    isCommandDisabled, getUserMessageCount,
+    isCommandDisabled, getCommandCategoryChannel, getUserMessageCount,
     ruPlural, formatTimeOnServer, performUndo,
     registerGuildCommands, backfillGuild,
     holidaysScheduler,
@@ -49,13 +81,26 @@ function registerCommandHandlers(ctx) {
 
     // Handle autocomplete for SAMP Life commands
     if (interaction.isAutocomplete()) {
-      if (["buy", "weapon", "sellcar"].includes(interaction.commandName)) {
+      const guildId = interaction.guild?.id;
+      if (guildId && SAMP_GAME_COMMANDS.has(interaction.commandName)) {
+        try {
+          const restriction = await getCommandCategoryChannel?.(guildId, SAMP_GAME_COMMAND_CATEGORY);
+          if (restriction?.channel_id && restriction.channel_id !== interaction.channelId) {
+            await interaction.respond([]);
+            return;
+          }
+        } catch (e) {
+          console.error("[dispatch] autocomplete restriction check error", e);
+        }
+      }
+
+      if (SAMP_LIFE_AUTOCOMPLETE_COMMANDS.includes(interaction.commandName)) {
         try {
           await handleSampLifeAutocomplete(interaction, db);
         } catch (e) {
           console.error("[samp-life] autocomplete error", e);
         }
-      } else if (["buybiz", "bizstats", "mbizstats", "maintainbiz", "bizrun", "tunecar", "buycosmetic", "gang", "gcapture", "gsupportbiz"].includes(interaction.commandName)) {
+      } else if (SAMP_EXTENDED_AUTOCOMPLETE_COMMANDS.includes(interaction.commandName)) {
         try {
           await handleSampExtendedAutocomplete(interaction, db);
         } catch (e) {
@@ -84,6 +129,21 @@ function registerCommandHandlers(ctx) {
       } catch (err) {
         console.error("Error checking command disabled status:", err);
       }
+
+      if (SAMP_GAME_COMMANDS.has(commandName)) {
+        try {
+          const restriction = await getCommandCategoryChannel?.(guildId, SAMP_GAME_COMMAND_CATEGORY);
+          if (restriction?.channel_id && restriction.channel_id !== interaction.channelId) {
+            await interaction.reply({
+              content: buildRestrictedChannelWarning(restriction.channel_id),
+              ephemeral: true,
+            });
+            return;
+          }
+        } catch (err) {
+          console.error("Error checking command channel restriction:", err);
+        }
+      }
     }
 
     // Holidays commands
@@ -103,13 +163,7 @@ function registerCommandHandlers(ctx) {
 
     // SAMP Life economy commands
     if (
-      [
-        "reg", "balance", "work", "truck", "rob",
-        "dealership", "weaponshop", "buy", "race", "duel",
-        "sellcar", "buycar", "weapon",
-        "bail", "richest", "daily",
-        "pay", "slots", "blackjack", "roulette",
-      ].includes(commandName)
+      SAMP_LIFE_COMMANDS.includes(commandName)
     ) {
       await handleSampLifeCommand({ interaction, db });
       return;
@@ -117,19 +171,7 @@ function registerCommandHandlers(ctx) {
 
     // SAMP Extended economy commands
     if (
-      [
-        "businesses", "bizstats", "mbizstats", "buybiz", "collectincome",
-        "maintainbiz", "bizrun",
-        "tunecar", "garage",
-        "bounty", "bountylist",
-        "heist",
-        "jobs", "dojob",
-        "gang", "gmap", "gcapture", "gsupportbiz",
-        "shopcosmetics", "buycosmetic",
-        "repair",
-        "lottery",
-        "blackmarket",
-      ].includes(commandName)
+      SAMP_EXTENDED_COMMANDS.includes(commandName)
     ) {
       await handleSampExtendedCommand({ interaction, db });
       return;
@@ -310,25 +352,19 @@ function registerCommandHandlers(ctx) {
 
       await interaction.deferReply({ flags: 64 });
 
-      const { syncMissingMessages, initializeWatermark, getWatermark } = require("../../features/incremental-sync");
+      const { syncMissingMessages, ensureWatermarkForGuild } = require("../../features/incremental-sync");
 
-      const watermark = await getWatermark(db, interaction.guild.id);
+      const watermark = await ensureWatermarkForGuild(client, db, interaction.guild.id);
 
-      if (!watermark) {
-        await interaction.editReply({
-          content: "⏳ Маркер не найден. Инициализация из текущего состояния...",
-        });
-
-        const initResult = await initializeWatermark(client, db, interaction.guild.id);
-
-        if (!initResult.success) {
-          return interaction.editReply({
-            content: `❌ Не удалось инициализировать маркер: ${initResult.error}\nСначала выполните полный бэкфилл.`,
-          });
-        }
-
+      if (!watermark.success) {
         return interaction.editReply({
-            content: `✅ Маркер инициализирован на сообщении \`${initResult.messageId}\`\n\nТеперь вы можете использовать эту команду для синхронизации пропущенных сообщений.`,
+          content: `❌ Не удалось инициализировать маркер: ${watermark.error}\nСначала выполните полный бэкфилл.`,
+        });
+      }
+
+      if (watermark.source === "live-init") {
+        return interaction.editReply({
+          content: `✅ Маркер инициализирован на текущем сообщении \`${watermark.messageId}\`.\n\nИсторические сообщения до этого момента не будут восстановлены без полного бэкфилла.`,
         });
       }
 
@@ -983,7 +1019,7 @@ function registerCommandHandlers(ctx) {
 
       // --- D-track: Level commands ---
     } else if (commandName === "level" || commandName === "levels-top") {
-      await handleLevelCommand(interaction, db);
+      await handleLevelCommand({ interaction, db });
 
       // --- D-track: Weekly awards command ---
     } else if (commandName === "awards") {
@@ -998,6 +1034,8 @@ function registerCommandHandlers(ctx) {
       await handleRadioInfo(interaction, db);
     } else if (commandName === "radio-fans") {
       await handleRadioFans(interaction, db);
+    } else if (commandName === "faq") {
+      await handleGameFaqCommand(interaction);
 
       // --- Badges / achievements command ---
     } else if (commandName === "badges") {

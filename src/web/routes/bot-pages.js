@@ -9,6 +9,7 @@ const { generateCommandsPage } = require("../commands-page");
 const { generateAccuracyMonitorPage } = require("../accuracy-monitor-page");
 const { generateRateLimiterPage } = require("../rate-limiter-page");
 const { generateWhitelistPage } = require("../whitelist-page");
+const { generateCommandChannelsPage } = require("../command-channels-page");
 const { generateAutoModPage } = require("../automod-page");
 const { generateHistoryPage } = require("../history-page");
 const { generateDebugReportsPage } = require("../debug-reports-page");
@@ -122,6 +123,12 @@ function createBotPagesRouter(ctx) {
     const bot = bots.find((b) => b.key === req.params.botKey);
     if (!bot) return res.status(404).send("Bot not found");
     res.send(generateWhitelistPage(bot, PANEL_BASE));
+  });
+
+  router.get(`${PANEL_BASE}/bot/:botKey/command-channels`, requireAuth, async (req, res) => {
+    const bot = bots.find((b) => b.key === req.params.botKey);
+    if (!bot) return res.status(404).send("Bot not found");
+    res.send(generateCommandChannelsPage(bot, PANEL_BASE));
   });
 
   // AutoMod page

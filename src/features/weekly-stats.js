@@ -33,8 +33,8 @@ async function ensureWeeklyStatsTable(db) {
 /**
  * Get current week start (Monday)
  */
-function getCurrentWeekStart() {
-  const now = new Date();
+function getCurrentWeekStart(date = new Date()) {
+  const now = new Date(date);
   const day = now.getDay();
   const diff = day === 0 ? -6 : 1 - day; // Adjust to Monday
   const monday = new Date(now);
@@ -46,18 +46,19 @@ function getCurrentWeekStart() {
 /**
  * Increment weekly message count
  */
-async function incrementWeeklyCount(db, guildId, userId) {
-  const weekStart = getCurrentWeekStart();
+async function incrementWeeklyCount(db, guildId, userId, date = new Date(), amount = 1) {
+  const weekStart = getCurrentWeekStart(date);
+  const delta = Math.max(1, Number(amount) || 1);
 
   await dbRun(
     db,
     `
     INSERT INTO weekly_stats (guild_id, user_id, week_start, message_count) 
-    VALUES (?, ?, ?, 1)
+    VALUES (?, ?, ?, ?)
     ON CONFLICT(guild_id, user_id, week_start) 
-    DO UPDATE SET message_count = message_count + 1
+    DO UPDATE SET message_count = message_count + excluded.message_count
   `,
-    [guildId, userId, weekStart]
+    [guildId, userId, weekStart, delta]
   );
 }
 
@@ -98,18 +99,19 @@ async function getUserWeeklyStats(db, guildId, userId) {
 /**
  * Decrement weekly message count
  */
-async function decrementWeeklyCount(db, guildId, userId) {
-  const weekStart = getCurrentWeekStart();
+async function decrementWeeklyCount(db, guildId, userId, date = new Date(), amount = 1) {
+  const weekStart = getCurrentWeekStart(date);
+  const delta = Math.max(1, Number(amount) || 1);
 
   await dbRun(
     db,
     `UPDATE weekly_stats 
      SET message_count = CASE 
-       WHEN message_count - 1 < 0 THEN 0 
-       ELSE message_count - 1 
+       WHEN message_count - ? < 0 THEN 0 
+       ELSE message_count - ? 
      END
      WHERE guild_id = ? AND user_id = ? AND week_start = ?`,
-    [guildId, userId, weekStart]
+    [delta, delta, guildId, userId, weekStart]
   );
 }
 

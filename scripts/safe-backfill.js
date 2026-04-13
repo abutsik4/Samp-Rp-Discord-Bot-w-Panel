@@ -21,6 +21,7 @@ const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
 require("dotenv").config();
+const { createWhitelistSet, isChannelWhitelistedForCounting } = require("../src/features/message-counting-rules");
 
 // Color codes for terminal output
 const colors = {
@@ -95,9 +96,43 @@ function sleep(ms) {
 const stats = {
   totalMessages: 0,
   totalChannels: 0,
+  totalSkippedTargets: 0,
   usersFound: 0,
   errors: 0,
 };
+
+async function collectGuildTargets(guild) {
+  const targets = new Map();
+  const channels = await guild.channels.fetch();
+
+  const addTarget = (channel) => {
+    if (!channel?.id) return;
+    if (!channel.isTextBased || !channel.isTextBased()) return;
+    if (channel.isDMBased && channel.isDMBased()) return;
+    if (channel.viewable === false) return;
+    targets.set(channel.id, channel);
+  };
+
+  for (const [, channel] of channels) {
+    addTarget(channel);
+
+    if (!channel?.threads || typeof channel.threads.fetch !== "function") {
+      continue;
+    }
+
+    try {
+      const fetchedThreads = await channel.threads.fetch({ archived: true });
+      const threadCollection = fetchedThreads?.threads || fetchedThreads;
+      for (const [, thread] of threadCollection) {
+        addTarget(thread);
+      }
+    } catch (err) {
+      console.warn(`  ${colors.yellow}⚠ Could not fetch threads for #${channel.name}: ${err.message}${colors.reset}`);
+    }
+  }
+
+  return Array.from(targets.values());
+}
 
 async function fetchDiscordCounts(client) {
   const discordCounts = new Map(); // "guildId:userId" -> count
@@ -109,19 +144,27 @@ async function fetchDiscordCounts(client) {
   
   for (const [guildId, guild] of guilds) {
     const fullGuild = await guild.fetch();
+    const whitelistRows = await dbAll(
+      `SELECT channel_id FROM channel_whitelist WHERE guild_id = ?`,
+      [guildId]
+    );
+    const whitelistSet = createWhitelistSet(whitelistRows);
     console.log(`${colors.cyan}Guild: ${fullGuild.name} (${guildId})${colors.reset}`);
-    
-    const channels = await fullGuild.channels.fetch();
 
-    for (const [, channel] of channels) {
-      if (!channel || !channel.isTextBased || !channel.isTextBased()) continue;
-      if (channel.isThread && channel.isThread()) continue;
+    const targets = await collectGuildTargets(fullGuild);
+
+    for (const channel of targets) {
+      if (!isChannelWhitelistedForCounting(channel, whitelistSet)) {
+        stats.totalSkippedTargets++;
+        continue;
+      }
 
       console.log(`  ${colors.dim}Fetching channel: #${channel.name} (${channel.id})${colors.reset}`);
       stats.totalChannels++;
 
       let lastId = null;
       let channelCount = 0;
+      let pageCount = 0;
 
       while (true) {
         const options = { limit: 100 };
@@ -138,6 +181,8 @@ async function fetchDiscordCounts(client) {
 
         if (messages.size === 0) break;
 
+        pageCount++;
+
         for (const message of messages.values()) {
           if (!message.guild) continue;
           if (!message.author) continue;
@@ -150,15 +195,19 @@ async function fetchDiscordCounts(client) {
         }
 
         lastId = messages.last().id;
+
+        if (pageCount % 50 === 0) {
+          console.log(`  ${colors.dim}... #${channel.name}: scanned ${pageCount * 100} messages (${channelCount} countable)${colors.reset}`);
+        }
         
-        // Rate limiting (be gentle with Discord API)
-        await sleep(500);
+        // Sequential requests plus discord.js rate limiting are enough here.
+        await sleep(100);
       }
 
       console.log(`  ${colors.green}✓ Fetched ${channelCount} messages from #${channel.name}${colors.reset}`);
       
       // Delay between channels
-      await sleep(1000);
+      await sleep(250);
     }
 
     console.log();
@@ -251,12 +300,16 @@ async function compareWithDatabase(discordCounts) {
 }
 
 async function displayResults(comparison) {
+  const recoverableDiscrepancies = comparison.discrepancies.filter((d) => d.diff > 0);
+  const recoverableMessages = recoverableDiscrepancies.reduce((sum, d) => sum + d.diff, 0);
+
   console.log(`${colors.bright}${colors.cyan}====================================${colors.reset}`);
   console.log(`${colors.bright}${colors.cyan}         Backfill Results           ${colors.reset}`);
   console.log(`${colors.bright}${colors.cyan}====================================${colors.reset}`);
   console.log();
   console.log(`${colors.bright}Discord Messages Fetched:${colors.reset} ${stats.totalMessages.toLocaleString()}`);
   console.log(`${colors.bright}Channels Processed:${colors.reset} ${stats.totalChannels}`);
+  console.log(`${colors.bright}Targets Skipped by Whitelist:${colors.reset} ${stats.totalSkippedTargets}`);
   console.log(`${colors.bright}Users Found in Discord:${colors.reset} ${stats.usersFound.toLocaleString()}`);
   console.log(`${colors.bright}Database Records:${colors.reset} ${comparison.totalDbRecords.toLocaleString()}`);
   if (stats.errors > 0) {
@@ -267,6 +320,7 @@ async function displayResults(comparison) {
   console.log(`${colors.yellow}⚠ Mismatched:${colors.reset} ${comparison.incorrectUsers} users`);
   console.log(`${colors.red}✗ Missing in DB:${colors.reset} ${comparison.missingInDb} users`);
   console.log(`${colors.magenta}⚠ Extra in DB:${colors.reset} ${comparison.extraInDb} users`);
+  console.log(`${colors.cyan}↥ Recoverable undercounts:${colors.reset} ${recoverableDiscrepancies.length} users / ${recoverableMessages.toLocaleString()} messages`);
   console.log();
 
   if (comparison.discrepancies.length > 0) {
@@ -299,35 +353,30 @@ async function displayResults(comparison) {
     console.log();
 
     if (shouldFix) {
-      console.log(`${colors.bright}${colors.yellow}Applying fixes...${colors.reset}`);
+      console.log(`${colors.bright}${colors.yellow}Applying conservative fixes (missing/undercounted only)...${colors.reset}`);
       console.log();
 
       let fixed = 0;
+      let skipped = 0;
       let errors = 0;
 
       for (const d of comparison.discrepancies) {
+        if (d.diff <= 0) {
+          skipped++;
+          continue;
+        }
+
         try {
-          if (d.type === "extra" && d.database > 0) {
-            // Remove users not found in Discord
-            await dbRun(
-              `DELETE FROM user_stats WHERE guild_id = ? AND user_id = ?`,
-              [d.guild_id, d.user_id]
-            );
-            console.log(`${colors.green}✓ Removed extra entry for user ${d.user_id.substring(0, 12)}...${colors.reset}`);
-            fixed++;
-          } else {
-            // Insert or update with Discord count
-            await dbRun(
-              `INSERT INTO user_stats (guild_id, user_id, message_count)
-               VALUES (?, ?, ?)
-               ON CONFLICT(guild_id, user_id)
-               DO UPDATE SET message_count = excluded.message_count`,
-              [d.guild_id, d.user_id, d.discord]
-            );
-            const action = d.type === "missing" ? "Added" : "Updated";
-            console.log(`${colors.green}✓ ${action} user ${d.user_id.substring(0, 12)}...: ${d.database} → ${d.discord}${colors.reset}`);
-            fixed++;
-          }
+          await dbRun(
+            `INSERT INTO user_stats (guild_id, user_id, message_count)
+             VALUES (?, ?, ?)
+             ON CONFLICT(guild_id, user_id)
+             DO UPDATE SET message_count = excluded.message_count`,
+            [d.guild_id, d.user_id, d.discord]
+          );
+          const action = d.type === "missing" ? "Added" : "Updated";
+          console.log(`${colors.green}✓ ${action} user ${d.user_id.substring(0, 12)}...: ${d.database} → ${d.discord}${colors.reset}`);
+          fixed++;
         } catch (err) {
           console.error(`${colors.red}✗ Error fixing ${d.user_id}:${colors.reset}`, err.message);
           errors++;
@@ -336,6 +385,9 @@ async function displayResults(comparison) {
 
       console.log();
       console.log(`${colors.bright}${colors.green}Fixed ${fixed} discrepancies${colors.reset}`);
+      if (skipped > 0) {
+        console.log(`${colors.bright}${colors.yellow}Skipped ${skipped} non-recoverable or downward discrepancies${colors.reset}`);
+      }
       if (errors > 0) {
         console.log(`${colors.bright}${colors.red}Encountered ${errors} errors${colors.reset}`);
       }

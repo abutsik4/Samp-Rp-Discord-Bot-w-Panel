@@ -25,7 +25,9 @@ module.exports = {
       // Auto-restart settings
       watch: false,
       ignore_watch: ["node_modules", "data", ".git", ".env"],
-      max_memory_restart: "1G",
+      // ML models can push steady-state usage well above 512M.
+      // Keep a safety restart threshold that still avoids restart loops.
+      max_memory_restart: "2G",
       
       // Logging
       error_file: "logs/err.log",

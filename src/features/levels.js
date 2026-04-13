@@ -233,7 +233,14 @@ function getLevelsCommandBuilders() {
 /**
  * Handle level slash commands
  */
-async function handleLevelCommand({ interaction, db }) {
+async function handleLevelCommand(input, dbArg) {
+  const interaction = input?.interaction || input;
+  const db = input?.db || dbArg;
+
+  if (!interaction || !db) {
+    throw new Error("LEVEL_INVALID_HANDLER_ARGS");
+  }
+
   const { commandName } = interaction;
 
   if (commandName === "level") {

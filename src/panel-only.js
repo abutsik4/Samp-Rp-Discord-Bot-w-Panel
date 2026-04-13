@@ -111,6 +111,9 @@ async function startPanelOnly() {
     getDisabledCommands,
     enableCommand,
     disableCommand,
+    listCommandCategoryChannels,
+    setCommandCategoryChannel,
+    clearCommandCategoryChannel,
   } = helpers;
 
   const bots = [{ key: "samprp", name: "JepsenCloud Bot", kind: "discord", client: discordClient, guild_id: "537187880842559499" }];
@@ -134,6 +137,9 @@ async function startPanelOnly() {
     getDisabledCommands,
     enableCommand,
     disableCommand,
+    listCommandCategoryChannels,
+    setCommandCategoryChannel,
+    clearCommandCategoryChannel,
   });
 
   app.listen(PORT, () => {

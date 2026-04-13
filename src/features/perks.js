@@ -1,6 +1,11 @@
 "use strict";
 
 const { dbRun, dbAll, dbGet } = require("../utils/db-helpers");
+const { withSerializedTransaction } = require("../utils/sqlite-transaction");
+
+async function withTransaction(db, fn) {
+  return withSerializedTransaction(db, fn);
+}
 
 async function ensurePerksTables(db) {
   await dbRun(
@@ -22,6 +27,16 @@ async function ensurePerksTables(db) {
 
   await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_perk_rules_guild ON perk_rules(guild_id)`);
   await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_perk_rules_trigger ON perk_rules(guild_id, trigger_type, trigger_value)`);
+  await dbRun(
+    db,
+    `CREATE TABLE IF NOT EXISTS perk_grant_claims (
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      claim_key TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+      PRIMARY KEY (guild_id, user_id, claim_key)
+    )`
+  );
 }
 
 async function listPerkRules(db, guildId) {
@@ -188,23 +203,25 @@ async function applyMoneyXpGrants(db, guildId, userId, triggers) {
       const amount = Number(rule.action_value);
       if (!amount || amount <= 0) continue;
 
-      // Check if already granted via ledger
       const key = `perk_money_${type}_${value}`;
-      const already = await dbGet(
-        db,
-        `SELECT 1 FROM samp_ledger WHERE type = 'perk_grant' AND to_user = ? AND meta_json LIKE ?`,
-        [userId, `%"key":"${key}"%`]
-      );
-      if (already) continue;
-
       try {
-        await dbRun(db, `UPDATE samp_users SET money = money + ? WHERE user_id = ?`, [amount, userId]);
-        await dbRun(
-          db,
-          `INSERT INTO samp_ledger(type, from_user, to_user, amount, meta_json) VALUES('perk_grant', NULL, ?, ?, ?)`,
-          [userId, amount, JSON.stringify({ key, trigger: type, value })]
-        );
-        moneyGranted += amount;
+        const granted = await withTransaction(db, async () => {
+          const claim = await dbRun(
+            db,
+            `INSERT OR IGNORE INTO perk_grant_claims(guild_id, user_id, claim_key) VALUES(?, ?, ?)`,
+            [guildId, userId, key]
+          );
+          if (!claim || Number(claim.changes || 0) === 0) return false;
+
+          await dbRun(db, `UPDATE samp_users SET money = money + ? WHERE user_id = ?`, [amount, userId]);
+          await dbRun(
+            db,
+            `INSERT INTO samp_ledger(type, from_user, to_user, amount, meta_json) VALUES('perk_grant', NULL, ?, ?, ?)`,
+            [userId, amount, JSON.stringify({ key, trigger: type, value, guildId })]
+          );
+          return true;
+        });
+        if (granted) moneyGranted += amount;
       } catch (_) {}
     }
 
@@ -222,21 +239,24 @@ async function applyMoneyXpGrants(db, guildId, userId, triggers) {
       if (!amount || amount <= 0) continue;
 
       const key = `perk_xp_${type}_${value}`;
-      const already = await dbGet(
-        db,
-        `SELECT 1 FROM samp_ledger WHERE type = 'perk_grant_xp' AND to_user = ? AND meta_json LIKE ?`,
-        [userId, `%"key":"${key}"%`]
-      );
-      if (already) continue;
-
       try {
-        await dbRun(db, `UPDATE user_levels SET xp = xp + ? WHERE guild_id = ? AND user_id = ?`, [amount, guildId, userId]);
-        await dbRun(
-          db,
-          `INSERT INTO samp_ledger(type, from_user, to_user, amount, meta_json) VALUES('perk_grant_xp', NULL, ?, ?, ?)`,
-          [userId, amount, JSON.stringify({ key, trigger: type, value })]
-        );
-        xpGranted += amount;
+        const granted = await withTransaction(db, async () => {
+          const claim = await dbRun(
+            db,
+            `INSERT OR IGNORE INTO perk_grant_claims(guild_id, user_id, claim_key) VALUES(?, ?, ?)`,
+            [guildId, userId, key]
+          );
+          if (!claim || Number(claim.changes || 0) === 0) return false;
+
+          await dbRun(db, `UPDATE user_levels SET xp = xp + ? WHERE guild_id = ? AND user_id = ?`, [amount, guildId, userId]);
+          await dbRun(
+            db,
+            `INSERT INTO samp_ledger(type, from_user, to_user, amount, meta_json) VALUES('perk_grant_xp', NULL, ?, ?, ?)`,
+            [userId, amount, JSON.stringify({ key, trigger: type, value, guildId })]
+          );
+          return true;
+        });
+        if (granted) xpGranted += amount;
       } catch (_) {}
     }
   }
@@ -360,5 +380,6 @@ module.exports = {
   upsertPerkRule,
   deletePerkRule,
   applyRoleGrants,
+  applyMoneyXpGrants,
   reconcilePerksForGuild,
 };

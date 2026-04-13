@@ -59,6 +59,9 @@ function createWebServer({ discordClient, statsDb }) {
     getDisabledCommands,
     enableCommand,
     disableCommand,
+    listCommandCategoryChannels,
+    setCommandCategoryChannel,
+    clearCommandCategoryChannel,
   } = helpers;
 
   const bots = [
@@ -96,6 +99,9 @@ function createWebServer({ discordClient, statsDb }) {
     getDisabledCommands,
     enableCommand,
     disableCommand,
+    listCommandCategoryChannels,
+    setCommandCategoryChannel,
+    clearCommandCategoryChannel,
   });
 
   // Legacy convenience redirects

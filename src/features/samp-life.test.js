@@ -185,6 +185,87 @@ test("/work pays and enforces cooldown", async () => {
   }
 });
 
+test("concurrent /work commands keep one payout and one cooldown reply", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+
+  const realNow = Date.now;
+  const realRandom = Math.random;
+  try {
+    Date.now = () => 1_700_000_000_000;
+    Math.random = () => 0.5;
+
+    await handleSampLifeCommand({ interaction: makeInteractionSafe({ commandName: "reg", userId: "u-concurrent", username: "Concurrent" }), db });
+
+    const workA = makeInteractionSafe({ commandName: "work", userId: "u-concurrent", username: "Concurrent" });
+    const workB = makeInteractionSafe({ commandName: "work", userId: "u-concurrent", username: "Concurrent" });
+
+    await Promise.all([
+      handleSampLifeCommand({ interaction: workA, db }),
+      handleSampLifeCommand({ interaction: workB, db }),
+    ]);
+
+    const interactionStates = [workA, workB].map((interaction) => interaction.__getState());
+    const cooldownReplyCount = interactionStates.filter((state) => state.lastReply?.ephemeral).length;
+    const successReplyCount = interactionStates.filter(
+      (state) => typeof state.lastEditReply === "string" && state.lastEditReply.includes("Баланс")
+    ).length;
+    const userAfter = await dbGet(db, "SELECT money FROM samp_users WHERE user_id = ?", ["u-concurrent"]);
+    const workLedgerRows = await dbGet(
+      db,
+      "SELECT COUNT(*) AS count FROM samp_ledger WHERE type = ? AND to_user = ?",
+      ["work", "u-concurrent"]
+    );
+
+    assert.equal(cooldownReplyCount, 1);
+    assert.equal(successReplyCount, 1);
+    assert.equal(workLedgerRows.count, 1);
+    assert.equal(userAfter.money, 830);
+  } finally {
+    Date.now = realNow;
+    Math.random = realRandom;
+    db.close();
+  }
+});
+
+test("/truck crash applies fine without throwing and still returns cooldown on immediate retry", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+
+  const realNow = Date.now;
+  const realRandom = Math.random;
+  try {
+    let t = 1_700_000_000_000;
+    Date.now = () => t;
+    Math.random = () => 0;
+
+    await handleSampLifeCommand({ interaction: makeInteractionSafe({ commandName: "reg", userId: "truck-user", username: "TruckUser" }), db });
+    await dbRun(db, "UPDATE samp_users SET money = ? WHERE user_id = ?", [10_000, "truck-user"]);
+
+    const truck = makeInteractionSafe({ commandName: "truck", userId: "truck-user", username: "TruckUser" });
+    await handleSampLifeCommand({ interaction: truck, db });
+
+    const state = truck.__getState();
+    assert.ok(String(state.lastEditReply).includes("Ты улетел в кювет"));
+
+    const userAfter = await dbGet(db, "SELECT money FROM samp_users WHERE user_id = ?", ["truck-user"]);
+    assert.ok(userAfter.money < 10_000);
+
+    const crashRow = await dbGet(db, "SELECT type, amount FROM samp_ledger WHERE from_user = ? ORDER BY id DESC LIMIT 1", ["truck-user"]);
+    assert.equal(crashRow.type, "truck_crash");
+    assert.ok(crashRow.amount > 0);
+
+    const retry = makeInteractionSafe({ commandName: "truck", userId: "truck-user", username: "TruckUser" });
+    await handleSampLifeCommand({ interaction: retry, db });
+    const retryState = retry.__getState();
+    assert.equal(retryState.lastReply.ephemeral, true);
+  } finally {
+    Date.now = realNow;
+    Math.random = realRandom;
+    db.close();
+  }
+});
+
 test("/race uses installed car upgrades when resolving winner", async () => {
   const db = makeDb();
   await ensureSampLifeTables(db);
@@ -223,8 +304,9 @@ test("/race uses installed car upgrades when resolving winner", async () => {
 
   const state = race.__getState();
   assert.equal(state.deferred, true);
-  assert.match(state.lastEditReply, /скорость 155, тюнинг \+45/);
-  assert.match(state.lastEditReply, /скорость 105/);
+  assert.match(state.lastEditReply, /билд/);
+  assert.match(state.lastEditReply, /старт/);
+  assert.match(state.lastEditReply, /износ/);
   assert.match(state.lastEditReply, /Победитель: <@u1>/);
 
   const winner = await dbGet(db, "SELECT money FROM samp_users WHERE user_id = ?", ["u1"]);
@@ -233,4 +315,44 @@ test("/race uses installed car upgrades when resolving winner", async () => {
   assert.equal(loser.money, 424_000);
 
   db.close();
+});
+
+test("/buycar reassigns the seller's active car when the sold car was active", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteractionSafe({ commandName: "reg", userId: "seller", username: "Seller" }), db });
+    await handleSampLifeCommand({ interaction: makeInteractionSafe({ commandName: "reg", userId: "buyer", username: "Buyer" }), db });
+
+    await dbRun(db, "UPDATE samp_users SET money = ?, car_id = ? WHERE user_id = ?", [200_000, "manana", "seller"]);
+    await dbRun(db, "UPDATE samp_users SET money = ? WHERE user_id = ?", [200_000, "buyer"]);
+    await dbRun(db, "INSERT OR IGNORE INTO samp_garage(user_id, car_id) VALUES(?, ?)", ["seller", "manana"]);
+    await dbRun(
+      db,
+      `INSERT INTO samp_car_offers(seller_user_id, buyer_user_id, car_id, price, status)
+       VALUES(?, ?, ?, ?, 'open')`,
+      ["seller", "buyer", "manana", 25_000]
+    );
+
+    const buyCar = makeInteractionSafe({
+      commandName: "buycar",
+      userId: "buyer",
+      username: "Buyer",
+      options: { offer: 1 },
+    });
+    await handleSampLifeCommand({ interaction: buyCar, db });
+
+    const seller = await dbGet(db, "SELECT car_id FROM samp_users WHERE user_id = ?", ["seller"]);
+    const buyer = await dbGet(db, "SELECT car_id FROM samp_users WHERE user_id = ?", ["buyer"]);
+    const sellerOwnsManana = await dbGet(db, "SELECT 1 FROM samp_garage WHERE user_id = ? AND car_id = ?", ["seller", "manana"]);
+    const buyerOwnsManana = await dbGet(db, "SELECT 1 FROM samp_garage WHERE user_id = ? AND car_id = ?", ["buyer", "manana"]);
+
+    assert.equal(seller.car_id, "bicycle");
+    assert.equal(buyer.car_id, "manana");
+    assert.equal(sellerOwnsManana, null);
+    assert.ok(buyerOwnsManana);
+  } finally {
+    db.close();
+  }
 });

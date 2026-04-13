@@ -161,14 +161,16 @@ test("bulk decrement reduces counts per user and clears index", async () => {
 
   await dbRun(db, `INSERT INTO user_stats (guild_id, user_id, message_count) VALUES (?, ?, ?)`, ["g1", "u1", 5]);
   await dbRun(db, `INSERT INTO user_stats (guild_id, user_id, message_count) VALUES (?, ?, ?)`, ["g1", "u2", 3]);
+  await dbRun(db, `INSERT INTO daily_channel_stats (guild_id, user_id, channel_id, message_date, count) VALUES (?, ?, ?, ?, ?)`, ["g1", "u1", "c1", "2026-04-07", 2]);
+  await dbRun(db, `INSERT INTO daily_channel_stats (guild_id, user_id, channel_id, message_date, count) VALUES (?, ?, ?, ?, ?)`, ["g1", "u2", "c1", "2026-04-07", 1]);
 
-  await dbRun(db, `INSERT INTO message_index (guild_id, message_id, user_id) VALUES (?, ?, ?)`, ["g1", "m1", "u1"]);
-  await dbRun(db, `INSERT INTO message_index (guild_id, message_id, user_id) VALUES (?, ?, ?)`, ["g1", "m2", "u1"]);
-  await dbRun(db, `INSERT INTO message_index (guild_id, message_id, user_id) VALUES (?, ?, ?)`, ["g1", "m3", "u2"]);
+  await dbRun(db, `INSERT INTO message_index (guild_id, message_id, user_id, channel_id, created_at) VALUES (?, ?, ?, ?, ?)`, ["g1", "m1", "u1", "c1", "2026-04-07T10:00:00.000Z"]);
+  await dbRun(db, `INSERT INTO message_index (guild_id, message_id, user_id, channel_id, created_at) VALUES (?, ?, ?, ?, ?)`, ["g1", "m2", "u1", "c1", "2026-04-07T10:01:00.000Z"]);
+  await dbRun(db, `INSERT INTO message_index (guild_id, message_id, user_id, channel_id, created_at) VALUES (?, ?, ?, ?, ?)`, ["g1", "m3", "u2", "c1", "2026-04-07T10:02:00.000Z"]);
 
   const userCounts = new Map([
-    ["u1", 2],
-    ["u2", 1],
+    ["u1", 9],
+    ["u2", 9],
   ]);
 
   const messageIds = ["m1", "m2", "m3"];
@@ -177,8 +179,12 @@ test("bulk decrement reduces counts per user and clears index", async () => {
 
   const stat1 = await dbGet(db, `SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`, ["g1", "u1"]);
   const stat2 = await dbGet(db, `SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`, ["g1", "u2"]);
+  const daily1 = await dbGet(db, `SELECT count FROM daily_channel_stats WHERE guild_id = ? AND user_id = ? AND channel_id = ? AND message_date = ?`, ["g1", "u1", "c1", "2026-04-07"]);
+  const daily2 = await dbGet(db, `SELECT count FROM daily_channel_stats WHERE guild_id = ? AND user_id = ? AND channel_id = ? AND message_date = ?`, ["g1", "u2", "c1", "2026-04-07"]);
   assert.equal(stat1?.message_count, 3);
   assert.equal(stat2?.message_count, 2);
+  assert.equal(daily1?.count, 0);
+  assert.equal(daily2?.count, 0);
 
   const remaining = await dbAll(db, `SELECT message_id FROM message_index WHERE guild_id = ?`, ["g1"]);
   assert.equal(remaining.length, 0);
@@ -230,6 +236,38 @@ test("processErrorQueue bumps retry_count when operations keep failing", async (
   const queueRows = await dbAll(db, `SELECT retry_count FROM message_count_errors WHERE guild_id = ? AND user_id = ? ORDER BY id ASC`, ["g1", "u1"]);
   assert.equal(queueRows.length, 1);
   assert.equal(queueRows[0]?.retry_count, 1);
+
+  await closeDb(db);
+});
+
+test("processErrorQueue records skip event when increment replay lacks channel metadata", async () => {
+  const db = createDb();
+  await createErrorQueueOnlySchema(db);
+
+  await dbRun(
+    db,
+    `INSERT INTO message_count_errors (guild_id, user_id, message_id, operation, error, retry_count)
+     VALUES (?, ?, ?, 'increment', 'missing channel metadata', 0)`,
+    ["g1", "u1", "m11"]
+  );
+
+  const result = await processErrorQueue(db);
+  const queueRow = await dbGet(
+    db,
+    `SELECT retry_count FROM message_count_errors WHERE guild_id = ? AND user_id = ? AND message_id = ?`,
+    ["g1", "u1", "m11"]
+  );
+  const skipEvent = await dbGet(
+    db,
+    `SELECT event_type, details FROM message_count_events WHERE guild_id = ? AND user_id = ? AND message_id = ? ORDER BY id DESC LIMIT 1`,
+    ["g1", "u1", "m11"]
+  );
+
+  assert.equal(result.processed, 1);
+  assert.equal(result.succeeded, 0);
+  assert.equal(queueRow?.retry_count, 1);
+  assert.equal(skipEvent?.event_type, "skip");
+  assert.match(skipEvent?.details || "", /missing_channel_id_for_replay/);
 
   await closeDb(db);
 });

@@ -2,7 +2,17 @@
 
 const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
 const { dbRun, dbGet, dbAll } = require("../utils/db-helpers");
+const { withSerializedTransaction } = require("../utils/sqlite-transaction");
 const { getUserCosmetics, applyUserCosmeticsToEmbed } = require("./samp-cosmetics");
+const {
+  CAR_TUNING_PARTS,
+  TUNE_LEVEL_MAX,
+  TUNE_LEVEL_XP_STEP,
+  buildCarTuningProfile,
+  getNextTuningLevelProgress,
+  getTuningLevelFromExp,
+  getTuningPart,
+} = require("./constants/car-tuning");
 
 // -------------------------
 // Game constants (MVP)
@@ -132,6 +142,20 @@ const ITEMS = {
   molotov: { name: "Коктейль Молотова", price: 5_000, dmg: [20, 35] },
 };
 
+const BLACK_MARKET_INVENTORY_LABELS = {
+  bm_armor: "Бронежилет",
+  bm_map: "Секретная карта",
+  bm_nos_boost: "Нитро",
+  bm_jail_pass: "Фальшивые документы",
+  bm_medkit: "Аптечка",
+  bm_wiretap: "Прослушка",
+  bm_sabotage: "Саботаж",
+  bm_laundering: "Отмывание",
+  bm_repair_kit: "Набор для ремонта",
+  bm_disguise: "Маскировка",
+  bm_hot_tip: "Наводка",
+};
+
 const COOLDOWNS_MS = {
   work: 60_000,
   truck: 15 * 60_000,
@@ -208,55 +232,258 @@ function itemInfo(itemId) {
   return ITEMS[itemId] || null;
 }
 
-const CAR_UPGRADE_SPEED_BONUSES = {
-  nos: 10,
-  turbo: 15,
-  hydraulics: 0,
-  wheels: 3,
-  bodykit: 5,
-  engine: 20,
-};
+function isMissingTableError(error, tableName = "") {
+  const message = String(error?.message || error || "");
+  return message.includes("no such table") && (!tableName || message.includes(tableName));
+}
 
-async function getCarUpgradeSpeedBonus(db, userId, carId) {
+async function getInstalledCarUpgradeRows(db, userId, carId) {
   try {
-    const upgrades = await dbAll(
+    return await dbAll(
       db,
-      "SELECT upgrade_id FROM samp_car_upgrades WHERE user_id = ? AND car_id = ?",
+      `SELECT upgrade_id, durability, installed_at, cosmetic_variant
+       FROM samp_car_upgrades
+       WHERE user_id = ? AND car_id = ?
+       ORDER BY installed_at ASC, upgrade_id ASC`,
       [String(userId), String(carId)]
     );
-    return (upgrades || []).reduce(
-      (sum, row) => sum + (CAR_UPGRADE_SPEED_BONUSES[row.upgrade_id] || 0),
-      0
-    );
   } catch (error) {
-    if (String(error?.message || error).includes("no such table")) {
-      return 0;
+    if (String(error?.message || error || "").includes("no such column")) {
+      const fallbackRows = await dbAll(
+        db,
+        `SELECT upgrade_id
+         FROM samp_car_upgrades
+         WHERE user_id = ? AND car_id = ?
+         ORDER BY upgrade_id ASC`,
+        [String(userId), String(carId)]
+      );
+      return (fallbackRows || []).map((row) => ({
+        ...row,
+        durability: 100,
+        installed_at: null,
+        cosmetic_variant: null,
+      }));
+    }
+    if (isMissingTableError(error, "samp_car_upgrades")) {
+      return [];
     }
     throw error;
   }
 }
 
-async function getRaceCarProfile(db, userId, carId) {
+async function getUserRaceStats(db, userId) {
+  try {
+    await dbRun(
+      db,
+      `INSERT OR IGNORE INTO samp_race_stats(user_id, races_total, races_won, max_speed_reached, total_winnings)
+       VALUES(?, 0, 0, 0, 0)`,
+      [String(userId)]
+    );
+    const row = await dbGet(
+      db,
+      `SELECT user_id, races_total, races_won, max_speed_reached, total_winnings
+       FROM samp_race_stats WHERE user_id = ?`,
+      [String(userId)]
+    );
+    return row || {
+      user_id: String(userId),
+      races_total: 0,
+      races_won: 0,
+      max_speed_reached: 0,
+      total_winnings: 0,
+    };
+  } catch (error) {
+    if (isMissingTableError(error, "samp_race_stats")) {
+      return {
+        user_id: String(userId),
+        races_total: 0,
+        races_won: 0,
+        max_speed_reached: 0,
+        total_winnings: 0,
+      };
+    }
+    throw error;
+  }
+}
+
+async function getOrCreateCarTuningProgress(db, userId, carId) {
+  const defaults = {
+    user_id: String(userId),
+    car_id: String(carId),
+    level: 1,
+    exp: 0,
+    next: getNextTuningLevelProgress(0),
+  };
+
+  try {
+    await dbRun(
+      db,
+      `INSERT OR IGNORE INTO samp_car_tuning_level(user_id, car_id, level, exp)
+       VALUES(?, ?, 1, 0)`,
+      [String(userId), String(carId)]
+    );
+    const row = await dbGet(
+      db,
+      `SELECT user_id, car_id, level, exp, updated_at
+       FROM samp_car_tuning_level
+       WHERE user_id = ? AND car_id = ?`,
+      [String(userId), String(carId)]
+    );
+    if (!row) return defaults;
+    const exp = Math.max(0, Math.floor(Number(row.exp) || 0));
+    const level = Math.min(TUNE_LEVEL_MAX, Math.max(1, Math.floor(Number(row.level) || getTuningLevelFromExp(exp))));
+    return {
+      ...row,
+      level,
+      exp,
+      next: getNextTuningLevelProgress(exp),
+    };
+  } catch (error) {
+    if (isMissingTableError(error, "samp_car_tuning_level")) {
+      return defaults;
+    }
+    throw error;
+  }
+}
+
+async function awardCarTuningProgress(db, userId, carId, expDelta) {
+  const delta = Math.max(0, Math.floor(Number(expDelta) || 0));
+  const current = await getOrCreateCarTuningProgress(db, userId, carId);
+  if (delta <= 0 || !current) return current;
+
+  try {
+    const exp = Math.max(0, current.exp + delta);
+    const level = getTuningLevelFromExp(exp);
+    await dbRun(
+      db,
+      `INSERT INTO samp_car_tuning_level(user_id, car_id, level, exp, updated_at)
+       VALUES(?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(user_id, car_id) DO UPDATE SET
+         level = excluded.level,
+         exp = excluded.exp,
+         updated_at = excluded.updated_at`,
+      [String(userId), String(carId), level, exp]
+    );
+    return {
+      ...current,
+      level,
+      exp,
+      next: getNextTuningLevelProgress(exp),
+    };
+  } catch (error) {
+    if (isMissingTableError(error, "samp_car_tuning_level")) {
+      return current;
+    }
+    throw error;
+  }
+}
+
+async function getCarVehicleProfile(db, userId, carId) {
   const car = carInfo(carId);
-  const tuneSpeedBonus = await getCarUpgradeSpeedBonus(db, userId, carId);
+  const [installedParts, tuningProgress] = await Promise.all([
+    getInstalledCarUpgradeRows(db, userId, carId),
+    getOrCreateCarTuningProgress(db, userId, carId),
+  ]);
+
+  const profile = buildCarTuningProfile(car, installedParts, tuningProgress.level);
   return {
     ...car,
-    tuneSpeedBonus,
-    effectiveSpeed: car.speed + tuneSpeedBonus,
+    ...profile,
+    tuningExp: tuningProgress.exp,
+    tuningProgress: tuningProgress.next,
   };
 }
 
+async function getCarUpgradeSpeedBonus(db, userId, carId) {
+  const profile = await getCarVehicleProfile(db, userId, carId);
+  return Math.max(0, profile.topSpeed - profile.baseTopSpeed);
+}
+
+async function getRaceCarProfile(db, userId, carId) {
+  return getCarVehicleProfile(db, userId, carId);
+}
+
 function formatRaceCarLabel(carProfile) {
-  const tuneSuffix = carProfile.tuneSpeedBonus > 0 ? `, тюнинг +${carProfile.tuneSpeedBonus}` : "";
-  return `${carProfile.name}, скорость ${carProfile.effectiveSpeed}${tuneSuffix}`;
+  return `${carProfile.name}, билд ${carProfile.buildType}, скорость ${carProfile.topSpeed}, старт ${carProfile.launch}, зацеп ${carProfile.grip}, стабильность ${carProfile.stability}, износ ${carProfile.averageDurability}%`;
+}
+
+async function applyCarWearFromRace(db, userId, carId, carProfile, { result = "loss" } = {}) {
+  if (!carProfile?.installedParts?.length) return [];
+  const perOutcomeBonus = result === "win" ? 0 : result === "draw" ? 1 : 2;
+
+  try {
+    const updates = [];
+    for (const part of carProfile.installedParts) {
+      const wearLoss = Math.max(1, Math.floor(Number(part.wearLoss || 2)) + perOutcomeBonus);
+      const nextDurability = Math.max(0, Math.floor(Number(part.durability || 100)) - wearLoss);
+      await dbRun(
+        db,
+        `UPDATE samp_car_upgrades
+         SET durability = ?, installed_at = COALESCE(installed_at, datetime('now'))
+         WHERE user_id = ? AND car_id = ? AND upgrade_id = ?`,
+        [nextDurability, String(userId), String(carId), String(part.id)]
+      );
+      updates.push({ id: part.id, durability: nextDurability });
+    }
+    return updates;
+  } catch (error) {
+    if (String(error?.message || error || "").includes("no such column")) {
+      return [];
+    }
+    if (isMissingTableError(error, "samp_car_upgrades")) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function recordRaceOutcomeStats(db, userId, carProfile, { result = "loss", winnings = 0 } = {}) {
+  try {
+    await dbRun(
+      db,
+      `INSERT INTO samp_race_stats(user_id, races_total, races_won, max_speed_reached, total_winnings, updated_at)
+       VALUES(?, 1, ?, ?, ?, datetime('now'))
+       ON CONFLICT(user_id) DO UPDATE SET
+         races_total = races_total + 1,
+         races_won = races_won + excluded.races_won,
+         max_speed_reached = MAX(max_speed_reached, excluded.max_speed_reached),
+         total_winnings = total_winnings + excluded.total_winnings,
+         updated_at = excluded.updated_at`,
+      [
+        String(userId),
+        result === "win" ? 1 : 0,
+        Math.max(0, Math.floor(Number(carProfile?.topSpeed || 0))),
+        Math.max(0, Math.floor(Number(winnings || 0))),
+      ]
+    );
+  } catch (error) {
+    if (!isMissingTableError(error, "samp_race_stats")) {
+      throw error;
+    }
+  }
+}
+
+async function finalizeRaceVehicleProgress(db, userId, carId, carProfile, { result = "loss", winnings = 0 } = {}) {
+  const expAward = result === "win" ? 3 : result === "draw" ? 2 : 1;
+  await Promise.all([
+    awardCarTuningProgress(db, userId, carId, expAward),
+    recordRaceOutcomeStats(db, userId, carProfile, { result, winnings }),
+    applyCarWearFromRace(db, userId, carId, carProfile, { result }),
+  ]);
 }
 
 function msToHuman(ms) {
   const s = Math.max(0, Math.ceil(ms / 1000));
-  const m = Math.floor(s / 60);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
   const r = s % 60;
-  if (m <= 0) return `${r}с`;
-  return `${m}м ${r}с`;
+  return `${h}ч ${m}м ${r}с`;
+}
+
+function makeInteractionOpKey(interaction, suffix = "") {
+  const base = String(interaction?.id || interaction?.token || "").trim();
+  if (!base) return null;
+  return suffix ? `${base}:${suffix}` : base;
 }
 
 function getAutocompletePage(interaction) {
@@ -275,19 +502,7 @@ function sliceAutocompleteChoices(choices, page) {
 }
 
 async function withTransaction(db, fn) {
-  await dbRun(db, "BEGIN IMMEDIATE");
-  try {
-    const res = await fn();
-    await dbRun(db, "COMMIT");
-    return res;
-  } catch (e) {
-    try {
-      await dbRun(db, "ROLLBACK");
-    } catch (_) {
-      // ignore rollback errors
-    }
-    throw e;
-  }
+  return withSerializedTransaction(db, fn);
 }
 
 async function getUserRow(db, userId) {
@@ -307,6 +522,38 @@ async function getOrCreateUser(db, userId) {
   );
   await dbRun(db, `INSERT OR IGNORE INTO samp_garage(user_id, car_id) VALUES(?, ?)`, [uid, DEFAULT_CAR_ID]);
   return getUserRow(db, uid);
+}
+
+async function pickOwnedFallbackCarId(db, userId, preferredCarId = DEFAULT_CAR_ID) {
+  const rows = await dbAll(
+    db,
+    `SELECT car_id
+     FROM samp_garage
+     WHERE user_id = ?
+     ORDER BY CASE WHEN car_id = ? THEN 0 ELSE 1 END, acquired_at ASC, car_id ASC`,
+    [String(userId), String(preferredCarId)]
+  );
+  return rows?.[0]?.car_id || null;
+}
+
+async function ensureFallbackActiveCar(db, userId, preferredCarId = DEFAULT_CAR_ID) {
+  const fallbackCarId = await pickOwnedFallbackCarId(db, userId, preferredCarId);
+  if (fallbackCarId) {
+    await dbRun(
+      db,
+      `UPDATE samp_users SET car_id = ?, updated_at = datetime('now') WHERE user_id = ?`,
+      [String(fallbackCarId), String(userId)]
+    );
+    return fallbackCarId;
+  }
+
+  await dbRun(db, `INSERT OR IGNORE INTO samp_garage(user_id, car_id) VALUES(?, ?)`, [String(userId), String(preferredCarId)]);
+  await dbRun(
+    db,
+    `UPDATE samp_users SET car_id = ?, updated_at = datetime('now') WHERE user_id = ?`,
+    [String(preferredCarId), String(userId)]
+  );
+  return preferredCarId;
 }
 
 async function ensureNotJailed(interaction, userRow) {
@@ -337,14 +584,30 @@ async function setCooldown(db, userId, action, readyAt) {
 }
 
 async function checkAndConsumeCooldown(interaction, db, userId, action) {
-  const cd = await getCooldown(db, userId, action);
-  if (cd > nowMs()) {
-    await interaction.reply({ content: `⏳ Рано. Подожди **${msToHuman(cd - nowMs())}**.`, ephemeral: true });
+  const result = await consumeCooldownAtomic(db, userId, action);
+  if (!result.ok) {
+    await interaction.reply({ content: `⏳ Рано. Подожди **${msToHuman(result.remainingMs)}**.`, ephemeral: true });
     return false;
   }
-  const readyAt = nowMs() + (COOLDOWNS_MS[action] || 60_000);
-  await setCooldown(db, userId, action, readyAt);
   return true;
+}
+
+async function consumeCooldownAtomic(db, userId, action, readyAt = nowMs() + (COOLDOWNS_MS[action] || 60_000)) {
+  return withTransaction(db, async () => {
+    const existing = await dbGet(
+      db,
+      "SELECT ready_at FROM samp_cooldowns WHERE user_id = ? AND action = ?",
+      [String(userId), String(action)]
+    );
+    const now = nowMs();
+    const currentReadyAt = Number(existing?.ready_at || 0);
+    if (currentReadyAt > now) {
+      return { ok: false, remainingMs: currentReadyAt - now, readyAt: currentReadyAt };
+    }
+
+    await setCooldown(db, userId, action, readyAt);
+    return { ok: true, readyAt };
+  });
 }
 
 async function addLedger(db, type, fromUser, toUser, amount, meta = {}) {
@@ -356,12 +619,47 @@ async function addLedger(db, type, fromUser, toUser, amount, meta = {}) {
   );
 }
 
+async function addLedgerUnique(db, type, fromUser, toUser, amount, idempotencyKey, meta = {}) {
+  const key = String(idempotencyKey || "").trim();
+  if (!key) {
+    await addLedger(db, type, fromUser, toUser, amount, meta);
+    return true;
+  }
+
+  const payload = { ...(meta || {}), idempotencyKey: key };
+  const result = await dbRun(
+    db,
+    `INSERT INTO samp_ledger(type, from_user, to_user, amount, meta_json)
+     SELECT ?, ?, ?, ?, ?
+     WHERE NOT EXISTS (
+       SELECT 1
+       FROM samp_ledger
+       WHERE type = ?
+         AND COALESCE(from_user, '') = COALESCE(?, '')
+         AND COALESCE(to_user, '') = COALESCE(?, '')
+         AND json_extract(meta_json, '$.idempotencyKey') = ?
+     )`,
+    [
+      type,
+      fromUser ? String(fromUser) : null,
+      toUser ? String(toUser) : null,
+      Number(amount || 0),
+      JSON.stringify(payload),
+      type,
+      fromUser ? String(fromUser) : null,
+      toUser ? String(toUser) : null,
+      key,
+    ]
+  );
+  return Number(result?.changes || 0) > 0;
+}
+
 async function adjustMoney(db, userId, delta) {
   const uid = String(userId);
   await dbRun(db, `UPDATE samp_users SET money = money + ?, updated_at = datetime('now') WHERE user_id = ?`, [Number(delta), uid]);
 }
 
-async function transferMoney(db, fromUserId, toUserId, amount, ledgerType, meta = {}) {
+async function transferMoney(db, fromUserId, toUserId, amount, ledgerType, meta = {}, idempotencyKey = null) {
   const amt = Number(amount);
   if (!Number.isFinite(amt) || amt <= 0) throw new Error("Invalid amount");
 
@@ -371,13 +669,60 @@ async function transferMoney(db, fromUserId, toUserId, amount, ledgerType, meta 
 
     if (Number(from.money) < amt) throw new Error("INSUFFICIENT");
 
+    const inserted = await addLedgerUnique(db, ledgerType, fromUserId, toUserId, amt, idempotencyKey, meta);
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
+
     await adjustMoney(db, fromUserId, -amt);
     await adjustMoney(db, toUserId, amt);
-    await addLedger(db, ledgerType, fromUserId, toUserId, amt, meta);
 
     // sanity: prevent negative balances
     const check = await dbGet(db, "SELECT money FROM samp_users WHERE user_id = ?", [String(fromUserId)]);
     if (Number(check?.money) < 0) throw new Error("NEGATIVE_BALANCE");
+  });
+}
+
+async function transferMoneyWithParticipants(db, fromUserId, toUserId, amount, ledgerType, participantCooldowns, meta = {}, idempotencyKey = null) {
+  const amt = Number(amount);
+  if (!Number.isFinite(amt) || amt <= 0) throw new Error("Invalid amount");
+
+  await withTransaction(db, async () => {
+    const from = await getOrCreateUser(db, fromUserId);
+    await getOrCreateUser(db, toUserId);
+
+    if (Number(from.money) < amt) throw new Error("INSUFFICIENT");
+
+    const inserted = await addLedgerUnique(db, ledgerType, fromUserId, toUserId, amt, idempotencyKey, meta);
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
+
+    for (const participant of participantCooldowns || []) {
+      const readyAt = Number(participant?.readyAt || 0);
+      if (readyAt > 0) {
+        await setCooldown(db, participant.userId, participant.action, readyAt);
+      }
+    }
+
+    await adjustMoney(db, fromUserId, -amt);
+    await adjustMoney(db, toUserId, amt);
+
+    const check = await dbGet(db, "SELECT money FROM samp_users WHERE user_id = ?", [String(fromUserId)]);
+    if (Number(check?.money) < 0) throw new Error("NEGATIVE_BALANCE");
+  });
+}
+
+async function applyMoneyDeltaAtomic(db, userId, delta, { minBalance = null } = {}) {
+  const numericDelta = Number(delta || 0);
+  return withTransaction(db, async () => {
+    const user = await getOrCreateUser(db, userId);
+    const currentMoney = Number(user.money || 0);
+    const nextMoney = currentMoney + numericDelta;
+    if (minBalance != null && nextMoney < Number(minBalance)) {
+      throw new Error("INSUFFICIENT");
+    }
+    if (nextMoney < 0) {
+      throw new Error("NEGATIVE_BALANCE");
+    }
+    await adjustMoney(db, userId, numericDelta);
+    return nextMoney;
   });
 }
 
@@ -642,27 +987,53 @@ async function handleReg(interaction, db) {
 async function handleBalance(interaction, db) {
   const userId = interaction.user.id;
   const user = await getOrCreateUser(db, userId);
-  const car = carInfo(user.car_id);
-  const tuneBonus = await getCarUpgradeSpeedBonus(db, userId, user.car_id);
+  const carProfile = await getCarVehicleProfile(db, userId, user.car_id);
   const weaponId = await getActiveWeapon(db, userId);
   const weapon = weaponId ? itemInfo(weaponId) : null;
   const cosmetics = await getUserCosmetics(db, userId);
+  const weaponName = weapon
+    ? (weaponId === "deagle" && cosmetics?.raw?.weapon_skin_deagle === "gold"
+        ? "Золотой Desert Eagle"
+        : weapon.name)
+    : null;
+  const specialItems = await dbAll(
+    db,
+    `SELECT item_id, qty
+     FROM samp_inventory
+     WHERE user_id = ?
+       AND item_id IN ('bm_armor', 'bm_map', 'bm_nos_boost', 'bm_jail_pass', 'bm_medkit',
+                        'bm_wiretap', 'bm_sabotage', 'bm_laundering', 'bm_repair_kit', 'bm_disguise', 'bm_hot_tip')
+       AND qty > 0
+     ORDER BY item_id ASC`,
+    [String(userId)]
+  );
+  const stashLines = (specialItems || []).map((row) => {
+    const label = BLACK_MARKET_INVENTORY_LABELS[row.item_id] || row.item_id;
+    return `• ${label} x${Number(row.qty || 0)}`;
+  });
 
   const jailUntil = Number(user.jail_until || 0);
   const jailText = jailUntil > nowMs() ? `🚔 Тюрьма: ещё **${msToHuman(jailUntil - nowMs())}**` : "✅ На свободе";
 
+  const fields = [
+    { name: "💵 Финансы", value: `Баланс: **${fmtMoney(user.money)}**`, inline: true },
+    { name: "🚘 Активная тачка", value: joinLines([
+      `**${carProfile.name}** • ${carProfile.buildType}`,
+      `Скорость: **${carProfile.topSpeed}**${carProfile.topSpeedBonus > 0 ? ` (база ${carProfile.baseTopSpeed} + ${carProfile.topSpeedBonus})` : ""}`,
+      `Старт/зацеп: **${carProfile.launch} / ${carProfile.grip}** | Стабильность: **${carProfile.stability}**`,
+      `Тюнинг-уровень: **${carProfile.tuningLevel}/${TUNE_LEVEL_MAX}** | Износ: **${carProfile.averageDurability}%**`,
+    ]), inline: true },
+    { name: "🔫 Оружие", value: weaponName ? `**${weaponName}**` : "—", inline: true },
+  ];
+  if (stashLines.length > 0) {
+    fields.push({ name: "🕶️ Тайник", value: stashLines.join("\n"), inline: false });
+  }
+  fields.push({ name: "⚖️ Статус", value: jailText, inline: false });
+
   const embed = new EmbedBuilder()
     .setTitle("SAMP Life — Профиль")
     .setDescription(`Игрок: <@${userId}>`)
-    .addFields(
-      { name: "💵 Финансы", value: `Баланс: **${fmtMoney(user.money)}**`, inline: true },
-      { name: "🚘 Активная тачка", value: joinLines([
-        `**${car.name}**`,
-        `Скорость: **${car.speed + tuneBonus}**${tuneBonus > 0 ? ` (база ${car.speed} + ${tuneBonus})` : ""}`,
-      ]), inline: true },
-      { name: "🔫 Оружие", value: weapon ? `**${weapon.name}**` : "—", inline: true },
-      { name: "⚖️ Статус", value: jailText, inline: false }
-    )
+    .addFields(fields)
     .setTimestamp(new Date());
 
   applyUserCosmeticsToEmbed(embed, cosmetics, interaction.user.username, 0x3b82f6);
@@ -690,8 +1061,12 @@ async function handleWork(interaction, db) {
   const level = levelRow?.level || 1;
   const earnings = Math.floor(randInt(100, 500) * (1 + level * 0.1));
 
-  await adjustMoney(db, userId, earnings);
-  await addLedger(db, "work", null, userId, earnings, { job });
+  const opKey = makeInteractionOpKey(interaction, "work");
+  await withTransaction(db, async () => {
+    await adjustMoney(db, userId, earnings);
+    const inserted = await addLedgerUnique(db, "work", null, userId, earnings, opKey, { job });
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
+  });
 
   const after = await getUserRow(db, userId);
   await interaction.editReply(`🛠 Ты ${job} и поднял **${fmtMoney(earnings)}**. Баланс: **${fmtMoney(after.money)}**`);
@@ -710,19 +1085,28 @@ async function handleTruck(interaction, db) {
   const crash = Math.random() < 0.18;
   if (crash) {
     const rawFine = randInt(800, 2500);
-    const fine = Math.min(rawFine, Number(user.money));
-    if (fine > 0) {
+    let fine = 0;
+    const opKey = makeInteractionOpKey(interaction, "truck_crash");
+    await withTransaction(db, async () => {
+      const latest = await getUserRow(db, userId);
+      fine = Math.min(rawFine, Number(latest?.money || 0));
+      if (fine <= 0) return;
+      const inserted = await addLedgerUnique(db, "truck_crash", userId, null, fine, opKey, {});
+      if (!inserted) throw new Error("DUPLICATE_OPERATION");
       await adjustMoney(db, userId, -fine);
-      await addLedger(db, "truck_crash", userId, null, fine, {});
-    }
+    });
     const after = await getUserRow(db, userId);
     await interaction.editReply(`🚚💥 Ты улетел в кювет. Штраф/ремонт: **-${fmtMoney(fine)}**. Баланс: **${fmtMoney(after.money)}**`);
     return;
   }
 
   const earnings = randInt(2500, 6500);
-  await adjustMoney(db, userId, earnings);
-  await addLedger(db, "truck", null, userId, earnings, {});
+  const opKey = makeInteractionOpKey(interaction, "truck");
+  await withTransaction(db, async () => {
+    await adjustMoney(db, userId, earnings);
+    const inserted = await addLedgerUnique(db, "truck", null, userId, earnings, opKey, {});
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
+  });
   const after = await getUserRow(db, userId);
   await interaction.editReply(`🚚 Ты отработал дальнобой и привёз бабки: **${fmtMoney(earnings)}**. Баланс: **${fmtMoney(after.money)}**`);
 }
@@ -746,21 +1130,41 @@ async function handleRob(interaction, db) {
     const victim = await getUserRow(db, target.id);
     if (!victim) { await interaction.editReply("Этот игрок не зарегистрирован в SAMP Life."); return; }
 
+    // Disguise: blocks PvP robbery
+    try {
+      const { getUserSetting } = require("./samp-extended");
+      const disguisedUntilVal = await getUserSetting(db, target.id, "disguised_until");
+      if (disguisedUntilVal && Number(disguisedUntilVal) > nowMs()) {
+        await interaction.editReply("🎭 Этого человека невозможно опознать — он в маскировке. Ограбление сорвалось.");
+        return;
+      }
+    } catch (_) {}
+
     // 40% caught (higher risk PvP)
     const caught = Math.random() < 0.40;
     if (caught) {
       const jailMs = 5 * 60_000;
       const rawFine = randInt(1000, 4000);
-      const fine = Math.min(rawFine, Number(user.money));
+      // Laundering: reduce fine by 40%
+      let launderingDiscount = 0;
+      try {
+        const { getInventoryQty, consumeInventoryItem } = require("./samp-extended");
+        const launderQty = await getInventoryQty(db, userId, "bm_laundering");
+        if (launderQty > 0) { launderingDiscount = 0.40; await consumeInventoryItem(db, userId, "bm_laundering", 1); }
+      } catch (_) {}
+      const discountedFine = Math.floor(rawFine * (1 - launderingDiscount));
+      const latest = await getUserRow(db, userId);
+      const fine = Math.min(discountedFine, Number(latest?.money || 0));
       await withTransaction(db, async () => {
         if (fine > 0) await adjustMoney(db, userId, -fine);
         await dbRun(db, `UPDATE samp_users SET jail_until = ? WHERE user_id = ?`, [nowMs() + jailMs, String(userId)]);
-        await addLedger(db, "rob_pvp_caught", userId, target.id, fine, { jail_ms: jailMs });
+        const inserted = await addLedgerUnique(db, "rob_pvp_caught", userId, target.id, fine, makeInteractionOpKey(interaction, "rob_pvp_caught"), { jail_ms: jailMs });
+        if (!inserted) throw new Error("DUPLICATE_OPERATION");
       });
 
       const after = await getUserRow(db, userId);
       await interaction.editReply(
-        `🚔 Тебя приняли при ограблении <@${target.id}>. Тюрьма: **5 минут**. Штраф: **-${fmtMoney(fine)}**.\n` +
+        `🚔 Тебя приняли при ограблении <@${target.id}>. Тюрьма: **5 минут**. Штраф: **-${fmtMoney(fine)}**.${launderingDiscount > 0 ? " 🧾 Отмывание: скидка 40%!" : ""}\n` +
           `Баланс: **${fmtMoney(after.money)}**`
       );
       return;
@@ -774,14 +1178,20 @@ async function handleRob(interaction, db) {
 
     if (actualLoot <= 0) { await interaction.editReply("У жертвы нет виртов — обчищать нечего."); return; }
 
+    let stolenAmount = actualLoot;
     await withTransaction(db, async () => {
-      await adjustMoney(db, target.id, -actualLoot);
-      await adjustMoney(db, userId, actualLoot);
-      await addLedger(db, "rob_pvp", userId, target.id, actualLoot, {});
+      const freshVictim = await getUserRow(db, target.id);
+      const realLoot = Math.min(actualLoot, Number(freshVictim?.money || 0));
+      if (realLoot <= 0) throw new Error("INSUFFICIENT");
+      await adjustMoney(db, target.id, -realLoot);
+      await adjustMoney(db, userId, realLoot);
+      const inserted = await addLedgerUnique(db, "rob_pvp", userId, target.id, realLoot, makeInteractionOpKey(interaction, "rob_pvp"), {});
+      if (!inserted) throw new Error("DUPLICATE_OPERATION");
+      stolenAmount = realLoot;
     });
 
     const after = await getUserRow(db, userId);
-    await interaction.editReply(`🕶️ Ты обчистил <@${target.id}> на **${fmtMoney(actualLoot)}**! Баланс: **${fmtMoney(after.money)}**`);
+    await interaction.editReply(`🕶️ Ты обчистил <@${target.id}> на **${fmtMoney(stolenAmount)}**! Баланс: **${fmtMoney(after.money)}**`);
     return;
   }
 
@@ -791,24 +1201,37 @@ async function handleRob(interaction, db) {
   if (caught) {
     const jailMs = 5 * 60_000;
     const rawFine = randInt(1000, 4000);
-    const fine = Math.min(rawFine, Number(user.money));
+    // Laundering: reduce fine by 40%
+    let launderingDiscount247 = 0;
+    try {
+      const { getInventoryQty, consumeInventoryItem } = require("./samp-extended");
+      const launderQty = await getInventoryQty(db, userId, "bm_laundering");
+      if (launderQty > 0) { launderingDiscount247 = 0.40; await consumeInventoryItem(db, userId, "bm_laundering", 1); }
+    } catch (_) {}
+    const discountedFine247 = Math.floor(rawFine * (1 - launderingDiscount247));
+    const latest = await getUserRow(db, userId);
+    const fine = Math.min(discountedFine247, Number(latest?.money || 0));
     await withTransaction(db, async () => {
       if (fine > 0) await adjustMoney(db, userId, -fine);
       await dbRun(db, `UPDATE samp_users SET jail_until = ? WHERE user_id = ?`, [nowMs() + jailMs, String(userId)]);
-      await addLedger(db, "rob_caught", userId, null, fine, { jail_ms: jailMs });
+      const inserted = await addLedgerUnique(db, "rob_caught", userId, null, fine, makeInteractionOpKey(interaction, "rob_caught"), { jail_ms: jailMs });
+      if (!inserted) throw new Error("DUPLICATE_OPERATION");
     });
 
     const after = await getUserRow(db, userId);
     await interaction.editReply(
-      `🚔 Тебя приняли у 24/7. Тюрьма: **5 минут**. Штраф: **-${fmtMoney(fine)}**.\n` +
+      `🚔 Тебя приняли у 24/7. Тюрьма: **5 минут**. Штраф: **-${fmtMoney(fine)}**.${launderingDiscount247 > 0 ? " 🧾 Отмывание: скидка 40%!" : ""}\n` +
         `Баланс: **${fmtMoney(after.money)}**`
     );
     return;
   }
 
   const loot = randInt(2000, 10_000);
-  await adjustMoney(db, userId, loot);
-  await addLedger(db, "rob", null, userId, loot, {});
+  await withTransaction(db, async () => {
+    await adjustMoney(db, userId, loot);
+    const inserted = await addLedgerUnique(db, "rob", null, userId, loot, makeInteractionOpKey(interaction, "rob"), {});
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
+  });
   const after = await getUserRow(db, userId);
   await interaction.editReply(`🕶️ Ты вынес кассу 24/7: **${fmtMoney(loot)}**. Баланс: **${fmtMoney(after.money)}**`);
 }
@@ -869,6 +1292,7 @@ async function handleBuy(interaction, db) {
       return;
     }
 
+    const opKey = makeInteractionOpKey(interaction, "buy_car");
     await withTransaction(db, async () => {
       const fresh = await getOrCreateUser(db, userId);
       if (Number(fresh.money) < car.price) throw new Error("INSUFFICIENT");
@@ -876,10 +1300,12 @@ async function handleBuy(interaction, db) {
       const alreadyOwned = await dbGet(db, "SELECT 1 FROM samp_garage WHERE user_id = ? AND car_id = ?", [String(userId), id]);
       if (alreadyOwned) throw new Error("ALREADY_OWNED");
 
+      const inserted = await addLedgerUnique(db, "buy_car", userId, null, car.price, opKey, { car_id: id });
+      if (!inserted) throw new Error("DUPLICATE_OPERATION");
+
       await adjustMoney(db, userId, -car.price);
       await dbRun(db, `INSERT INTO samp_garage(user_id, car_id) VALUES(?, ?)`, [String(userId), id]);
       await dbRun(db, `UPDATE samp_users SET car_id = ?, updated_at = datetime('now') WHERE user_id = ?`, [id, String(userId)]);
-      await addLedger(db, "buy_car", userId, null, car.price, { car_id: id });
     });
 
     const after = await getUserRow(db, userId);
@@ -894,15 +1320,18 @@ async function handleBuy(interaction, db) {
       return;
     }
 
+    const opKey = makeInteractionOpKey(interaction, "buy_weapon");
     await withTransaction(db, async () => {
       const fresh = await getOrCreateUser(db, userId);
       if (Number(fresh.money) < weapon.price) throw new Error("INSUFFICIENT");
+
+      const inserted = await addLedgerUnique(db, "buy_weapon", userId, null, weapon.price, opKey, { item_id: id });
+      if (!inserted) throw new Error("DUPLICATE_OPERATION");
 
       await adjustMoney(db, userId, -weapon.price);
       await addInventory(db, userId, id, 1);
       // auto-equip
       await setActiveWeapon(db, userId, id);
-      await addLedger(db, "buy_weapon", userId, null, weapon.price, { item_id: id });
     });
 
     const after = await getUserRow(db, userId);
@@ -980,8 +1409,6 @@ async function handleRace(interaction, db) {
   }
 
   const raceReadyAt = nowMs() + COOLDOWNS_MS.race;
-  await setCooldown(db, userId, "race", raceReadyAt);
-  await setCooldown(db, opponent.id, "race", raceReadyAt);
 
   const [p1Car, p2Car] = await Promise.all([
     getRaceCarProfile(db, userId, p1.car_id),
@@ -990,11 +1417,35 @@ async function handleRace(interaction, db) {
 
   await interaction.deferReply();
 
-  const p1Total = randInt(1, 50) + p1Car.effectiveSpeed;
-  const p2Total = randInt(1, 50) + p2Car.effectiveSpeed;
+  let p1Bonus = 0;
+  let p2Bonus = 0;
+  let p1Penalty = 0;
+  let p2Penalty = 0;
+  const raceNotes = [];
+  try {
+    const { getInventoryQty, consumeInventoryItem } = require("./samp-extended");
+    // NOS boost: +12 race score, consume 1 charge
+    const [p1Nos, p2Nos] = await Promise.all([
+      getInventoryQty(db, userId, "bm_nos_boost"),
+      getInventoryQty(db, opponent.id, "bm_nos_boost"),
+    ]);
+    if (p1Nos > 0) { p1Bonus = 12; await consumeInventoryItem(db, userId, "bm_nos_boost", 1); raceNotes.push(`🔥 <@${userId}> активировал нитро! (+12)`); }
+    if (p2Nos > 0) { p2Bonus = 12; await consumeInventoryItem(db, opponent.id, "bm_nos_boost", 1); raceNotes.push(`🔥 <@${opponent.id}> активировал нитро! (+12)`); }
+    // Sabotage: -15 race score if sabotaged_until > now
+    const { getUserSetting, setUserSetting: clearSetting } = require("./samp-extended");
+    const [p1SabVal, p2SabVal] = await Promise.all([
+      getUserSetting(db, userId, "sabotaged_until"),
+      getUserSetting(db, opponent.id, "sabotaged_until"),
+    ]);
+    if (p1SabVal && Number(p1SabVal) > nowMs()) { p1Penalty = 15; await clearSetting(db, userId, "sabotaged_until", "0"); raceNotes.push(`🔧 <@${userId}> обнаружил саботаж! (-15)`); }
+    if (p2SabVal && Number(p2SabVal) > nowMs()) { p2Penalty = 15; await clearSetting(db, opponent.id, "sabotaged_until", "0"); raceNotes.push(`🔧 <@${opponent.id}> обнаружил саботаж! (-15)`); }
+  } catch (_) { /* samp-extended not available */ }
+
+  const p1Total = randInt(1, 40) + p1Car.raceScore + p1Bonus - p1Penalty;
+  const p2Total = randInt(1, 40) + p2Car.raceScore + p2Bonus - p2Penalty;
 
   let winner = null;
-  let text = `🏁 **Гонка!**\n<@${userId}> (**${formatRaceCarLabel(p1Car)}**) VS <@${opponent.id}> (**${formatRaceCarLabel(p2Car)}**)\nСтавка: **${fmtMoney(bet)}**\n\n`;
+  let text = `🏁 **Гонка!**\n<@${userId}> (**${formatRaceCarLabel(p1Car)}**) VS <@${opponent.id}> (**${formatRaceCarLabel(p2Car)}**)\nСтавка: **${fmtMoney(bet)}**\n${raceNotes.length ? "\n" + raceNotes.join("\n") + "\n" : ""}\n`;
 
   if (p1Total > p2Total) {
     winner = userId;
@@ -1007,17 +1458,40 @@ async function handleRace(interaction, db) {
   }
 
   if (winner === userId) {
-    await transferMoney(db, opponent.id, userId, bet, "race", { loser: opponent.id });
+    await transferMoneyWithParticipants(db, opponent.id, userId, bet, "race", [
+      { userId, action: "race", readyAt: raceReadyAt },
+      { userId: opponent.id, action: "race", readyAt: raceReadyAt },
+    ], { loser: opponent.id }, makeInteractionOpKey(interaction, "race"));
+    await Promise.all([
+      finalizeRaceVehicleProgress(db, userId, p1.car_id, p1Car, { result: "win", winnings: bet }),
+      finalizeRaceVehicleProgress(db, opponent.id, p2.car_id, p2Car, { result: "loss", winnings: 0 }),
+    ]);
     await interaction.editReply(text + `\n\n💰 Ты поднял **${fmtMoney(bet)}**.`);
     return;
   }
   if (winner === opponent.id) {
-    await transferMoney(db, userId, opponent.id, bet, "race", { loser: userId });
+    await transferMoneyWithParticipants(db, userId, opponent.id, bet, "race", [
+      { userId, action: "race", readyAt: raceReadyAt },
+      { userId: opponent.id, action: "race", readyAt: raceReadyAt },
+    ], { loser: userId }, makeInteractionOpKey(interaction, "race"));
+    await Promise.all([
+      finalizeRaceVehicleProgress(db, userId, p1.car_id, p1Car, { result: "loss", winnings: 0 }),
+      finalizeRaceVehicleProgress(db, opponent.id, p2.car_id, p2Car, { result: "win", winnings: bet }),
+    ]);
     await interaction.editReply(text + `\n\n💸 Ты отдал **${fmtMoney(bet)}**.`);
     return;
   }
 
-  await addLedger(db, "race_draw", userId, opponent.id, 0, { bet });
+  await withTransaction(db, async () => {
+    await setCooldown(db, userId, "race", raceReadyAt);
+    await setCooldown(db, opponent.id, "race", raceReadyAt);
+    const inserted = await addLedgerUnique(db, "race_draw", userId, opponent.id, 0, makeInteractionOpKey(interaction, "race_draw"), { bet });
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
+  });
+  await Promise.all([
+    finalizeRaceVehicleProgress(db, userId, p1.car_id, p1Car, { result: "draw", winnings: 0 }),
+    finalizeRaceVehicleProgress(db, opponent.id, p2.car_id, p2Car, { result: "draw", winnings: 0 }),
+  ]);
   await interaction.editReply(text);
 }
 
@@ -1066,8 +1540,6 @@ async function handleDuel(interaction, db) {
   }
 
   const duelReadyAt = nowMs() + COOLDOWNS_MS.duel;
-  await setCooldown(db, userId, "duel", duelReadyAt);
-  await setCooldown(db, opponent.id, "duel", duelReadyAt);
 
   await interaction.deferReply();
 
@@ -1080,16 +1552,73 @@ async function handleDuel(interaction, db) {
   let p1Hp = 100;
   let p2Hp = 100;
 
+  // --- Black market items (armor & medkit) ---
+  let p1ArmorLeft = 0;
+  let p2ArmorLeft = 0;
+  let p1MedkitUsed = false;
+  let p2MedkitUsed = false;
+  let p1HasArmor = false;
+  let p2HasArmor = false;
+  let p1HasMedkit = false;
+  let p2HasMedkit = false;
+  try {
+    const { getInventoryQty, consumeInventoryItem } = require("./samp-extended");
+    const [p1a, p2a, p1m, p2m] = await Promise.all([
+      getInventoryQty(db, userId, "bm_armor"),
+      getInventoryQty(db, opponent.id, "bm_armor"),
+      getInventoryQty(db, userId, "bm_medkit"),
+      getInventoryQty(db, opponent.id, "bm_medkit"),
+    ]);
+    if (p1a > 0) { p1ArmorLeft = 25; p1HasArmor = true; await consumeInventoryItem(db, userId, "bm_armor", 1); }
+    if (p2a > 0) { p2ArmorLeft = 25; p2HasArmor = true; await consumeInventoryItem(db, opponent.id, "bm_armor", 1); }
+    p1HasMedkit = p1m > 0;
+    p2HasMedkit = p2m > 0;
+  } catch (_) { /* samp-extended not available */ }
+
   const rounds = [];
+  if (p1HasArmor) rounds.push(`🛡️ <@${userId}> надел бронежилет (+25 поглощения)`);
+  if (p2HasArmor) rounds.push(`🛡️ <@${opponent.id}> надел бронежилет (+25 поглощения)`);
+
   for (let i = 1; i <= 6; i++) {
     const p1Dmg = p1Weapon ? randInt(p1Weapon.dmg[0], p1Weapon.dmg[1]) : randInt(6, 12);
     const p2Dmg = p2Weapon ? randInt(p2Weapon.dmg[0], p2Weapon.dmg[1]) : randInt(6, 12);
 
-    // Simultaneous exchange
-    p2Hp -= p1Dmg;
-    p1Hp -= p2Dmg;
-    rounds.push(`Раунд ${i}: <@${userId}> -${p2Dmg}HP, <@${opponent.id}> -${p1Dmg}HP`);
+    // Armor absorbs damage
+    let p1Absorbed = 0;
+    let p2Absorbed = 0;
+    let effectiveP2Dmg = p2Dmg;
+    let effectiveP1Dmg = p1Dmg;
+    if (p1ArmorLeft > 0) {
+      p1Absorbed = Math.min(p1ArmorLeft, p2Dmg);
+      effectiveP2Dmg = p2Dmg - p1Absorbed;
+      p1ArmorLeft -= p1Absorbed;
+    }
+    if (p2ArmorLeft > 0) {
+      p2Absorbed = Math.min(p2ArmorLeft, p1Dmg);
+      effectiveP1Dmg = p1Dmg - p2Absorbed;
+      p2ArmorLeft -= p2Absorbed;
+    }
 
+    // Simultaneous exchange
+    p2Hp -= effectiveP1Dmg;
+    p1Hp -= effectiveP2Dmg;
+    let roundLine = `Раунд ${i}: <@${userId}> -${effectiveP2Dmg}HP${p1Absorbed > 0 ? ` (🛡️-${p1Absorbed})` : ""}, <@${opponent.id}> -${effectiveP1Dmg}HP${p2Absorbed > 0 ? ` (🛡️-${p2Absorbed})` : ""}`;
+
+    // Medkit auto-trigger
+    if (!p1MedkitUsed && p1HasMedkit && p1Hp > 0 && p1Hp < 20) {
+      p1Hp = Math.min(100, p1Hp + 30);
+      p1MedkitUsed = true;
+      roundLine += `\n  💊 <@${userId}> использовал аптечку (+30HP → ${p1Hp}HP)`;
+      try { const { consumeInventoryItem } = require("./samp-extended"); await consumeInventoryItem(db, userId, "bm_medkit", 1); } catch (_) {}
+    }
+    if (!p2MedkitUsed && p2HasMedkit && p2Hp > 0 && p2Hp < 20) {
+      p2Hp = Math.min(100, p2Hp + 30);
+      p2MedkitUsed = true;
+      roundLine += `\n  💊 <@${opponent.id}> использовал аптечку (+30HP → ${p2Hp}HP)`;
+      try { const { consumeInventoryItem } = require("./samp-extended"); await consumeInventoryItem(db, opponent.id, "bm_medkit", 1); } catch (_) {}
+    }
+
+    rounds.push(roundLine);
     if (p1Hp <= 0 || p2Hp <= 0) break;
   }
 
@@ -1102,13 +1631,21 @@ async function handleDuel(interaction, db) {
   text += `\n\nФинал: <@${userId}> HP=${Math.max(0, p1Hp)} | <@${opponent.id}> HP=${Math.max(0, p2Hp)}`;
 
   if (!winner) {
-    await addLedger(db, "duel_draw", userId, opponent.id, 0, { bet, p1Hp, p2Hp });
+    await withTransaction(db, async () => {
+      await setCooldown(db, userId, "duel", duelReadyAt);
+      await setCooldown(db, opponent.id, "duel", duelReadyAt);
+      const inserted = await addLedgerUnique(db, "duel_draw", userId, opponent.id, 0, makeInteractionOpKey(interaction, "duel_draw"), { bet, p1Hp, p2Hp });
+      if (!inserted) throw new Error("DUPLICATE_OPERATION");
+    });
     await interaction.editReply(text + "\n\n🤝 Ничья. Разошлись живыми.");
     return;
   }
 
   if (winner === userId) {
-    await transferMoney(db, opponent.id, userId, bet, "duel", { p1Hp, p2Hp });
+    await transferMoneyWithParticipants(db, opponent.id, userId, bet, "duel", [
+      { userId, action: "duel", readyAt: duelReadyAt },
+      { userId: opponent.id, action: "duel", readyAt: duelReadyAt },
+    ], { p1Hp, p2Hp }, makeInteractionOpKey(interaction, "duel"));
     // Bounty collection and weapon degradation (lazy require to avoid circular dep)
     try {
       const { checkAndCollectBounty, degradeWeapon } = require("./samp-extended");
@@ -1123,7 +1660,10 @@ async function handleDuel(interaction, db) {
     return;
   }
 
-  await transferMoney(db, userId, opponent.id, bet, "duel", { p1Hp, p2Hp });
+  await transferMoneyWithParticipants(db, userId, opponent.id, bet, "duel", [
+    { userId, action: "duel", readyAt: duelReadyAt },
+    { userId: opponent.id, action: "duel", readyAt: duelReadyAt },
+  ], { p1Hp, p2Hp }, makeInteractionOpKey(interaction, "duel"));
   try {
     const { checkAndCollectBounty, degradeWeapon } = require("./samp-extended");
     const bountyResult = await checkAndCollectBounty(db, opponent.id, userId);
@@ -1228,6 +1768,8 @@ async function handleBuyCar(interaction, db) {
 
   await interaction.deferReply();
 
+  const opKey = makeInteractionOpKey(interaction, "sellcar_accept");
+
   try {
     await withTransaction(db, async () => {
       const freshOffer = await dbGet(db, "SELECT status FROM samp_car_offers WHERE id = ?", [Number(offerId)]);
@@ -1239,6 +1781,9 @@ async function handleBuyCar(interaction, db) {
       const freshBuyer = await getOrCreateUser(db, buyerId);
       if (Number(freshBuyer.money) < Number(offer.price)) throw new Error("INSUFFICIENT");
 
+      const inserted = await addLedgerUnique(db, "sellcar_accept", offer.seller_user_id, buyerId, Number(offer.price), opKey, { car_id: offer.car_id, offer_id: offerId });
+      if (!inserted) throw new Error("DUPLICATE_OPERATION");
+
       // money transfer
       await adjustMoney(db, buyerId, -Number(offer.price));
       await adjustMoney(db, offer.seller_user_id, Number(offer.price));
@@ -1247,13 +1792,16 @@ async function handleBuyCar(interaction, db) {
       await dbRun(db, "DELETE FROM samp_garage WHERE user_id = ? AND car_id = ?", [String(offer.seller_user_id), String(offer.car_id)]);
       await dbRun(db, "INSERT OR IGNORE INTO samp_garage(user_id, car_id) VALUES(?, ?)", [String(buyerId), String(offer.car_id)]);
 
+      const seller = await getUserRow(db, offer.seller_user_id);
+      if (String(seller?.car_id || "") === String(offer.car_id)) {
+        await ensureFallbackActiveCar(db, offer.seller_user_id);
+      }
+
       // set buyer active car
-      await dbRun(db, "UPDATE samp_users SET car_id = ? WHERE user_id = ?", [String(offer.car_id), String(buyerId)]);
+      await dbRun(db, "UPDATE samp_users SET car_id = ?, updated_at = datetime('now') WHERE user_id = ?", [String(offer.car_id), String(buyerId)]);
 
       // close offer
       await dbRun(db, "UPDATE samp_car_offers SET status = 'accepted' WHERE id = ?", [Number(offerId)]);
-
-      await addLedger(db, "sellcar_accept", offer.seller_user_id, buyerId, Number(offer.price), { car_id: offer.car_id, offer_id: offerId });
     });
   } catch (e) {
     if (String(e.message) === "INSUFFICIENT") {
@@ -1293,10 +1841,14 @@ async function handleBail(interaction, db) {
     return;
   }
 
+  const opKey = makeInteractionOpKey(interaction, "bail");
   await withTransaction(db, async () => {
+    const fresh = await getUserRow(db, userId);
+    if (Number(fresh?.money || 0) < bailCost) throw new Error("INSUFFICIENT");
+    const inserted = await addLedgerUnique(db, "bail", userId, null, bailCost, opKey, { remaining_ms: remainingMs });
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
     await adjustMoney(db, userId, -bailCost);
     await dbRun(db, `UPDATE samp_users SET jail_until = 0 WHERE user_id = ?`, [String(userId)]);
-    await addLedger(db, "bail", userId, null, bailCost, { remaining_ms: remainingMs });
   });
 
   const after = await getUserRow(db, userId);
@@ -1375,9 +1927,12 @@ async function handleDaily(interaction, db) {
   const tier = DAILY_BONUS_TIERS.find((t) => currentStreak >= t.minStreak) || { bonus: 500, label: "новичок" };
 
   await withTransaction(db, async () => {
+    const existingDaily = await getCooldown(db, userId, "daily");
+    if (existingDaily > nowMs()) throw new Error("COOLDOWN_ACTIVE");
     await adjustMoney(db, userId, tier.bonus);
     await setCooldown(db, userId, "daily", nowMs() + 24 * 60 * 60_000);
-    await addLedger(db, "daily_bonus", null, userId, tier.bonus, { streak: currentStreak, tier: tier.label });
+    const inserted = await addLedgerUnique(db, "daily_bonus", null, userId, tier.bonus, makeInteractionOpKey(interaction, "daily_bonus"), { streak: currentStreak, tier: tier.label });
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
   });
 
   const after = await getUserRow(db, userId);
@@ -1407,7 +1962,7 @@ async function handlePay(interaction, db) {
   await getOrCreateUser(db, target.id);
 
   try {
-    await transferMoney(db, userId, target.id, amt, "transfer", { from: userId, to: target.id });
+    await transferMoney(db, userId, target.id, amt, "transfer", { from: userId, to: target.id }, makeInteractionOpKey(interaction, "transfer"));
   } catch (e) {
     if (String(e.message) === "INSUFFICIENT") {
       await interaction.reply({ content: "Не хватает виртов для перевода.", ephemeral: true }); return;
@@ -1446,10 +2001,14 @@ async function handleSlots(interaction, db) {
 
   const winnings = bet * multiplier;
   const net = winnings - bet;
+  const opKey = makeInteractionOpKey(interaction, "slots");
 
   await withTransaction(db, async () => {
+    const fresh = await getUserRow(db, userId);
+    if (Number(fresh?.money || 0) < bet) throw new Error("INSUFFICIENT");
+    const inserted = await addLedgerUnique(db, "slots", userId, null, Math.abs(net), opKey, { r1, r2, r3, bet, multiplier });
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
     await adjustMoney(db, userId, net);
-    await addLedger(db, "slots", userId, null, Math.abs(net), { r1, r2, r3, bet, multiplier });
   });
 
   const after = await getUserRow(db, userId);
@@ -1501,10 +2060,14 @@ async function handleBlackjack(interaction, db) {
   else { result = "push"; net = 0; }
 
   if (pVal === 21 && player.length === 2) { net = Math.floor(bet * 1.5); result = "blackjack"; }
+  const opKey = makeInteractionOpKey(interaction, "blackjack");
 
   await withTransaction(db, async () => {
+    const fresh = await getUserRow(db, userId);
+    if (Number(fresh?.money || 0) < bet) throw new Error("INSUFFICIENT");
+    const inserted = await addLedgerUnique(db, "blackjack", userId, null, Math.abs(net), opKey, { player, dealer, result, bet });
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
     await adjustMoney(db, userId, net);
-    await addLedger(db, "blackjack", userId, null, Math.abs(net), { player, dealer, result, bet });
   });
 
   const after = await getUserRow(db, userId);
@@ -1547,10 +2110,14 @@ async function handleRoulette(interaction, db) {
     const mult = color === "green" ? 14 : 2;
     net = bet * mult - bet;
   }
+  const opKey = makeInteractionOpKey(interaction, "roulette");
 
   await withTransaction(db, async () => {
+    const fresh = await getUserRow(db, userId);
+    if (Number(fresh?.money || 0) < bet) throw new Error("INSUFFICIENT");
+    const inserted = await addLedgerUnique(db, "roulette", userId, null, Math.abs(net), opKey, { color, resultColor, number, bet });
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
     await adjustMoney(db, userId, net);
-    await addLedger(db, "roulette", userId, null, Math.abs(net), { color, resultColor, number, bet });
   });
 
   const after = await getUserRow(db, userId);
@@ -1591,17 +2158,43 @@ async function handleSampLifeCommand({ interaction, db }) {
 
     await interaction.reply({ content: "Неизвестная команда SAMP Life.", ephemeral: true });
   } catch (e) {
+    const isDeferred = Boolean(interaction.deferred || interaction.replied);
+
+    if (String(e.message) === "COOLDOWN_ACTIVE") {
+      if (isDeferred) {
+        await interaction.followUp({ content: "⏳ Ежедневный бонус уже получен. Попробуй позже.", ephemeral: true });
+      } else {
+        await interaction.reply({ content: "⏳ Ежедневный бонус уже получен. Попробуй позже.", ephemeral: true });
+      }
+      return;
+    }
+    if (String(e.message) === "DUPLICATE_OPERATION") {
+      if (isDeferred) {
+        await interaction.followUp({ content: "Эта команда уже была обработана.", ephemeral: true });
+      } else {
+        await interaction.reply({ content: "Эта команда уже была обработана.", ephemeral: true });
+      }
+      return;
+    }
     if (String(e.message) === "INSUFFICIENT") {
-      await interaction.reply({ content: "Не хватает виртов.", ephemeral: true });
+      if (isDeferred) {
+        await interaction.followUp({ content: "Не хватает виртов.", ephemeral: true });
+      } else {
+        await interaction.reply({ content: "Не хватает виртов.", ephemeral: true });
+      }
       return;
     }
     if (String(e.message) === "ALREADY_OWNED") {
-      await interaction.reply({ content: "У тебя уже есть эта тачка в гараже.", ephemeral: true });
+      if (isDeferred) {
+        await interaction.followUp({ content: "У тебя уже есть эта тачка в гараже.", ephemeral: true });
+      } else {
+        await interaction.reply({ content: "У тебя уже есть эта тачка в гараже.", ephemeral: true });
+      }
       return;
     }
     // eslint-disable-next-line no-console
     console.error("[samp-life] command error", e);
-    if (interaction.deferred || interaction.replied) {
+    if (isDeferred) {
       await interaction.followUp({ content: "Ошибка. Попробуй позже.", ephemeral: true });
     } else {
       await interaction.reply({ content: "Ошибка. Попробуй позже.", ephemeral: true });
@@ -1674,6 +2267,12 @@ module.exports = {
   getSampLifeCommandBuilders,
   handleSampLifeCommand,
   handleSampLifeAutocomplete,
+  getCarVehicleProfile,
+  getInstalledCarUpgradeRows,
+  getOrCreateCarTuningProgress,
+  getUserRaceStats,
+  getCarUpgradeSpeedBonus,
+  getRaceCarProfile,
   CARS,
   ITEMS,
 };
