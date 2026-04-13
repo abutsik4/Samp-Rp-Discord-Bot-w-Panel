@@ -503,6 +503,25 @@ function msToHuman(ms) {
   return `${h}ч ${m}м ${r}с`;
 }
 
+function toSqliteUtcDateTime(value = Date.now()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 19).replace("T", " ");
+}
+
+function parseSqliteUtcDateTime(value) {
+  if (!value) return null;
+  const normalized = `${String(value).replace(" ", "T")}Z`;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatRelativeLedgerTime(value) {
+  const date = parseSqliteUtcDateTime(value);
+  if (!date) return "неизвестно когда";
+  return msToHuman(Math.max(0, Date.now() - date.getTime()));
+}
+
 function makeInteractionOpKey(interaction, suffix = "") {
   const base = String(interaction?.id || interaction?.token || "").trim();
   if (!base) return null;
@@ -529,7 +548,7 @@ async function withTransaction(db, fn) {
 }
 
 async function getUserRow(db, userId) {
-  return dbGet(db, "SELECT user_id, money, car_id, rep, jail_until FROM samp_users WHERE user_id = ?", [String(userId)]);
+  return dbGet(db, "SELECT user_id, money, car_id, rep, jail_until, last_samp_seen_at FROM samp_users WHERE user_id = ?", [String(userId)]);
 }
 
 async function getOrCreateUser(db, userId) {
@@ -539,12 +558,65 @@ async function getOrCreateUser(db, userId) {
 
   await dbRun(
     db,
-    `INSERT INTO samp_users(user_id, money, car_id, rep, jail_until)
-     VALUES(?, ?, ?, 0, 0)` ,
+    `INSERT INTO samp_users(user_id, money, car_id, rep, jail_until, last_samp_seen_at)
+     VALUES(?, ?, ?, 0, 0, datetime('now'))` ,
     [uid, START_MONEY, DEFAULT_CAR_ID]
   );
   await dbRun(db, `INSERT OR IGNORE INTO samp_garage(user_id, car_id) VALUES(?, ?)`, [uid, DEFAULT_CAR_ID]);
   return getUserRow(db, uid);
+}
+
+async function touchSampUserSeenAt(db, userId) {
+  if (!userId) return;
+  await dbRun(db, `UPDATE samp_users SET last_samp_seen_at = datetime('now') WHERE user_id = ?`, [String(userId)]);
+}
+
+async function summarizeRobberyLosses(db, userId, { since = null, limit = 5 } = {}) {
+  const where = ["type = 'rob_pvp'", "to_user = ?"];
+  const params = [String(userId)];
+  const normalizedSince = since ? String(since) : null;
+  if (normalizedSince) {
+    where.push("ts > ?");
+    params.push(normalizedSince);
+  }
+
+  const whereClause = where.join(" AND ");
+  const aggregate = await dbGet(
+    db,
+    `SELECT COUNT(*) AS total_count, COALESCE(SUM(amount), 0) AS total_amount
+     FROM samp_ledger
+     WHERE ${whereClause}`,
+    params
+  );
+  const rows = await dbAll(
+    db,
+    `SELECT id, ts, from_user, to_user, amount
+     FROM samp_ledger
+     WHERE ${whereClause}
+     ORDER BY ts DESC, id DESC
+     LIMIT ?`,
+    [...params, Math.max(1, Number(limit) || 1)]
+  );
+
+  return {
+    totalCount: Number(aggregate?.total_count || 0),
+    totalAmount: Number(aggregate?.total_amount || 0),
+    rows: rows || [],
+  };
+}
+
+function formatRobberyLossLine(row) {
+  const robber = row?.from_user ? `<@${row.from_user}>` : "Неизвестный";
+  return `• ${robber} украл **${fmtMoney(row?.amount || 0)}** • ${formatRelativeLedgerTime(row?.ts)} назад`;
+}
+
+function formatRobberyOccurrenceCount(count) {
+  const value = Math.abs(Number(count) || 0) % 100;
+  const lastDigit = value % 10;
+  if (value >= 11 && value <= 14) return "раз";
+  if (lastDigit === 1) return "раз";
+  if (lastDigit >= 2 && lastDigit <= 4) return "раза";
+  return "раз";
 }
 
 async function pickOwnedFallbackCarId(db, userId, preferredCarId = DEFAULT_CAR_ID) {
@@ -808,8 +880,15 @@ async function ensureSampLifeTables(db) {
       rep INTEGER NOT NULL DEFAULT 0,
       jail_until INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_samp_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`
+  );
+  try { await dbRun(db, `ALTER TABLE samp_users ADD COLUMN last_samp_seen_at TEXT`); } catch (_) {}
+  await dbRun(
+    db,
+    `UPDATE samp_users
+     SET last_samp_seen_at = COALESCE(NULLIF(last_samp_seen_at, ''), updated_at, created_at, datetime('now'))`
   );
 
   await dbRun(
@@ -892,6 +971,12 @@ function getSampLifeCommandBuilders() {
     new SlashCommandBuilder().setName("reg").setDescription("SAMP Life: регистрация (паспорт гражданина SA)"),
 
     new SlashCommandBuilder().setName("balance").setDescription("SAMP Life: показать баланс и профиль"),
+
+    new SlashCommandBuilder()
+      .setName("moneylog")
+      .setDescription("SAMP Life: кто забирал твои вирты")
+      .addIntegerOption((o) => o.setName("hours").setDescription("Окно истории в часах (по умолчанию: 24)").setRequired(false).setMinValue(1).setMaxValue(24 * 30))
+      .addIntegerOption((o) => o.setName("limit").setDescription("Сколько записей показать (по умолчанию: 10)").setRequired(false).setMinValue(1).setMaxValue(20)),
 
     new SlashCommandBuilder().setName("work").setDescription("SAMP Life: подзаработать по-мелочи (короткий кулдаун)"),
 
@@ -1022,6 +1107,7 @@ async function handleReg(interaction, db) {
 async function handleBalance(interaction, db) {
   const userId = interaction.user.id;
   const user = await getOrCreateUser(db, userId);
+  const awayRobberies = await summarizeRobberyLosses(db, userId, { since: user.last_samp_seen_at, limit: 3 });
   const carProfile = await getCarVehicleProfile(db, userId, user.car_id);
   const weaponId = await getActiveWeapon(db, userId);
   const weapon = weaponId ? itemInfo(weaponId) : null;
@@ -1060,6 +1146,22 @@ async function handleBalance(interaction, db) {
     ]), inline: true },
     { name: "🔫 Оружие", value: weaponName ? `**${weaponName}**` : "—", inline: true },
   ];
+  if (awayRobberies.totalCount > 0) {
+    const robberyLines = awayRobberies.rows.map(formatRobberyLossLine);
+    if (awayRobberies.totalCount > awayRobberies.rows.length) {
+      robberyLines.push(`• И ещё **${awayRobberies.totalCount - awayRobberies.rows.length}** ограблений. Полный список: **/moneylog**`);
+    } else {
+      robberyLines.push("• Полный список можно открыть через **/moneylog**");
+    }
+    fields.push({
+      name: "🕵️ Пока тебя не было",
+      value: joinLines([
+        `Тебя ограбили **${awayRobberies.totalCount}** ${formatRobberyOccurrenceCount(awayRobberies.totalCount)} на **${fmtMoney(awayRobberies.totalAmount)}**.`,
+        ...robberyLines,
+      ]),
+      inline: false,
+    });
+  }
   if (stashLines.length > 0) {
     fields.push({ name: "🕶️ Тайник", value: stashLines.join("\n"), inline: false });
   }
@@ -1074,6 +1176,40 @@ async function handleBalance(interaction, db) {
   applyUserCosmeticsToEmbed(embed, cosmetics, interaction.user.username, 0x3b82f6);
 
   await interaction.reply({ embeds: [embed], ephemeral: false });
+}
+
+async function handleMoneyLog(interaction, db) {
+  const userId = interaction.user.id;
+  await getOrCreateUser(db, userId);
+
+  const hours = clampInt(interaction.options.getInteger("hours") ?? 24, 1, 24 * 30) || 24;
+  const limit = clampInt(interaction.options.getInteger("limit") ?? 10, 1, 20) || 10;
+  const since = toSqliteUtcDateTime(Date.now() - hours * 60 * 60_000);
+  const summary = await summarizeRobberyLosses(db, userId, { since, limit });
+
+  if (summary.totalCount <= 0) {
+    await interaction.reply({
+      content: `За последние **${hours}ч** никто не грабил тебя через **/rob**.`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const lines = summary.rows.map(formatRobberyLossLine);
+  if (summary.totalCount > summary.rows.length) {
+    lines.push(`• И ещё **${summary.totalCount - summary.rows.length}** записей в этом окне.`);
+  }
+
+  const embeds = buildPagedLineEmbeds({
+    title: "SAMP Life — Кто забрал твои вирты",
+    description: `За последние **${hours}ч** тебя успешно ограбили **${summary.totalCount}** раз на **${fmtMoney(summary.totalAmount)}**.`,
+    color: 0xef4444,
+    lines,
+    linesPerPage: 8,
+    footer: "Показываются только успешные PvP-ограбления через /rob",
+  });
+
+  await interaction.reply({ embeds, ephemeral: true });
 }
 
 async function handleWork(interaction, db) {
@@ -2182,30 +2318,40 @@ async function handleRoulette(interaction, db) {
 
 async function handleSampLifeCommand({ interaction, db }) {
   const name = interaction.commandName;
+  let handled = true;
+  let result;
 
   try {
-    if (name === "reg") return await handleReg(interaction, db);
-    if (name === "balance") return await handleBalance(interaction, db);
-    if (name === "work") return await handleWork(interaction, db);
-    if (name === "truck") return await handleTruck(interaction, db);
-    if (name === "rob") return await handleRob(interaction, db);
-    if (name === "dealership") return await handleDealership(interaction);
-    if (name === "weaponshop") return await handleWeaponShop(interaction);
-    if (name === "buy") return await handleBuy(interaction, db);
-    if (name === "race") return await handleRace(interaction, db);
-    if (name === "duel") return await handleDuel(interaction, db);
-    if (name === "sellcar") return await handleSellCar(interaction, db);
-    if (name === "buycar") return await handleBuyCar(interaction, db);
-    if (name === "weapon") return await handleWeapon(interaction, db);
-    if (name === "bail") return await handleBail(interaction, db);
-    if (name === "richest") return await handleRichest(interaction, db);
-    if (name === "daily") return await handleDaily(interaction, db);
-    if (name === "pay") return await handlePay(interaction, db);
-    if (name === "slots") return await handleSlots(interaction, db);
-    if (name === "blackjack") return await handleBlackjack(interaction, db);
-    if (name === "roulette") return await handleRoulette(interaction, db);
+    if (name === "reg") result = await handleReg(interaction, db);
+    else if (name === "balance") result = await handleBalance(interaction, db);
+    else if (name === "moneylog") result = await handleMoneyLog(interaction, db);
+    else if (name === "work") result = await handleWork(interaction, db);
+    else if (name === "truck") result = await handleTruck(interaction, db);
+    else if (name === "rob") result = await handleRob(interaction, db);
+    else if (name === "dealership") result = await handleDealership(interaction);
+    else if (name === "weaponshop") result = await handleWeaponShop(interaction);
+    else if (name === "buy") result = await handleBuy(interaction, db);
+    else if (name === "race") result = await handleRace(interaction, db);
+    else if (name === "duel") result = await handleDuel(interaction, db);
+    else if (name === "sellcar") result = await handleSellCar(interaction, db);
+    else if (name === "buycar") result = await handleBuyCar(interaction, db);
+    else if (name === "weapon") result = await handleWeapon(interaction, db);
+    else if (name === "bail") result = await handleBail(interaction, db);
+    else if (name === "richest") result = await handleRichest(interaction, db);
+    else if (name === "daily") result = await handleDaily(interaction, db);
+    else if (name === "pay") result = await handlePay(interaction, db);
+    else if (name === "slots") result = await handleSlots(interaction, db);
+    else if (name === "blackjack") result = await handleBlackjack(interaction, db);
+    else if (name === "roulette") result = await handleRoulette(interaction, db);
+    else handled = false;
 
-    await interaction.reply({ content: "Неизвестная команда SAMP Life.", ephemeral: true });
+    if (!handled) {
+      await interaction.reply({ content: "Неизвестная команда SAMP Life.", ephemeral: true });
+      return;
+    }
+
+    await touchSampUserSeenAt(db, interaction.user?.id).catch(() => {});
+    return result;
   } catch (e) {
     const isDeferred = Boolean(interaction.deferred || interaction.replied);
 
@@ -2325,6 +2471,7 @@ module.exports = {
   getSampLifeCommandBuilders,
   handleSampLifeCommand,
   handleSampLifeAutocomplete,
+  touchSampUserSeenAt,
   getCarVehicleProfile,
   getInstalledCarUpgradeRows,
   getOrCreateCarTuningProgress,

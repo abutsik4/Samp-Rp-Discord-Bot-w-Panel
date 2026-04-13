@@ -76,6 +76,10 @@ function makeInteractionSafe(args) {
   return interaction;
 }
 
+function toSqliteUtcDateTime(value = Date.now()) {
+  return new Date(value).toISOString().slice(0, 19).replace("T", " ");
+}
+
 test("ensureSampLifeTables creates tables", async () => {
   const db = makeDb();
   await ensureSampLifeTables(db);
@@ -141,6 +145,89 @@ test("/balance returns a structured profile embed", async () => {
     assert.ok(fieldNames.includes("🚘 Активная тачка"));
     assert.ok(fieldNames.includes("🔫 Оружие"));
     assert.ok(fieldNames.includes("⚖️ Статус"));
+  } finally {
+    db.close();
+  }
+});
+
+test("/balance summarizes robberies since last SAMP activity and refreshes last seen", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteractionSafe({ commandName: "reg", userId: "victim-balance", username: "Victim" }), db });
+
+    const oldSeenAt = toSqliteUtcDateTime(Date.now() - 24 * 60 * 60_000);
+    await dbRun(db, "UPDATE samp_users SET last_samp_seen_at = ? WHERE user_id = ?", [oldSeenAt, "victim-balance"]);
+    await dbRun(
+      db,
+      `INSERT INTO samp_ledger(ts, type, from_user, to_user, amount, meta_json)
+       VALUES(?, 'rob_pvp', ?, ?, ?, '{}')`,
+      [toSqliteUtcDateTime(Date.now() - 3 * 60 * 60_000), "robber-1", "victim-balance", 12_500]
+    );
+    await dbRun(
+      db,
+      `INSERT INTO samp_ledger(ts, type, from_user, to_user, amount, meta_json)
+       VALUES(?, 'rob_pvp', ?, ?, ?, '{}')`,
+      [toSqliteUtcDateTime(Date.now() - 90 * 60_000), "robber-2", "victim-balance", 4_000]
+    );
+
+    const balance = makeInteractionSafe({ commandName: "balance", userId: "victim-balance", username: "Victim" });
+    await handleSampLifeCommand({ interaction: balance, db });
+
+    const state = balance.__getState();
+    const embed = state.lastReply.embeds[0].toJSON();
+    const awayField = embed.fields.find((field) => field.name === "🕵️ Пока тебя не было");
+    const refreshed = await dbGet(db, "SELECT last_samp_seen_at FROM samp_users WHERE user_id = ?", ["victim-balance"]);
+
+    assert.ok(awayField, "balance should include an away-summary field when robberies happened since last seen");
+    assert.match(awayField.value, /2/);
+    assert.match(awayField.value, /16(?:\s|\u00a0)500 \$/);
+    assert.match(awayField.value, /<@robber-1>/);
+    assert.match(awayField.value, /<@robber-2>/);
+    assert.notEqual(refreshed.last_samp_seen_at, oldSeenAt, "balance should refresh last_samp_seen_at after showing the summary");
+  } finally {
+    db.close();
+  }
+});
+
+test("/moneylog shows recent robbery history for the player", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteractionSafe({ commandName: "reg", userId: "victim-log", username: "VictimLog" }), db });
+
+    await dbRun(
+      db,
+      `INSERT INTO samp_ledger(ts, type, from_user, to_user, amount, meta_json)
+       VALUES(?, 'rob_pvp', ?, ?, ?, '{}')`,
+      [toSqliteUtcDateTime(Date.now() - 2 * 60 * 60_000), "recent-robber", "victim-log", 8_500]
+    );
+    await dbRun(
+      db,
+      `INSERT INTO samp_ledger(ts, type, from_user, to_user, amount, meta_json)
+       VALUES(?, 'rob_pvp', ?, ?, ?, '{}')`,
+      [toSqliteUtcDateTime(Date.now() - 30 * 60 * 60_000), "old-robber", "victim-log", 20_000]
+    );
+
+    const moneyLog = makeInteractionSafe({
+      commandName: "moneylog",
+      userId: "victim-log",
+      username: "VictimLog",
+      options: { hours: 24, limit: 10 },
+    });
+    await handleSampLifeCommand({ interaction: moneyLog, db });
+
+    const state = moneyLog.__getState();
+    const payload = state.lastReply;
+    const description = payload.embeds[0].toJSON().description;
+    const body = payload.embeds.map((embed) => embed.toJSON().description || "").join("\n");
+
+    assert.equal(payload.ephemeral, true);
+    assert.match(description, /8(?:\s|\u00a0)500 \$/);
+    assert.match(body, /<@recent-robber>/);
+    assert.doesNotMatch(body, /<@old-robber>/);
   } finally {
     db.close();
   }

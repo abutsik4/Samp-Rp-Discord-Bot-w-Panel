@@ -10,6 +10,7 @@ const {
   getInstalledCarUpgradeRows,
   getOrCreateCarTuningProgress,
   getUserRaceStats,
+  touchSampUserSeenAt,
 } = require("./samp-life");
 const { getUserBadges } = require("./badges");
 const { addWantedStar } = require("./wanted-stars");
@@ -3291,41 +3292,50 @@ async function handleSampExtendedCommand({ interaction, db }) {
     gsupportbiz: "supportbiz",
     gangtop: "top",
   };
+  let handled = true;
+  let result;
   try {
-    if (name === "businesses") return await handleBusinesses(interaction, db);
-    if (name === "bizstats") return await handleBizStats(interaction, db);
-    if (name === "mbizstats") return await handleBizStats(interaction, db);
-    if (name === "buybiz") return await handleBuyBiz(interaction, db);
-    if (name === "collectincome") return await handleCollectIncome(interaction, db);
-    if (name === "maintainbiz") return await handleMaintainBiz(interaction, db);
-    if (name === "bizrun") return await handleBizRun(interaction, db);
-    if (name === "tune") return await handleTuneCommand(interaction, db);
-    if (name === "tunecar") return await handleTuneCar(interaction, db);
-    if (name === "switchcar") return await handleSwitchCar(interaction, db);
-    if (name === "garage") return await handleGarage(interaction, db);
-    if (name === "bounty") return await handleBounty(interaction, db);
-    if (name === "bountylist") return await handleBountyList(interaction, db);
-    if (name === "heist") return await handleHeist(interaction, db);
-    if (name === "jobs") return await handleJobs(interaction, db);
-    if (name === "dojob") return await handleDoJob(interaction, db);
-    if (name === "gang") return await handleGangCommand(interaction, db);
-    if (gangAliasMap[name]) {
+    if (name === "businesses") result = await handleBusinesses(interaction, db);
+    else if (name === "bizstats") result = await handleBizStats(interaction, db);
+    else if (name === "mbizstats") result = await handleBizStats(interaction, db);
+    else if (name === "buybiz") result = await handleBuyBiz(interaction, db);
+    else if (name === "collectincome") result = await handleCollectIncome(interaction, db);
+    else if (name === "maintainbiz") result = await handleMaintainBiz(interaction, db);
+    else if (name === "bizrun") result = await handleBizRun(interaction, db);
+    else if (name === "tune") result = await handleTuneCommand(interaction, db);
+    else if (name === "tunecar") result = await handleTuneCar(interaction, db);
+    else if (name === "switchcar") result = await handleSwitchCar(interaction, db);
+    else if (name === "garage") result = await handleGarage(interaction, db);
+    else if (name === "bounty") result = await handleBounty(interaction, db);
+    else if (name === "bountylist") result = await handleBountyList(interaction, db);
+    else if (name === "heist") result = await handleHeist(interaction, db);
+    else if (name === "jobs") result = await handleJobs(interaction, db);
+    else if (name === "dojob") result = await handleDoJob(interaction, db);
+    else if (name === "gang") result = await handleGangCommand(interaction, db);
+    else if (gangAliasMap[name]) {
       const aliasInteraction = createGangAliasInteraction(interaction, gangAliasMap[name]);
-      return await handleGangCommand(aliasInteraction, db);
+      result = await handleGangCommand(aliasInteraction, db);
+    } else if (name === "shopcosmetics") result = await handleShopCosmetics(interaction);
+    else if (name === "buycosmetic") result = await handleBuyCosmetic(interaction, db);
+    else if (name === "repair") result = await handleRepair(interaction, db);
+    else if (name === "lottery") result = await handleLottery(interaction, db);
+    else if (name === "blackmarket") result = await handleBlackMarket(interaction, db);
+    else if (name === "usejailpass") result = await handleUseJailPass(interaction, db);
+    else if (name === "userepairkit") result = await handleUseRepairKit(interaction, db);
+    else if (name === "disguise") result = await handleDisguise(interaction, db);
+    else if (name === "hottip") result = await handleHotTip(interaction, db);
+    else if (name === "secretheist") result = await handleSecretHeist(interaction, db);
+    else if (name === "wiretap") result = await handleWiretap(interaction, db);
+    else if (name === "sabotage") result = await handleSabotage(interaction, db);
+    else if (name === "gangbmorder") result = await handleGangBmOrder(interaction, db);
+    else handled = false;
+
+    if (!handled) {
+      return;
     }
-    if (name === "shopcosmetics") return await handleShopCosmetics(interaction);
-    if (name === "buycosmetic") return await handleBuyCosmetic(interaction, db);
-    if (name === "repair") return await handleRepair(interaction, db);
-    if (name === "lottery") return await handleLottery(interaction, db);
-    if (name === "blackmarket") return await handleBlackMarket(interaction, db);
-    if (name === "usejailpass") return await handleUseJailPass(interaction, db);
-    if (name === "userepairkit") return await handleUseRepairKit(interaction, db);
-    if (name === "disguise") return await handleDisguise(interaction, db);
-    if (name === "hottip") return await handleHotTip(interaction, db);
-    if (name === "secretheist") return await handleSecretHeist(interaction, db);
-    if (name === "wiretap") return await handleWiretap(interaction, db);
-    if (name === "sabotage") return await handleSabotage(interaction, db);
-    if (name === "gangbmorder") return await handleGangBmOrder(interaction, db);
+
+    await touchSampUserSeenAt(db, interaction.user?.id).catch(() => {});
+    return result;
   } catch (e) {
     console.error("[samp-extended] error", e);
     const msg = "Ошибка. Попробуй позже.";
