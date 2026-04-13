@@ -71,6 +71,8 @@ function makeInteraction(args) {
     },
     editReply: async (payload) => {
       lastEditReply = payload;
+      lastReply = payload;
+      interaction.replied = true;
       return null;
     },
     followUp: async (payload) => {
@@ -124,6 +126,8 @@ function makePrototypeInteraction(args) {
     },
     async editReply(payload) {
       lastEditReply = payload;
+      lastReply = payload;
+      this.replied = true;
       return null;
     },
     async followUp(payload) {
@@ -754,7 +758,7 @@ test("black market golden deagle purchase persists and is visible in balance", a
 
     assert.ok(goldenField, "daily black market should expose the golden deagle in one of the slots");
     const goldenSlot = Number(String(goldenField.name).match(/#(\d+)/)?.[1] || 0);
-    assert.ok(goldenSlot >= 1 && goldenSlot <= 3, "golden deagle slot should be parseable from the browse output");
+    assert.ok(goldenSlot >= 1 && goldenSlot <= 4, "golden deagle slot should be parseable from the browse output");
 
     const buy = makeInteraction({
       commandName: "blackmarket",

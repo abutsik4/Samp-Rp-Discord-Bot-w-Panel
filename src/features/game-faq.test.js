@@ -152,3 +152,25 @@ test("game faq chat autoanswer ignores ambiguous low-signal text", async () => {
   assert.equal(handled, false);
   assert.equal(replies.length, 0);
 });
+
+test("game faq answer embed dedupes repeated command suggestions", async () => {
+  const replies = [];
+  const interaction = {
+    options: {
+      getString: (name) => {
+        if (name === "question") return "для чего нужны косметика лотерея и черный рынок";
+        return null;
+      },
+    },
+    reply: async (payload) => {
+      replies.push(payload);
+    },
+  };
+
+  await handleGameFaqCommand(interaction);
+
+  assert.equal(replies.length, 1);
+  const commandsField = replies[0].embeds[0].data.fields.find((field) => field.name === "Полезные команды");
+  const commands = String(commandsField?.value || "").trim().split(/\s+/).filter(Boolean);
+  assert.equal(commands.length, new Set(commands).size, "FAQ command suggestions should not repeat commands");
+});

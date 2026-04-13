@@ -1176,6 +1176,29 @@ async function getUserSetting(db, userId, key) {
   return row ? row.value : null;
 }
 
+function isIgnorableInteractionError(error) {
+  const code = Number(error?.code || error?.rawError?.code || 0);
+  return code === 10062 || code === 40060;
+}
+
+async function deferInteractionIfNeeded(interaction) {
+  if (interaction.deferred || interaction.replied) return true;
+  try {
+    await interaction.deferReply();
+    return true;
+  } catch (error) {
+    if (isIgnorableInteractionError(error)) return false;
+    throw error;
+  }
+}
+
+async function sendInteractionResponse(interaction, payload) {
+  if (interaction.deferred || interaction.replied) {
+    return interaction.editReply(payload);
+  }
+  return interaction.reply(payload);
+}
+
 async function alreadyOwnsBlackMarketDeal(db, userId, deal) {
   const grant = BLACK_MARKET_GRANTS[deal?.type];
   if (!grant?.cosmeticType) return false;
@@ -2715,7 +2738,8 @@ async function handleBlackMarket(interaction, db) {
   const sub = interaction.options.getSubcommand?.() || "browse";
 
   if (sub === "browse" || !interaction.options.getSubcommand) {
-    await interaction.deferReply();
+    const acknowledged = await deferInteractionIfNeeded(interaction);
+    if (!acknowledged) return;
     const userId = interaction.user.id;
     const deals = getDailyBlackMarketDeals();
     const dealer = getDailyDealer();
@@ -2741,27 +2765,28 @@ async function handleBlackMarket(interaction, db) {
       fieldsPerPage: 4,
       footer: `Покупка: /blackmarket buy slot:<1-${BM_DAILY_DEAL_COUNT}> • ⚠️ 8% шанс облавы`,
     });
-    await interaction.editReply({ embeds });
+    await sendInteractionResponse(interaction, { embeds });
 
   } else if (sub === "buy") {
-    await interaction.deferReply();
+    const acknowledged = await deferInteractionIfNeeded(interaction);
+    if (!acknowledged) return;
     const userId = interaction.user.id;
     const guildId = interaction.guild?.id || interaction.guildId || null;
     const slot = interaction.options.getInteger("slot", true);
     const deals = getDailyBlackMarketDeals();
     const deal = deals[slot - 1];
-    if (!deal) { await interaction.editReply({ content: `Слот 1-${BM_DAILY_DEAL_COUNT}.` }); return; }
+    if (!deal) { await sendInteractionResponse(interaction, { content: `Слот 1-${BM_DAILY_DEAL_COUNT}.` }); return; }
 
     const user = await getSampUser(db, userId);
-    if (!user) { await interaction.editReply({ content: "Сначала /reg." }); return; }
+    if (!user) { await sendInteractionResponse(interaction, { content: "Сначала /reg." }); return; }
 
     const purchases = await getBmPurchaseCount(db, userId);
     const tier = getBmRepTier(purchases);
     const finalPrice = tier.discount > 0 ? Math.floor(deal.price * (1 - tier.discount)) : deal.price;
 
-    if (Number(user.money) < finalPrice) { await interaction.editReply({ content: "Не хватает виртов." }); return; }
+    if (Number(user.money) < finalPrice) { await sendInteractionResponse(interaction, { content: "Не хватает виртов." }); return; }
     if (await alreadyOwnsBlackMarketDeal(db, userId, deal)) {
-      await interaction.editReply({ content: "Этот товар у тебя уже есть. Повторно списывать деньги не буду." });
+      await sendInteractionResponse(interaction, { content: "Этот товар у тебя уже есть. Повторно списывать деньги не буду." });
       return;
     }
 
@@ -2794,7 +2819,7 @@ async function handleBlackMarket(interaction, db) {
     let reply = `🕶️ Куплено: **${deal.name}** за **${fmtMoney(finalPrice)}**!\n${grantResult.summary}`;
     if (instantResult) reply += `\n${instantResult}`;
     if (stingTriggered) reply += `\n\n⚠️ **Полиция засекла сделку!** +${BM_STING_STARS} ⭐ розыска!`;
-    await interaction.editReply(reply);
+    await sendInteractionResponse(interaction, reply);
   }
 }
 
@@ -3270,8 +3295,15 @@ async function handleSampExtendedCommand({ interaction, db }) {
   } catch (e) {
     console.error("[samp-extended] error", e);
     const msg = "Ошибка. Попробуй позже.";
-    if (interaction.deferred || interaction.replied) await interaction.followUp({ content: msg, ephemeral: true }).catch(() => {});
-    else await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
+    if (interaction.deferred && !interaction.replied) {
+      await interaction.editReply({ content: msg, embeds: [] }).catch(async () => {
+        await interaction.followUp({ content: msg, ephemeral: true }).catch(() => {});
+      });
+    } else if (interaction.replied) {
+      await interaction.followUp({ content: msg, ephemeral: true }).catch(() => {});
+    } else {
+      await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
+    }
   }
 }
 

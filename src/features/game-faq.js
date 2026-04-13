@@ -588,13 +588,34 @@ function searchGameFaq(query, { topicId = null, limit = 5 } = {}) {
     }
   }
 
+  const seen = new Set();
   return matches
     .sort((left, right) => right.score - left.score || left.topic.title.localeCompare(right.topic.title, "ru"))
+    .filter((match) => {
+      const key = `${match.topic.id}:${match.entry.id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
     .slice(0, Math.max(1, limit));
 }
 
+function uniqueFaqItems(values) {
+  const result = [];
+  const seen = new Set();
+  for (const raw of values || []) {
+    const value = String(raw || "").trim();
+    if (!value) continue;
+    const key = normalizeText(value);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(value);
+  }
+  return result;
+}
+
 function formatCommands(commands) {
-  const items = (commands || []).filter(Boolean);
+  const items = uniqueFaqItems(commands);
   if (!items.length) return "-";
   return items.join(" ");
 }
@@ -658,10 +679,16 @@ function renderFaqTopicEmbed(topic) {
 
 function renderFaqAnswerEmbed(match, relatedMatches = []) {
   const { topic, entry } = match;
-  const related = relatedMatches
-    .filter((candidate) => candidate.entry.id !== entry.id)
-    .slice(0, 3)
-    .map((candidate) => `• ${candidate.entry.question}`);
+  const related = [];
+  const seenQuestions = new Set([normalizeText(entry.question)]);
+  for (const candidate of relatedMatches) {
+    if (candidate.entry.id === entry.id) continue;
+    const questionKey = normalizeText(candidate.entry.question);
+    if (!questionKey || seenQuestions.has(questionKey)) continue;
+    seenQuestions.add(questionKey);
+    related.push(`• ${candidate.entry.question}`);
+    if (related.length >= 3) break;
+  }
 
   const embed = new EmbedBuilder()
     .setTitle(`📖 FAQ — ${topic.title}`)
