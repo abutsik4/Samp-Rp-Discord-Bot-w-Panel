@@ -69,15 +69,11 @@ Run with PM2 (recommended for production):
 pm2 start ecosystem.config.js
 ```
 
-## CV-Ready Summary
-
-Use the following as a concise CV project description:
+## Professional Summary
 
 Built and maintained a full-stack Discord bot platform for SA-MP roleplay communities, including a Node.js/Discord.js bot, Express API backend, React admin panel, and SQLite data layer. Implemented analytics, moderation workflows, game economy systems, and operational verification/reconciliation tooling to support production reliability.
 
-## Supporting Statement Version
-
-Use this version when writing supporting statements or competency responses:
+## Delivery Highlights
 
 Delivered an end-to-end community operations platform by owning backend, frontend, and data architecture. Developed user-facing gameplay and moderation features while also implementing reliability-focused engineering controls (verification, reconciliation, and diagnostics). Ensured maintainability through modular feature design, operational scripts, and practical deployment workflows.
 
