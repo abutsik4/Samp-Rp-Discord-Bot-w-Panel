@@ -1,30 +1,37 @@
-# SA-MP RP Discord Bot + Panel
+# SA-MP RP Discord Bot with Admin Panel
 
-> Welcome to Los Santos Ops.
-> One bot. One panel. Full control of your SA-MP RP Discord city.
+A production Discord bot platform for SA-MP roleplay communities, with a web-based administration panel, analytics, moderation tooling, and game economy systems.
 
-A production Discord bot for SA-MP roleplay communities with a web control panel, analytics, moderation tools, game economy systems, AI engagement, and operations tooling.
+This repository is designed for real operations: reliability, maintainability, and clear ownership of full-stack functionality.
 
-## What This Project Is
+## Project Overview
 
-Think of it like your in-game control room:
+The platform combines:
 
-- Streets: message activity, leaderboards, XP, badges
-- Economy: SA-MP money flow, jobs, races, duels, garages, businesses
-- Law: moderation, rate limits, strikes, banned words
-- City Hall: admin web panel for live management
-- Dispatch: logs, reconciliation, verification, and recovery scripts
+- Discord bot runtime (slash commands, events, moderation, gameplay)
+- Express API backend for admin operations and data access
+- React admin panel for configuration and monitoring
+- SQLite persistence with automatic schema initialization
+- Operational scripts for backup, restore, verification, and audits
 
-## Main Features
+## Core Capabilities
 
-- Discord slash-command bot (Russian-first UX)
-- React-based admin panel for multi-user management
-- SQLite-backed persistence (auto schema init)
-- Message counting with verification and reconciliation
-- SA-MP gameplay systems (economy, PvP, properties, gangs, events)
-- AI engagement and automation controls
-- Holiday, countdown, weekly rewards, and giveaway systems
-- Operational scripts for backups, restores, audits, and stress tests
+- Real-time message statistics and leaderboard tracking
+- Verification and reconciliation of message counting accuracy
+- Moderation controls: rate limits, strike handling, banned words
+- AI engagement controls and automation utilities
+- SA-MP gameplay systems: economy, PvP, businesses, gangs, territories
+- Persistent panel user management with role-based access
+- Operational diagnostics and troubleshooting routes
+
+## Technical Scope
+
+- Node.js 20+ runtime
+- Discord.js bot architecture
+- Express-based API layer
+- React panel application
+- SQLite datastore
+- 45+ database tables across bot, panel, and gameplay subsystems
 
 ## Quick Start
 
@@ -35,13 +42,13 @@ npm install
 npm run build
 ```
 
-Create `.env` and fill required values:
+Create a local .env file:
 
 ```env
 DISCORD_TOKEN=your_token_here
 OWNER_ID=your_discord_user_id
 PANEL_PORT=3001
-SESSION_SECRET=change_me_to_a_long_random_string
+SESSION_SECRET=replace_with_a_long_random_secret
 ```
 
 Initialize panel users:
@@ -50,44 +57,64 @@ Initialize panel users:
 node scripts/init-panel-users.js
 ```
 
-Run bot + panel:
+Run the application:
 
 ```bash
 node src/index.js
 ```
 
-Or with PM2:
+Run with PM2 (recommended for production):
 
 ```bash
 pm2 start ecosystem.config.js
 ```
 
-## Project Layout
+## CV-Ready Summary
+
+Use the following as a concise CV project description:
+
+Built and maintained a full-stack Discord bot platform for SA-MP roleplay communities, including a Node.js/Discord.js bot, Express API backend, React admin panel, and SQLite data layer. Implemented analytics, moderation workflows, game economy systems, and operational verification/reconciliation tooling to support production reliability.
+
+## Supporting Statement Version
+
+Use this version when writing supporting statements or competency responses:
+
+Delivered an end-to-end community operations platform by owning backend, frontend, and data architecture. Developed user-facing gameplay and moderation features while also implementing reliability-focused engineering controls (verification, reconciliation, and diagnostics). Ensured maintainability through modular feature design, operational scripts, and practical deployment workflows.
+
+## Key Engineering Themes
+
+- Full-stack ownership (bot, API, panel, database)
+- Production operations mindset (verification, recovery, diagnostics)
+- Feature modularity and maintainable structure
+- Practical automation and admin tooling
+- Security-minded configuration and access control
+
+## Repository Structure
 
 ```text
 src/
-  bot/           # Discord runtime, commands, event handlers
-  features/      # Game systems, analytics, moderation, AI, etc.
-  web/           # Express API + panel integration
-  db/            # Schema/init
-  utils/         # Shared helpers and logger
-panel-ui/        # React panel source
-public/panel/    # Built panel assets
-scripts/         # Maintenance and ops scripts
-data/            # Runtime data and sqlite files
+  bot/           # Discord runtime, command dispatch, event handling
+  features/      # Gameplay, analytics, moderation, AI, and support modules
+  web/           # Express app and API routes
+  db/            # Schema and initialization
+  utils/         # Shared helpers and logging
+panel-ui/        # React admin panel source
+public/panel/    # Built frontend assets
+scripts/         # Operations and maintenance scripts
+data/            # Runtime data and SQLite files
 logs/            # Runtime logs
 ```
 
-## Web Panel
+## Admin Panel
 
-Main capabilities:
+The panel supports:
 
-- Dashboard and analytics
-- Message/announcement management
-- Gameplay controls (levels, badges, perks, SA-MP systems)
-- Moderation and automation settings
-- Verification and operations views
-- Panel user management (admin role)
+- dashboard and analytics
+- message and announcement management
+- moderation and automation settings
+- gameplay configuration and monitoring
+- verification and operational troubleshooting
+- panel user administration
 
 Standalone panel mode:
 
@@ -98,27 +125,19 @@ node src/panel-only.js
 ## Useful Commands
 
 ```bash
-npm run build            # Build panel assets
-npm test                 # Run tests
-npm run docs:commands-channel   # Sync command docs channel content
+npm run build
+npm test
+npm run docs:commands-channel
 ```
 
 ## Deployment Notes
 
-- Recommended runtime: Linux + Node.js 20+
-- Process manager: PM2
-- Keep `.env` secrets out of git
-- Back up `data/` and `backups/` regularly
-
-## GTA SA Vibe, Real Ops Discipline
-
-This repo keeps the RP flavor in user-facing features, but under the hood it is engineered for reliability:
-
-- Idempotent operations where possible
-- Reconciliation paths for message/stat consistency
-- Debug and verification routes for incident response
-- Extensive scripts for backups, restores, and audits
+- Recommended host: Linux
+- Required runtime: Node.js 20+
+- Suggested process manager: PM2
+- Keep secrets in local environment variables
+- Back up data and backups directories regularly
 
 ## License
 
-MIT (see `LICENSE`).
+MIT (see LICENSE).
