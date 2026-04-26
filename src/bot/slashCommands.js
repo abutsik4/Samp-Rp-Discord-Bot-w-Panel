@@ -21,6 +21,8 @@ const { getRadioCommandBuilders } = require("../features/radio-vote");
 const { getSampExtendedCommandBuilders } = require("../features/samp-extended");
 const { getSeasonalEventCommandBuilders } = require("../features/seasonal-events");
 const { getGameFaqCommandBuilders } = require("../features/game-faq");
+const { getCosmeticsCommandBuilders } = require("../features/samp-cosmetics");
+const { getOnboardingCommandBuilders } = require("../features/samp-onboarding");
 
 // -- DRY helper for top5/top10 ------------------------------------------------
 
@@ -146,6 +148,8 @@ function buildCommandsJson() {
     ...getSampExtendedCommandBuilders(),
     ...getSeasonalEventCommandBuilders(),
     ...getGameFaqCommandBuilders(),
+    ...getCosmeticsCommandBuilders(),
+    ...getOnboardingCommandBuilders(),
 
     // Badges / achievements
     new SlashCommandBuilder()

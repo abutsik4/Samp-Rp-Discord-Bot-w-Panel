@@ -578,6 +578,9 @@ export const panelApi = {
   sampLifeUser(botKey, userId) {
     return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/gameplay/samp-life/user/${encodeURIComponent(userId)}`, { method: "GET" });
   },
+  sampLifeTruckOverview(botKey) {
+    return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/gameplay/samp-life/truck/overview`, { method: "GET" });
+  },
   sampLifeBusinessOverview(botKey) {
     return apiFetch(`/panel/api/${encodeURIComponent(botKey)}/gameplay/samp-life/businesses/overview`, { method: "GET" });
   },

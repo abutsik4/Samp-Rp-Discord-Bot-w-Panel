@@ -604,7 +604,11 @@ function createGameplayRouter(ctx) {
       if (search) {
         rows = await dbAll(
           `SELECT user_id, money, car_id, rep, jail_until, created_at, updated_at,
-                  (SELECT COUNT(*) FROM samp_properties sp WHERE sp.user_id = samp_users.user_id) AS businesses_owned
+                  (SELECT COUNT(*) FROM samp_properties sp WHERE sp.user_id = samp_users.user_id) AS businesses_owned,
+                  (SELECT COUNT(*) FROM samp_truck_runs tr WHERE tr.user_id = samp_users.user_id) AS truck_runs,
+                  (SELECT COALESCE(SUM(tr.net_amount), 0) FROM samp_truck_runs tr WHERE tr.user_id = samp_users.user_id) AS truck_net,
+                  (SELECT COALESCE(SUM(CASE WHEN tr.crashed = 1 THEN 1 ELSE 0 END), 0) FROM samp_truck_runs tr WHERE tr.user_id = samp_users.user_id) AS truck_crashes,
+                  (SELECT MAX(tr.created_at) FROM samp_truck_runs tr WHERE tr.user_id = samp_users.user_id) AS last_truck_at
            FROM samp_users
            WHERE user_id LIKE ?
            ORDER BY money DESC
@@ -614,7 +618,11 @@ function createGameplayRouter(ctx) {
       } else {
         rows = await dbAll(
           `SELECT user_id, money, car_id, rep, jail_until, created_at, updated_at,
-                  (SELECT COUNT(*) FROM samp_properties sp WHERE sp.user_id = samp_users.user_id) AS businesses_owned
+                  (SELECT COUNT(*) FROM samp_properties sp WHERE sp.user_id = samp_users.user_id) AS businesses_owned,
+                  (SELECT COUNT(*) FROM samp_truck_runs tr WHERE tr.user_id = samp_users.user_id) AS truck_runs,
+                  (SELECT COALESCE(SUM(tr.net_amount), 0) FROM samp_truck_runs tr WHERE tr.user_id = samp_users.user_id) AS truck_net,
+                  (SELECT COALESCE(SUM(CASE WHEN tr.crashed = 1 THEN 1 ELSE 0 END), 0) FROM samp_truck_runs tr WHERE tr.user_id = samp_users.user_id) AS truck_crashes,
+                  (SELECT MAX(tr.created_at) FROM samp_truck_runs tr WHERE tr.user_id = samp_users.user_id) AS last_truck_at
            FROM samp_users
            ORDER BY money DESC
            LIMIT ?`,
@@ -625,6 +633,89 @@ function createGameplayRouter(ctx) {
     } catch (e) {
       console.error("Gameplay SAMP users error:", e);
       return res.status(500).json({ error: e?.message || "Failed to list SAMP users" });
+    }
+  });
+
+  router.get(`${PANEL_BASE}/api/:botKey/gameplay/samp-life/truck/overview`, requireAuth, apiLimiter, async (req, res) => {
+    if (!resolveBot(req, res)) return;
+
+    try {
+      const summary = await dbGet(
+        `SELECT COUNT(*) AS total_runs,
+                COALESCE(SUM(CASE WHEN crashed = 1 THEN 1 ELSE 0 END), 0) AS total_crashes,
+                ROUND((COALESCE(SUM(CASE WHEN crashed = 1 THEN 1 ELSE 0 END), 0) * 100.0) / NULLIF(COUNT(*), 0), 1) AS real_crash_pct,
+                ROUND(AVG(crash_chance) * 100, 1) AS avg_modeled_crash_pct,
+                ROUND(AVG(CASE WHEN net_amount > 0 THEN net_amount END), 1) AS avg_success_payout,
+                ROUND(AVG(CASE WHEN crashed = 1 THEN actual_amount END), 1) AS avg_crash_loss,
+                ROUND(AVG(net_amount), 1) AS avg_net,
+                COALESCE(SUM(CASE WHEN net_amount > 0 THEN net_amount ELSE 0 END), 0) AS total_earnings,
+                COALESCE(SUM(CASE WHEN net_amount < 0 THEN -net_amount ELSE 0 END), 0) AS total_losses,
+                COALESCE(SUM(net_amount), 0) AS total_net,
+                MAX(created_at) AS last_run_at
+         FROM samp_truck_runs`
+      );
+
+      const routes = await dbAll(
+        `SELECT route_id, route_name,
+                COUNT(*) AS runs,
+                COALESCE(SUM(CASE WHEN crashed = 1 THEN 1 ELSE 0 END), 0) AS crashes,
+                ROUND((COALESCE(SUM(CASE WHEN crashed = 1 THEN 1 ELSE 0 END), 0) * 100.0) / COUNT(*), 1) AS crash_rate_pct,
+                COALESCE(SUM(net_amount), 0) AS total_net,
+                ROUND(AVG(net_amount), 1) AS avg_net,
+                ROUND(AVG(actual_amount), 1) AS avg_amount
+         FROM samp_truck_runs
+         GROUP BY route_id, route_name
+         ORDER BY total_net DESC, runs DESC, route_name ASC`
+      );
+
+      const cargos = await dbAll(
+        `SELECT cargo_id, cargo_name,
+                COUNT(*) AS runs,
+                COALESCE(SUM(CASE WHEN crashed = 1 THEN 1 ELSE 0 END), 0) AS crashes,
+                ROUND((COALESCE(SUM(CASE WHEN crashed = 1 THEN 1 ELSE 0 END), 0) * 100.0) / COUNT(*), 1) AS crash_rate_pct,
+                COALESCE(SUM(net_amount), 0) AS total_net,
+                ROUND(AVG(net_amount), 1) AS avg_net
+         FROM samp_truck_runs
+         GROUP BY cargo_id, cargo_name
+         ORDER BY total_net DESC, runs DESC, cargo_name ASC`
+      );
+
+      const incidents = await dbAll(
+        `SELECT incident_id, incident_name,
+                COUNT(*) AS runs,
+                COALESCE(SUM(CASE WHEN crashed = 1 THEN 1 ELSE 0 END), 0) AS crashes,
+                ROUND((COALESCE(SUM(CASE WHEN crashed = 1 THEN 1 ELSE 0 END), 0) * 100.0) / COUNT(*), 1) AS crash_rate_pct,
+                COALESCE(SUM(net_amount), 0) AS total_net,
+                ROUND(AVG(net_amount), 1) AS avg_net
+         FROM samp_truck_runs
+         GROUP BY incident_id, incident_name
+         ORDER BY crashes DESC, runs DESC, incident_name ASC`
+      );
+
+      const topDrivers = await dbAll(
+        `SELECT user_id,
+                COUNT(*) AS runs,
+                COALESCE(SUM(CASE WHEN crashed = 0 THEN 1 ELSE 0 END), 0) AS clean_runs,
+                COALESCE(SUM(CASE WHEN crashed = 1 THEN 1 ELSE 0 END), 0) AS crashes,
+                COALESCE(SUM(net_amount), 0) AS total_net,
+                ROUND(AVG(net_amount), 1) AS avg_net,
+                MAX(created_at) AS last_run_at
+         FROM samp_truck_runs
+         GROUP BY user_id
+         ORDER BY total_net DESC, runs DESC, user_id ASC
+         LIMIT 12`
+      );
+
+      return res.json({
+        summary: summary || {},
+        routes: routes || [],
+        cargos: cargos || [],
+        incidents: incidents || [],
+        topDrivers: topDrivers || [],
+      });
+    } catch (e) {
+      console.error("Gameplay SAMP truck overview error:", e);
+      return res.status(500).json({ error: e?.message || "Failed to get truck overview" });
     }
   });
 
@@ -871,12 +962,61 @@ function createGameplayRouter(ctx) {
          ORDER BY bought_at DESC`,
         [userId]
       );
+      const truckStats = await dbGet(
+        `SELECT COUNT(*) AS total_runs,
+                COALESCE(SUM(CASE WHEN crashed = 0 THEN 1 ELSE 0 END), 0) AS clean_runs,
+                COALESCE(SUM(CASE WHEN crashed = 1 THEN 1 ELSE 0 END), 0) AS crashes,
+                COALESCE(SUM(CASE WHEN net_amount > 0 THEN net_amount ELSE 0 END), 0) AS total_earnings,
+                COALESCE(SUM(CASE WHEN net_amount < 0 THEN -net_amount ELSE 0 END), 0) AS total_losses,
+                COALESCE(SUM(net_amount), 0) AS net_total,
+                MAX(net_amount) AS best_run,
+                MIN(net_amount) AS worst_run,
+                ROUND(AVG(net_amount), 1) AS avg_net,
+                ROUND(AVG(crash_chance) * 100, 1) AS avg_modeled_crash_pct,
+                ROUND((COALESCE(SUM(CASE WHEN crashed = 1 THEN 1 ELSE 0 END), 0) * 100.0) / NULLIF(COUNT(*), 0), 1) AS real_crash_pct,
+                MAX(created_at) AS last_run_at
+         FROM samp_truck_runs
+         WHERE user_id = ?`,
+        [userId]
+      );
+      const favoriteRoute = await dbGet(
+        `SELECT route_id, route_name, COUNT(*) AS runs
+         FROM samp_truck_runs
+         WHERE user_id = ?
+         GROUP BY route_id, route_name
+         ORDER BY runs DESC, route_name ASC
+         LIMIT 1`,
+        [userId]
+      );
+      const favoriteCargo = await dbGet(
+        `SELECT cargo_id, cargo_name, COUNT(*) AS runs
+         FROM samp_truck_runs
+         WHERE user_id = ?
+         GROUP BY cargo_id, cargo_name
+         ORDER BY runs DESC, cargo_name ASC
+         LIMIT 1`,
+        [userId]
+      );
+      const recentTruckRuns = await dbAll(
+        `SELECT id, created_at, route_name, cargo_name, incident_name, car_name, crashed, contract_amount, actual_amount, boost_amount, net_amount
+         FROM samp_truck_runs
+         WHERE user_id = ?
+         ORDER BY id DESC
+         LIMIT 10`,
+        [userId]
+      );
 
       return res.json({
         user,
         inventory: inventory || [],
         garage: garage || [],
         cooldowns: cooldowns || [],
+        truckStats: {
+          ...(truckStats || {}),
+          favorite_route: favoriteRoute || null,
+          favorite_cargo: favoriteCargo || null,
+        },
+        recentTruckRuns: recentTruckRuns || [],
         businesses: (businesses || []).map((business) => {
           const property = PROPERTIES[business.property_id] || null;
           const territory = property?.district ? territoryMap.get(property.district) || null : null;

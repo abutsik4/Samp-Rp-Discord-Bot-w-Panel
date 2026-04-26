@@ -19,6 +19,9 @@ const {
   getUserCosmetics,
   applyUserCosmeticsToEmbed,
   getCosmeticBenefitText,
+  addCosmeticToInventory,
+  ensureCosmeticsTables,
+  ownsCosmetic,
 } = require("./samp-cosmetics");
 const {
   CAR_TUNING_PARTS,
@@ -140,73 +143,87 @@ const BLACK_MARKET_GRANTS = {
     cosmeticType: "weapon_skin_deagle",
     cosmeticValue: "gold",
     autoEquipWeaponId: "deagle",
+    maxInventoryQty: 1,
     summary: "Скин на Desert Eagle выдан навсегда и пушка поставлена активной.",
   },
   armor: {
     inventoryItemId: "bm_armor",
     inventoryQty: 1,
+    maxInventoryQty: 1,
     summary: "Бронежилет добавлен в тайник.",
   },
   map: {
     inventoryItemId: "bm_map",
     inventoryQty: 1,
+    maxInventoryQty: 1,
     summary: "Секретная карта добавлена в тайник.",
   },
   nos_boost: {
     inventoryItemId: "bm_nos_boost",
     inventoryQty: 3,
+    maxInventoryQty: 3,
     summary: "Три баллона нитро добавлены в тайник.",
   },
   jail_pass: {
     inventoryItemId: "bm_jail_pass",
     inventoryQty: 1,
+    maxInventoryQty: 1,
     summary: "Фальшивые документы добавлены в тайник.",
   },
   medkit: {
     inventoryItemId: "bm_medkit",
     inventoryQty: 1,
+    maxInventoryQty: 1,
     summary: "Аптечка добавлена в тайник.",
   },
   wiretap: {
     inventoryItemId: "bm_wiretap",
     inventoryQty: 1,
+    maxInventoryQty: 1,
     summary: "Подслушка добавлена в тайник. Используй /wiretap @цель.",
   },
   sabotage: {
     inventoryItemId: "bm_sabotage",
     inventoryQty: 1,
+    maxInventoryQty: 1,
     summary: "Подрыв добавлен в тайник. Используй /sabotage @цель.",
   },
   laundering: {
     inventoryItemId: "bm_laundering",
     inventoryQty: 1,
+    maxInventoryQty: 1,
     summary: "Отмывка активна — штрафы за /rob снижены на 40% пока есть в тайнике.",
   },
   mystery_crate: {
     inventoryItemId: null,
     inventoryQty: 0,
     isInstant: true,
+    dailyPurchaseLimit: 1,
     summary: "Открываем ящик...",
   },
   repair_kit: {
     inventoryItemId: "bm_repair_kit",
     inventoryQty: 1,
+    maxInventoryQty: 1,
     summary: "Набор для ремонта добавлен в тайник. Используй /userepairkit.",
   },
   disguise: {
     inventoryItemId: "bm_disguise",
     inventoryQty: 1,
+    maxInventoryQty: 1,
     summary: "Маскировка добавлена в тайник. Используй /disguise.",
   },
   hot_tip: {
     inventoryItemId: "bm_hot_tip",
     inventoryQty: 1,
+    maxInventoryQty: 1,
     summary: "Наводка добавлена в тайник. Используй /hottip.",
   },
   hit_contract: {
     inventoryItemId: null,
     inventoryQty: 0,
     isInstant: true,
+    dailyPurchaseLimit: 1,
     summary: "Контракт оформлен...",
   },
 };
@@ -628,7 +645,7 @@ function getHeistLockMessage(result) {
 }
 
 function getDailySeed() {
-  const d = new Date().toISOString().split("T")[0];
+  const d = new Date(nowMs()).toISOString().split("T")[0];
   let h = 0; for (let i = 0; i < d.length; i++) h = ((h << 5) - h + d.charCodeAt(i)) | 0;
   return Math.abs(h);
 }
@@ -1221,6 +1238,77 @@ async function alreadyOwnsBlackMarketDeal(db, userId, deal) {
     [String(userId), grant.cosmeticType, grant.cosmeticValue]
   );
   return Boolean(row);
+}
+
+function formatBlackMarketLimitLabel(deal) {
+  const grant = BLACK_MARKET_GRANTS[deal?.type];
+  if (!grant) return null;
+  if (grant.cosmeticType) return "1 навсегда";
+  if (grant.maxInventoryQty > 0) return `${grant.maxInventoryQty} в тайнике`;
+  if (grant.dailyPurchaseLimit > 0) return `${grant.dailyPurchaseLimit} в день`;
+  return null;
+}
+
+function getBlackMarketDayStartSqlite() {
+  const start = new Date(nowMs());
+  start.setUTCHours(0, 0, 0, 0);
+  return toSqliteDate(start);
+}
+
+async function getBlackMarketDailyPurchaseCount(db, userId, dealType) {
+  const row = await dbGet(
+    db,
+    `SELECT COUNT(*) AS total_count
+     FROM samp_ledger
+     WHERE type = 'black_market'
+       AND from_user = ?
+       AND ts >= ?
+       AND json_extract(meta_json, '$.type') = ?`,
+    [String(userId), getBlackMarketDayStartSqlite(), String(dealType)]
+  );
+  return Number(row?.total_count || 0);
+}
+
+async function getBlackMarketDealLimitState(db, userId, deal) {
+  const grant = BLACK_MARKET_GRANTS[deal?.type];
+  if (!grant) {
+    return { blocked: false, message: null, details: null };
+  }
+
+  if (grant.cosmeticType) {
+    const owned = await alreadyOwnsBlackMarketDeal(db, userId, deal);
+    if (owned) {
+      return {
+        blocked: true,
+        message: "Этот товар у тебя уже есть. Повторно списывать деньги не буду.",
+        details: { kind: "cosmetic" },
+      };
+    }
+  }
+
+  if (grant.inventoryItemId && grant.maxInventoryQty > 0) {
+    const qty = await getInventoryQty(db, userId, grant.inventoryItemId);
+    if (qty >= grant.maxInventoryQty) {
+      return {
+        blocked: true,
+        message: `Лимит на этот товар уже достигнут: **${qty}/${grant.maxInventoryQty}** в тайнике. Сначала используй запас.`,
+        details: { kind: "inventory", currentQty: qty, maxQty: grant.maxInventoryQty },
+      };
+    }
+  }
+
+  if (grant.dailyPurchaseLimit > 0) {
+    const purchasesToday = await getBlackMarketDailyPurchaseCount(db, userId, deal.type);
+    if (purchasesToday >= grant.dailyPurchaseLimit) {
+      return {
+        blocked: true,
+        message: `Сегодня лимит на **${deal.name}** уже исчерпан: **${grant.dailyPurchaseLimit}/${grant.dailyPurchaseLimit}**. Возвращайся завтра.`,
+        details: { kind: "daily", purchasesToday, dailyPurchaseLimit: grant.dailyPurchaseLimit },
+      };
+    }
+  }
+
+  return { blocked: false, message: null, details: null };
 }
 
 async function grantBlackMarketDeal(db, userId, deal) {
@@ -2617,21 +2705,21 @@ async function handleGangCommand(interaction, db) {
 // --- Cosmetics ---
 async function handleShopCosmetics(interaction) {
   const fields = Object.entries(COSMETICS).map(([id, c]) => ({
-    name: `${c.type === "title" ? "🏷️" : "🎨"} ${c.name}`,
+    name: `${c.emoji || "🛍"} ${c.name}`,
     value: joinLines([
       `ID: **${id}**`,
-      `Тип: **${c.type}**`,
+      `Категория: **${c.category}**`,
       `Цена: **${fmtMoney(c.price)}**`,
       `Эффект: ${getCosmeticBenefitText(c)}`,
     ]),
     inline: false,
   }));
   const embeds = buildPagedFieldEmbeds({
-    title: "🎨 Магазин косметики",
-    description: "Титулы попадают в author-строку, а цвета перекрашивают профильные embed'ы вроде /balance, /bizstats, /garage и /gang info.",
+    title: "🛍 Магазин косметики и бонусов",
+    description: "Полный каталог. Удобнее смотреть по категориям через **/shop**. Покупка: **/buycosmetic id:<id>**.",
     color: 0x9b59b6,
     fields,
-    fieldsPerPage: 4,
+    fieldsPerPage: 6,
     footer: "Покупка: /buycosmetic id:<id>",
   });
   await interaction.reply({ embeds });
@@ -2643,22 +2731,49 @@ async function handleBuyCosmetic(interaction, db) {
   const cos = COSMETICS[cosId];
   if (!cos) { await interaction.reply({ content: "Нет такого товара.", ephemeral: true }); return; }
 
+  await ensureCosmeticsTables(db);
+
   const user = await getSampUser(db, userId);
   if (!user || Number(user.money) < cos.price) { await interaction.reply({ content: "Не хватает виртов.", ephemeral: true }); return; }
 
-  const existing = await dbGet(db, "SELECT 1 FROM samp_cosmetics WHERE user_id = ? AND cosmetic_type = ? AND cosmetic_value = ?", [userId, cos.type, cos.value]);
-  if (existing) { await interaction.reply({ content: "У тебя уже есть этот предмет.", ephemeral: true }); return; }
+  const alreadyOwned = await ownsCosmetic(db, userId, cosId);
+  if (alreadyOwned) { await interaction.reply({ content: "У тебя уже есть этот предмет.", ephemeral: true }); return; }
+
+  const isBoost = cos.category === "boost";
+  const isPermanent = isBoost || cos.category === "weapon_skin";
 
   const opKey = makeInteractionOpKey(interaction, "buy_cosmetic");
   await withTx(db, async () => {
     const inserted = await addLedgerUnique(db, "buy_cosmetic", userId, null, cos.price, opKey, { cosmetic_id: cosId });
     if (!inserted) throw new Error("DUPLICATE_OPERATION");
     await adjustMoney(db, userId, -cos.price);
-    await dbRun(db, `INSERT OR REPLACE INTO samp_cosmetics(user_id, cosmetic_type, cosmetic_value) VALUES(?, ?, ?)`, [userId, cos.type, cos.value]);
+    // Ownership (always).
+    await dbRun(
+      db,
+      `INSERT OR IGNORE INTO samp_cosmetics_inventory(user_id, cosmetic_id, acquired_at)
+       VALUES(?, ?, datetime('now'))`,
+      [userId, cosId]
+    );
+    // For boosts/weapon-skins keep the legacy "equipped" row so existing
+    // code paths (e.g. hasGoldenDeagleSkin) keep working.
+    // For decorative items also auto-equip on purchase for a good default UX;
+    // user can /unequip or /equip a different one afterwards.
+    await dbRun(
+      db,
+      `INSERT OR REPLACE INTO samp_cosmetics(user_id, cosmetic_type, cosmetic_value)
+       VALUES(?, ?, ?)`,
+      [userId, cos.type, cos.value]
+    );
   });
+
+  const tail = isBoost
+    ? "⚡ Бонус активен всегда, пока предмет в коллекции."
+    : isPermanent
+    ? "Предмет всегда при тебе."
+    : "Предмет автоматически надет. Сменить — **/equip** / **/unequip**.";
   await interaction.reply(
-    `🎨 Ты купил **${cos.name}** за **${fmtMoney(cos.price)}**!\n` +
-    `${getCosmeticBenefitText(cos)}`
+    `🛍 Ты купил **${cos.name}** за **${fmtMoney(cos.price)}**!\n` +
+    `${getCosmeticBenefitText(cos)}\n${tail}`
   );
 }
 
@@ -2672,6 +2787,13 @@ async function degradeWeapon(db, userId, weaponId) {
   return row?.durability ?? 0;
 }
 
+function getWeaponRepairCost(weaponPrice, durability) {
+  const safePrice = Math.max(0, Number(weaponPrice) || 0);
+  const safeDurability = Math.max(0, Math.min(100, Number(durability) || 0));
+  const missingRatio = Math.max(0, 100 - safeDurability) / 100;
+  return Math.max(0, Math.round(safePrice * 0.2 * missingRatio));
+}
+
 async function handleRepair(interaction, db) {
   const userId = interaction.user.id;
   const wRow = await dbGet(db, "SELECT value FROM samp_user_settings WHERE user_id = ? AND key = 'weapon'", [userId]);
@@ -2683,17 +2805,44 @@ async function handleRepair(interaction, db) {
   if (!inv) { await interaction.reply({ content: "Оружие не в инвентаре.", ephemeral: true }); return; }
   if (inv.durability >= 100) { await interaction.reply({ content: "Оружие в идеальном состоянии.", ephemeral: true }); return; }
 
-  const cost = Math.floor(weapon.price * 0.2);
+  const cost = getWeaponRepairCost(weapon.price, inv.durability);
   const user = await getSampUser(db, userId);
   if (!user || Number(user.money) < cost) { await interaction.reply({ content: `Ремонт стоит **${fmtMoney(cost)}**. Не хватает.`, ephemeral: true }); return; }
 
   const opKey = makeInteractionOpKey(interaction, "repair");
-  await withTx(db, async () => {
-    const inserted = await addLedgerUnique(db, "repair", userId, null, cost, opKey, { weapon: wRow.value });
-    if (!inserted) throw new Error("DUPLICATE_OPERATION");
-    await adjustMoney(db, userId, -cost);
-    await dbRun(db, "UPDATE samp_inventory SET durability = 100 WHERE user_id = ? AND item_id = ?", [userId, wRow.value]);
-  });
+  try {
+    await withTx(db, async () => {
+      const freshInv = await dbGet(db, "SELECT durability FROM samp_inventory WHERE user_id = ? AND item_id = ?", [userId, wRow.value]);
+      if (!freshInv) throw new Error("WEAPON_MISSING");
+      if (Number(freshInv.durability) >= 100) throw new Error("ALREADY_REPAIRED");
+
+      const freshUser = await getSampUser(db, userId);
+      const freshCost = getWeaponRepairCost(weapon.price, freshInv.durability);
+      if (!freshUser || Number(freshUser.money) < freshCost) throw new Error("INSUFFICIENT");
+
+      const inserted = await addLedgerUnique(db, "repair", userId, null, freshCost, opKey, {
+        weapon: wRow.value,
+        durability_before: Number(freshInv.durability),
+      });
+      if (!inserted) throw new Error("DUPLICATE_OPERATION");
+      await adjustMoney(db, userId, -freshCost);
+      await dbRun(db, "UPDATE samp_inventory SET durability = 100 WHERE user_id = ? AND item_id = ?", [userId, wRow.value]);
+    });
+  } catch (error) {
+    if (String(error?.message) === "ALREADY_REPAIRED") {
+      await interaction.reply({ content: "Оружие уже в идеальном состоянии.", ephemeral: true });
+      return;
+    }
+    if (String(error?.message) === "WEAPON_MISSING") {
+      await interaction.reply({ content: "Оружие не в инвентаре.", ephemeral: true });
+      return;
+    }
+    if (String(error?.message) === "INSUFFICIENT") {
+      await interaction.reply({ content: `Ремонт стоит **${fmtMoney(cost)}**. Не хватает.`, ephemeral: true });
+      return;
+    }
+    throw error;
+  }
   await interaction.reply(`🔧 **${weapon.name}** починен! Стоимость: **${fmtMoney(cost)}**`);
 }
 
@@ -2786,9 +2935,10 @@ async function handleBlackMarket(interaction, db) {
       const priceText = tier.discount > 0
         ? `~~${fmtMoney(d.price)}~~ → **${fmtMoney(discountedPrice)}** (-${Math.round(tier.discount * 100)}%)`
         : `**${fmtMoney(d.price)}**`;
+      const limitText = formatBlackMarketLimitLabel(d);
       return {
         name: `#${i+1} ${d.name}`,
-        value: joinLines([`Цена: ${priceText}`, `Тип: **${d.type}**`]),
+        value: joinLines([`Цена: ${priceText}`, `Тип: **${d.type}**`, limitText ? `Лимит: **${limitText}**` : null]),
         inline: false,
       };
     });
@@ -2820,8 +2970,9 @@ async function handleBlackMarket(interaction, db) {
     const finalPrice = tier.discount > 0 ? Math.floor(deal.price * (1 - tier.discount)) : deal.price;
 
     if (Number(user.money) < finalPrice) { await sendInteractionResponse(interaction, { content: "Не хватает виртов." }); return; }
-    if (await alreadyOwnsBlackMarketDeal(db, userId, deal)) {
-      await sendInteractionResponse(interaction, { content: "Этот товар у тебя уже есть. Повторно списывать деньги не буду." });
+    const limitState = await getBlackMarketDealLimitState(db, userId, deal);
+    if (limitState.blocked) {
+      await sendInteractionResponse(interaction, { content: limitState.message });
       return;
     }
 
@@ -2830,13 +2981,39 @@ async function handleBlackMarket(interaction, db) {
     let stingTriggered = false;
     let instantResult = "";
 
-    await withTx(db, async () => {
-      const inserted = await addLedgerUnique(db, "black_market", userId, null, finalPrice, opKey, { item: deal.name, type: deal.type, discount: tier.discount });
-      if (!inserted) throw new Error("DUPLICATE_OPERATION");
-      await adjustMoney(db, userId, -finalPrice);
-      grantResult = await grantBlackMarketDeal(db, userId, deal);
-      await incrementBmPurchaseCount(db, userId);
-    });
+    try {
+      await withTx(db, async () => {
+        const freshUser = await getSampUser(db, userId);
+        if (!freshUser || Number(freshUser.money) < finalPrice) throw new Error("INSUFFICIENT");
+
+        const freshLimitState = await getBlackMarketDealLimitState(db, userId, deal);
+        if (freshLimitState.blocked) {
+          const error = new Error("BLACK_MARKET_LIMIT");
+          error.userMessage = freshLimitState.message;
+          throw error;
+        }
+
+        const inserted = await addLedgerUnique(db, "black_market", userId, null, finalPrice, opKey, { item: deal.name, type: deal.type, discount: tier.discount });
+        if (!inserted) throw new Error("DUPLICATE_OPERATION");
+        await adjustMoney(db, userId, -finalPrice);
+        grantResult = await grantBlackMarketDeal(db, userId, deal);
+        await incrementBmPurchaseCount(db, userId);
+      });
+    } catch (error) {
+      if (String(error?.message) === "BLACK_MARKET_LIMIT" && error?.userMessage) {
+        await sendInteractionResponse(interaction, { content: error.userMessage });
+        return;
+      }
+      if (String(error?.message) === "INSUFFICIENT") {
+        await sendInteractionResponse(interaction, { content: "Не хватает виртов." });
+        return;
+      }
+      if (String(error?.message) === "DUPLICATE_OPERATION") {
+        await sendInteractionResponse(interaction, { content: "Эта покупка уже была обработана." });
+        return;
+      }
+      throw error;
+    }
 
     if (deal.type === "mystery_crate") {
       instantResult = await resolveMysteryCrate(db, userId, finalPrice);
@@ -3469,6 +3646,8 @@ module.exports = {
   consumeInventoryItem,
   BLACK_MARKET_ITEMS,
   BLACK_MARKET_GRANTS,
+  getDailyBlackMarketDeals,
+  getWeaponRepairCost,
   getUserSetting,
   setUserSetting,
   hasGoldenDeagleSkin,

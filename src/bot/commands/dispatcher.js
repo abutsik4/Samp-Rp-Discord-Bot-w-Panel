@@ -16,6 +16,14 @@ const { handleRadioVote, handleRadioTop, handleRadioInfo, handleRadioFans } = re
 const { handleSampExtendedCommand, handleSampExtendedAutocomplete } = require("../../features/samp-extended");
 const { handleEventsCommand } = require("../../features/seasonal-events");
 const { handleGameFaqCommand } = require("../../features/game-faq");
+const {
+  handleShopCommand,
+  handleShopSelectMenu,
+  handleMyCollectionCommand,
+  handleEquipCommand,
+  handleCosmeticsAutocomplete,
+} = require("../../features/samp-cosmetics");
+const { handleQuestCommand } = require("../../features/samp-onboarding");
 const { getUserBadges, getBadgeDefinitions } = require("../../features/badges");
 const { SAMPStatusTracker } = require("../../features/samp-status");
 const { getLeaderboard } = require("../../features/leaderboard-cache");
@@ -23,12 +31,14 @@ const { handleGiveawayButton } = require("../../features/giveaway");
 
 const SAMP_GAME_COMMAND_CATEGORY = "samp_game";
 const SAMP_LIFE_COMMANDS = [
-  "reg", "balance", "work", "truck", "rob",
+  "reg", "balance", "moneylog", "work", "truck", "rob",
   "dealership", "weaponshop", "buy", "race", "duel",
   "sellcar", "buycar", "weapon",
   "bail", "richest", "daily",
   "pay", "slots", "blackjack", "roulette",
 ];
+const SAMP_COSMETICS_COMMANDS = ["shop", "mycollection", "equip", "unequip"];
+const SAMP_ONBOARDING_COMMANDS = ["quest"];
 const SAMP_EXTENDED_COMMANDS = [
   "businesses", "bizstats", "mbizstats", "buybiz", "collectincome",
   "maintainbiz", "bizrun",
@@ -46,7 +56,8 @@ const SAMP_EXTENDED_COMMANDS = [
 ];
 const SAMP_LIFE_AUTOCOMPLETE_COMMANDS = ["buy", "weapon", "sellcar"];
 const SAMP_EXTENDED_AUTOCOMPLETE_COMMANDS = ["buybiz", "bizstats", "mbizstats", "maintainbiz", "bizrun", "tune", "tunecar", "switchcar", "buycosmetic", "gang", "gcapture", "gsupportbiz"];
-const SAMP_GAME_COMMANDS = new Set([...SAMP_LIFE_COMMANDS, ...SAMP_EXTENDED_COMMANDS]);
+const SAMP_COSMETICS_AUTOCOMPLETE_COMMANDS = ["equip", "unequip"];
+const SAMP_GAME_COMMANDS = new Set([...SAMP_LIFE_COMMANDS, ...SAMP_EXTENDED_COMMANDS, ...SAMP_COSMETICS_COMMANDS, ...SAMP_ONBOARDING_COMMANDS]);
 
 function buildRestrictedChannelWarning(channelId) {
   return `❌ Команды SAMP Life доступны только в канале <#${channelId}>.`;
@@ -79,6 +90,15 @@ function registerCommandHandlers(ctx) {
       }
     }
 
+    // Handle cosmetics shop category select menu
+    if (interaction.isStringSelectMenu && interaction.isStringSelectMenu()) {
+      try {
+        if (await handleShopSelectMenu(interaction, db)) return;
+      } catch (e) {
+        console.error("[samp-cosmetics] select menu error", e);
+      }
+    }
+
     // Handle autocomplete for SAMP Life commands
     if (interaction.isAutocomplete()) {
       const guildId = interaction.guild?.id;
@@ -105,6 +125,12 @@ function registerCommandHandlers(ctx) {
           await handleSampExtendedAutocomplete(interaction, db);
         } catch (e) {
           console.error("[samp-extended] autocomplete error", e);
+        }
+      } else if (SAMP_COSMETICS_AUTOCOMPLETE_COMMANDS.includes(interaction.commandName)) {
+        try {
+          await handleCosmeticsAutocomplete(interaction, db);
+        } catch (e) {
+          console.error("[samp-cosmetics] autocomplete error", e);
         }
       }
       return;
@@ -174,6 +200,28 @@ function registerCommandHandlers(ctx) {
       SAMP_EXTENDED_COMMANDS.includes(commandName)
     ) {
       await handleSampExtendedCommand({ interaction, db });
+      return;
+    }
+
+    // SAMP cosmetics shop + inventory
+    if (commandName === "shop") {
+      await handleShopCommand(interaction, db);
+      return;
+    }
+    if (commandName === "mycollection") {
+      await handleMyCollectionCommand(interaction, db);
+      return;
+    }
+    if (commandName === "equip") {
+      await handleEquipCommand(interaction, db, { equip: true });
+      return;
+    }
+    if (commandName === "unequip") {
+      await handleEquipCommand(interaction, db, { equip: false });
+      return;
+    }
+    if (commandName === "quest") {
+      await handleQuestCommand(interaction, db);
       return;
     }
 

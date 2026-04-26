@@ -72,7 +72,7 @@ test("game faq docs posts build multiple Discord-friendly messages", () => {
   assert.ok(posts.every((post) => post.embeds.reduce((sum, embed) => sum + countEmbedChars(embed), 0) <= 6000));
   assert.ok(posts.every((post) => post.embeds.every((embed) => (embed.fields || []).every((field) => field.value.length <= 1024))));
   assert.ok(posts.every((post) => post.embeds.every((embed) => !JSON.stringify(embed).includes("…"))));
-  assert.match(JSON.stringify(posts[0]), /активный стартовый транспорт `Велосипед`\./);
+  assert.match(JSON.stringify(posts[0]), /активный стартовый транспорт `Велосипед` и автоматически запускается квест новичка\./);
 });
 
 test("game faq handler returns overview embed with no options", async () => {
@@ -117,7 +117,7 @@ test("game faq chat autoanswer replies to strong gameplay question", async () =>
   const message = {
     content: "как выйти из тюрьмы?",
     guild: { id: "g1" },
-    channel: { id: "c-faq" },
+    channel: { id: "541024085283700741" },
     author: { id: "u1", bot: false },
     client: { user: { id: "bot1" } },
     mentions: { users: { has: () => false } },
@@ -138,7 +138,27 @@ test("game faq chat autoanswer ignores ambiguous low-signal text", async () => {
   const message = {
     content: "как это работает",
     guild: { id: "g1" },
-    channel: { id: "c-ambiguous" },
+    channel: { id: "1492082119466287114" },
+    author: { id: "u1", bot: false },
+    client: { user: { id: "bot1" } },
+    mentions: { users: { has: () => false } },
+    reply: async (payload) => {
+      replies.push(payload);
+    },
+  };
+
+  const handled = await tryAnswerGameFaqInChat(message);
+
+  assert.equal(handled, false);
+  assert.equal(replies.length, 0);
+});
+
+test("game faq chat autoanswer ignores disallowed channels", async () => {
+  const replies = [];
+  const message = {
+    content: "как выйти из тюрьмы?",
+    guild: { id: "g1" },
+    channel: { id: "c-disallowed" },
     author: { id: "u1", bot: false },
     client: { user: { id: "bot1" } },
     mentions: { users: { has: () => false } },

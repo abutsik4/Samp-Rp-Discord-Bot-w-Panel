@@ -36,6 +36,7 @@ function createInteraction(overrides = {}) {
     options: overrides.options || {
       getUser: () => null,
       getString: () => null,
+      getInteger: () => null,
     },
     member: overrides.member || null,
     isButton: () => false,
@@ -155,6 +156,35 @@ test("dispatcher allows restricted Samp command in configured channel", async ()
 
     assert.equal(row.money, 500);
     assert.equal(row.car_id, "bicycle");
+  } finally {
+    db.close();
+  }
+});
+
+test("dispatcher routes moneylog in configured channel", async () => {
+  const client = createFakeClient();
+  const db = makeDb();
+
+  try {
+    await ensureSampLifeTables(db);
+
+    const handler = registerHandler({
+      client,
+      db,
+      getCommandCategoryChannel: async () => ({ channel_id: "1492082119466287114" }),
+    });
+
+    const interaction = createInteraction({
+      commandName: "moneylog",
+      channelId: "1492082119466287114",
+      user: { id: "user-moneylog", username: "MoneyLog", tag: "MoneyLog#0001", bot: false },
+    });
+
+    await handler(interaction);
+
+    const { lastReply } = interaction.__state();
+    assert.equal(lastReply?.ephemeral, true);
+    assert.match(lastReply?.content || "", /нет потерь виртов/i);
   } finally {
     db.close();
   }

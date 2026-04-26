@@ -85,6 +85,7 @@ export function GameplayPage({ bot }) {
   const [sampUserId, setSampUserId] = useState("");
   const [sampAdjust, setSampAdjust] = useState({ moneyDelta: 0, repDelta: 0, jailMinutes: 0 });
   const [sampBusinessOverview, setSampBusinessOverview] = useState({ summary: {}, distribution: [], topOwners: [], atRisk: [] });
+  const [sampTruckOverview, setSampTruckOverview] = useState({ summary: {}, routes: [], cargos: [], incidents: [], topDrivers: [] });
   const [sampGangOverview, setSampGangOverview] = useState([]);
   const [sampUserDetails, setSampUserDetails] = useState(null);
   const [sampHistory, setSampHistory] = useState([]);
@@ -192,11 +193,12 @@ export function GameplayPage({ bot }) {
   async function loadSamp() {
     setSampError("");
     try {
-      const [su, sl, sh, bo, go, lo, presets, territories] = await Promise.all([
+      const [su, sl, sh, bo, to, go, lo, presets, territories] = await Promise.all([
         panelApi.sampLifeUsers(bot.key, { limit: 100 }),
         panelApi.sampLifeLedger(bot.key, { limit: 100 }),
         panelApi.sampLifeHistory(bot.key, { limit: 80 }),
         panelApi.sampLifeBusinessOverview(bot.key),
+        panelApi.sampLifeTruckOverview(bot.key),
         panelApi.sampLifeGangOverview(bot.key),
         panelApi.sampLifeLiveOps(bot.key),
         panelApi.sampLifeLiveOpsPresets(bot.key),
@@ -206,6 +208,7 @@ export function GameplayPage({ bot }) {
       setSampLedger(sl.items || []);
       setSampHistory(sh.items || []);
       setSampBusinessOverview(bo || { summary: {}, distribution: [], topOwners: [], atRisk: [] });
+      setSampTruckOverview(to || { summary: {}, routes: [], cargos: [], incidents: [], topDrivers: [] });
       setSampGangOverview(go.items || []);
       setSampLiveOpsPresets(presets.items || []);
       setSampTerritories(territories.items || []);
@@ -1217,6 +1220,125 @@ export function GameplayPage({ bot }) {
             )}
           </SectionCard>
 
+          <SectionCard title="Truck Analytics" icon={Map} description="Dedicated truck contract telemetry for balancing payout bands, route risk, and incident frequency.">
+            <div className="grid grid-4 mb-4">
+              <div className="card stat-card">
+                <div className="stat-card__label">Runs</div>
+                <div className="stat-card__value">{sampTruckOverview.summary?.total_runs ?? 0}</div>
+              </div>
+              <div className="card stat-card">
+                <div className="stat-card__label">Crash rate</div>
+                <div className="stat-card__value">{sampTruckOverview.summary?.real_crash_pct ?? 0}%</div>
+              </div>
+              <div className="card stat-card">
+                <div className="stat-card__label">Total net</div>
+                <div className="stat-card__value">{sampTruckOverview.summary?.total_net ?? 0}</div>
+              </div>
+              <div className="card stat-card">
+                <div className="stat-card__label">Avg success payout</div>
+                <div className="stat-card__value">{sampTruckOverview.summary?.avg_success_payout ?? 0}</div>
+              </div>
+            </div>
+
+            <div className="grid grid-2">
+              <SectionCard title="Routes" icon={Map}>
+                {(sampTruckOverview.routes || []).length === 0 ? (
+                  <EmptyState icon={Map} title="No truck runs yet" />
+                ) : (
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <thead><tr><th>Route</th><th>Runs</th><th>Crashes</th><th>Crash %</th><th>Avg net</th><th>Total net</th></tr></thead>
+                      <tbody>
+                        {(sampTruckOverview.routes || []).map((row) => (
+                          <tr key={row.route_id}>
+                            <td>{row.route_name}</td>
+                            <td>{row.runs}</td>
+                            <td>{row.crashes}</td>
+                            <td>{row.crash_rate_pct ?? 0}%</td>
+                            <td>{row.avg_net ?? 0}</td>
+                            <td>{row.total_net ?? 0}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </SectionCard>
+
+              <SectionCard title="Top Drivers" icon={Users}>
+                {(sampTruckOverview.topDrivers || []).length === 0 ? (
+                  <EmptyState icon={Users} title="No truck leaders yet" />
+                ) : (
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <thead><tr><th>User</th><th>Runs</th><th>Crashes</th><th>Total net</th><th>Avg net</th><th>Last run</th></tr></thead>
+                      <tbody>
+                        {(sampTruckOverview.topDrivers || []).map((row) => (
+                          <tr key={row.user_id}>
+                            <td>{row.user_id}</td>
+                            <td>{row.runs}</td>
+                            <td>{row.crashes}</td>
+                            <td>{row.total_net ?? 0}</td>
+                            <td>{row.avg_net ?? 0}</td>
+                            <td>{row.last_run_at || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </SectionCard>
+            </div>
+
+            <div className="grid grid-2 mt-4">
+              <SectionCard title="Cargo Mix" icon={Building2}>
+                {(sampTruckOverview.cargos || []).length === 0 ? (
+                  <EmptyState icon={Building2} title="No cargo data" />
+                ) : (
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <thead><tr><th>Cargo</th><th>Runs</th><th>Crashes</th><th>Crash %</th><th>Total net</th></tr></thead>
+                      <tbody>
+                        {(sampTruckOverview.cargos || []).map((row) => (
+                          <tr key={row.cargo_id}>
+                            <td>{row.cargo_name}</td>
+                            <td>{row.runs}</td>
+                            <td>{row.crashes}</td>
+                            <td>{row.crash_rate_pct ?? 0}%</td>
+                            <td>{row.total_net ?? 0}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </SectionCard>
+
+              <SectionCard title="Incident Mix" icon={RefreshCw}>
+                {(sampTruckOverview.incidents || []).length === 0 ? (
+                  <EmptyState icon={RefreshCw} title="No incident data" />
+                ) : (
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <thead><tr><th>Incident</th><th>Runs</th><th>Crashes</th><th>Crash %</th><th>Total net</th></tr></thead>
+                      <tbody>
+                        {(sampTruckOverview.incidents || []).map((row) => (
+                          <tr key={row.incident_id}>
+                            <td>{row.incident_name}</td>
+                            <td>{row.runs}</td>
+                            <td>{row.crashes}</td>
+                            <td>{row.crash_rate_pct ?? 0}%</td>
+                            <td>{row.total_net ?? 0}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </SectionCard>
+            </div>
+          </SectionCard>
+
           <SectionCard title="Turf Wars & Live Ops History" icon={History} description="Recent district takeovers, gang support actions, presets, and manual economy changes.">
             {sampHistory.length === 0 ? (
               <EmptyState icon={History} title="No recent gameplay history" />
@@ -1291,7 +1413,7 @@ export function GameplayPage({ bot }) {
             ) : (
               <div className="table-wrap">
                 <table className="data-table">
-                  <thead><tr><th>User</th><th>Money</th><th>Rep</th><th>Businesses</th><th>Jail until</th><th></th></tr></thead>
+                  <thead><tr><th>User</th><th>Money</th><th>Rep</th><th>Businesses</th><th>Truck net</th><th>Truck runs</th><th>Jail until</th><th></th></tr></thead>
                   <tbody>
                     {sampUsers.map((r) => (
                       <tr key={r.user_id}>
@@ -1299,6 +1421,8 @@ export function GameplayPage({ bot }) {
                         <td>{r.money}</td>
                         <td>{r.rep}</td>
                         <td>{r.businesses_owned || 0}</td>
+                        <td>{r.truck_net ?? 0}</td>
+                        <td>{r.truck_runs ?? 0}</td>
                         <td>{r.jail_until || "—"}</td>
                         <td>
                           <button className="btn--ghost btn--sm" onClick={() => inspectSampUser(r.user_id)}>
@@ -1314,8 +1438,8 @@ export function GameplayPage({ bot }) {
           </SectionCard>
 
           {sampUserDetails && (
-            <SectionCard title={`SA-MP User Details: ${sampUserDetails.user?.user_id || sampUserId}`} icon={Map} description="Inventory, cooldowns, and business state for the selected player.">
-              <div className="grid grid-3 mb-4">
+            <SectionCard title={`SA-MP User Details: ${sampUserDetails.user?.user_id || sampUserId}`} icon={Map} description="Inventory, cooldowns, business state, and truck telemetry for the selected player.">
+              <div className="grid grid-4 mb-4">
                 <div className="card stat-card">
                   <div className="stat-card__label">Money</div>
                   <div className="stat-card__value">{sampUserDetails.user?.money ?? 0}</div>
@@ -1328,6 +1452,70 @@ export function GameplayPage({ bot }) {
                   <div className="stat-card__label">Businesses</div>
                   <div className="stat-card__value">{(sampUserDetails.businesses || []).length}</div>
                 </div>
+                <div className="card stat-card">
+                  <div className="stat-card__label">Truck net</div>
+                  <div className="stat-card__value">{sampUserDetails.truckStats?.net_total ?? 0}</div>
+                </div>
+              </div>
+
+              <div className="grid grid-4 mb-4">
+                <div className="card stat-card">
+                  <div className="stat-card__label">Truck runs</div>
+                  <div className="stat-card__value">{sampUserDetails.truckStats?.total_runs ?? 0}</div>
+                </div>
+                <div className="card stat-card">
+                  <div className="stat-card__label">Crash rate</div>
+                  <div className="stat-card__value">{sampUserDetails.truckStats?.real_crash_pct ?? 0}%</div>
+                </div>
+                <div className="card stat-card">
+                  <div className="stat-card__label">Best run</div>
+                  <div className="stat-card__value">{sampUserDetails.truckStats?.best_run ?? 0}</div>
+                </div>
+                <div className="card stat-card">
+                  <div className="stat-card__label">Worst run</div>
+                  <div className="stat-card__value">{sampUserDetails.truckStats?.worst_run ?? 0}</div>
+                </div>
+              </div>
+
+              <div className="grid grid-2 mb-4">
+                <SectionCard title="Truck Summary" icon={Map}>
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <tbody>
+                        <tr><th>Total earnings</th><td>{sampUserDetails.truckStats?.total_earnings ?? 0}</td></tr>
+                        <tr><th>Total losses</th><td>{sampUserDetails.truckStats?.total_losses ?? 0}</td></tr>
+                        <tr><th>Avg net</th><td>{sampUserDetails.truckStats?.avg_net ?? 0}</td></tr>
+                        <tr><th>Favorite route</th><td>{sampUserDetails.truckStats?.favorite_route?.route_name || "—"}</td></tr>
+                        <tr><th>Favorite cargo</th><td>{sampUserDetails.truckStats?.favorite_cargo?.cargo_name || "—"}</td></tr>
+                        <tr><th>Last run</th><td>{sampUserDetails.truckStats?.last_run_at || "—"}</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </SectionCard>
+
+                <SectionCard title="Recent Truck Runs" icon={RefreshCw}>
+                  {(sampUserDetails.recentTruckRuns || []).length === 0 ? (
+                    <EmptyState icon={RefreshCw} title="No truck runs yet" />
+                  ) : (
+                    <div className="table-wrap">
+                      <table className="data-table">
+                        <thead><tr><th>Time</th><th>Route</th><th>Cargo</th><th>Incident</th><th>Result</th><th>Net</th></tr></thead>
+                        <tbody>
+                          {(sampUserDetails.recentTruckRuns || []).map((row) => (
+                            <tr key={row.id}>
+                              <td>{row.created_at}</td>
+                              <td>{row.route_name}</td>
+                              <td>{row.cargo_name}</td>
+                              <td>{row.incident_name}</td>
+                              <td>{row.crashed ? "Crash" : "Success"}</td>
+                              <td>{row.net_amount}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </SectionCard>
               </div>
 
               <div className="grid grid-2">

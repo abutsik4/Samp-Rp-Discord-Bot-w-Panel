@@ -7,15 +7,22 @@ const GAME_FAQ_TOPICS = [
     id: "start",
     title: "Старт и первые деньги",
     summary: "Как зарегистрироваться, что делать в первый час и где взять стартовый капитал.",
-    commands: ["/reg", "/balance", "/work", "/daily", "/richest"],
-    keywords: ["старт", "начать", "новичок", "регистрация", "паспорт", "первые деньги"],
+    commands: ["/reg", "/balance", "/work", "/daily", "/quest", "/richest"],
+    keywords: ["старт", "начать", "новичок", "регистрация", "паспорт", "первые деньги", "квест"],
     questions: [
       {
         id: "start-reg",
         question: "Как начать играть в SAMP Life?",
-        answer: "Используй `/reg`. После регистрации игрок получает стартовый профиль, `$500` и активный стартовый транспорт `Велосипед`. Дальше базовый цикл такой: `/balance` чтобы посмотреть профиль, `/work` чтобы заработать первые деньги, `/daily` чтобы забирать ежедневный бонус и `/dealership` или `/weaponshop`, когда накопишь на покупки.",
-        commands: ["/reg", "/balance", "/work", "/daily"],
+        answer: "Используй `/reg`. После регистрации игрок получает стартовый профиль, `$500`, активный стартовый транспорт `Велосипед` и автоматически запускается квест новичка. Дальше базовый цикл такой: `/balance` — посмотреть профиль, `/quest` — проверить текущий шаг квеста, `/work` — заработать первые деньги, `/daily` — забрать ежедневный бонус, а `/dealership` или `/weaponshop` — когда накопишь на покупки.",
+        commands: ["/reg", "/balance", "/quest", "/work", "/daily"],
         keywords: ["как начать", "reg", "рег", "первый шаг", "стартовый набор"],
+      },
+      {
+        id: "start-quest",
+        question: "Что такое `/quest` и сколько даёт квест новичка?",
+        answer: "Сразу после `/reg` у игрока активируется цепочка из `5` шагов: `1)` первый `/work` — награда `$2,000`, `2)` первый успешный `/truck` — `$5,000`, `3)` покупка первой машины через `/dealership` + `/buy` — `$10,000`, `4)` первое PvP-действие (`/duel` или `/race`) — `$10,000`, `5)` первый забранный `/daily` — `$25,000`. Суммарно квест приносит `$52,000` — это серьёзный стартовый буст для новичка. Проверить текущий шаг и прогресс можно через `/quest`; награды начисляются автоматически, а бот сообщает о завершении в ответе на соответствующую команду.",
+        commands: ["/quest", "/work", "/truck", "/dealership", "/daily"],
+        keywords: ["квест", "quest", "onboarding", "новичок", "стартовый квест", "52k"],
       },
       {
         id: "start-first-money",
@@ -114,8 +121,10 @@ const GAME_FAQ_TOPICS = [
       },
       {
         id: "cars-race",
-        question: "От чего зависит победа в `/race`?",
-        answer: "Гонка теперь смотрит не только на голую скорость. На результат влияют билд активной машины, её скорость, старт, зацеп, стабильность, износ деталей и случайный фактор. То есть хороший тюнинг реально меняет шанс победы, а изношенная сборка начинает проигрывать чаще даже на быстрой машине. Ставка уходит победителю, а оба участника получают кулдаун на повторный заезд.",
+        question: "Как теперь работает `/race`?",
+        answer: "`/race user:@игрок bet:<$>` — формат **«Три поворота»**. Сопернику приходит кнопка «Принять / Отказаться» (60 сек на ответ, отказ/тайм-аут без кулдауна). Дальше 3 поворота: оба игрока одновременно и скрыто выбирают тактику кнопками: 🏎 Внутренний (зацеп), 🛣 Внешний (скорость), 💥 Срезка (старт). Внутренний бьёт Внешний, Внешний бьёт Срезку, Срезка бьёт Внутренний (камень-ножницы-бумага). На исход поворота влияет `+12` за победу в РПС, разница в стате машины (`±4` кап) и случайный фактор `±3`. Сумма по `3` поворотам решает победителя. На равных машинах — чистое чтение соперника (~50/50), `Infernus` против `Sultan` — примерно `85%` заездов, `Infernus` против велосипеда — около `90%`. Тюнинг и износ реально меняют статы, а значит и шансы.",
+        commands: ["/race", "/tune", "/garage"],
+        keywords: ["как победить в гонке", "race", "три поворота", "тактика", "rps", "внутренний", "срезка"],
         commands: ["/race", "/tune", "/garage"],
         keywords: ["как победить в гонке", "race", "скорость", "тюнинг"],
       },
@@ -287,8 +296,8 @@ const GAME_FAQ_TOPICS = [
     id: "jobs-heists",
     title: "Работы дня, ограбления и баунти",
     summary: "Ежедневные задания, кооперативные ограбления, контракты на игроков и редкие подсистемы.",
-    commands: ["/jobs", "/dojob", "/heist", "/bounty", "/bountylist", "/shopcosmetics", "/lottery", "/blackmarket", "/usejailpass", "/userepairkit", "/disguise", "/hottip", "/secretheist", "/wiretap", "/sabotage", "/gangbmorder"],
-    keywords: ["jobs", "heist", "bounty", "лотерея", "косметика", "черный рынок"],
+    commands: ["/jobs", "/dojob", "/heist", "/bounty", "/bountylist", "/shop", "/mycollection", "/equip", "/unequip", "/lottery", "/blackmarket", "/usejailpass", "/userepairkit", "/disguise", "/hottip", "/secretheist", "/wiretap", "/sabotage", "/gangbmorder"],
+    keywords: ["jobs", "heist", "bounty", "лотерея", "косметика", "черный рынок", "shop", "mycollection", "буст", "boost"],
     questions: [
       {
         id: "jobs-board",
@@ -313,10 +322,24 @@ const GAME_FAQ_TOPICS = [
       },
       {
         id: "rare-systems",
-        question: "Для чего нужны косметика, лотерея и чёрный рынок?",
-        answer: "`/shopcosmetics` и `/buycosmetic` дают титулы и цвета оформления профилей/эмбедов. `/lottery` — это недельная лотерея на общий банк. `/blackmarket` — обновлённый чёрный рынок с 14 товарами, дилерами, риском облавы и системой репутации. Предметы реально работают: броня и аптечка — в дуэлях, NOS — в гонках, отмывка — снижает штрафы, маскировка — защита от PvP. Новые команды: `/usejailpass`, `/userepairkit`, `/disguise`, `/hottip`, `/secretheist`, `/wiretap`, `/sabotage`, `/gangbmorder`.",
-        commands: ["/shopcosmetics", "/buycosmetic", "/lottery", "/blackmarket", "/usejailpass", "/userepairkit", "/disguise", "/hottip", "/secretheist", "/wiretap", "/sabotage", "/gangbmorder"],
-        keywords: ["косметика", "лотерея", "blackmarket", "титулы", "чёрный рынок", "дилер", "облава"],
+        question: "Для чего нужны лотерея и чёрный рынок?",
+        answer: "`/lottery` — это недельная лотерея на общий банк. `/blackmarket` — обновлённый чёрный рынок с `14` товарами, дилерами, риском облавы и системой репутации. Предметы реально работают: броня и аптечка — в дуэлях, `NOS` — в гонках, отмывка — снижает штрафы, маскировка — защита от PvP. Отдельные команды для использования: `/usejailpass`, `/userepairkit`, `/disguise`, `/hottip`, `/secretheist`, `/wiretap`, `/sabotage`, `/gangbmorder`.",
+        commands: ["/lottery", "/blackmarket", "/usejailpass", "/userepairkit", "/disguise", "/hottip", "/secretheist", "/wiretap", "/sabotage", "/gangbmorder"],
+        keywords: ["лотерея", "blackmarket", "чёрный рынок", "дилер", "облава"],
+      },
+      {
+        id: "shop-cosmetics",
+        question: "Как работают новый магазин `/shop`, `/mycollection`, `/equip` и `/unequip`?",
+        answer: "`/shop` — это единая витрина с `6` категориями: титулы, цвета профиля, флайры, покраска машин, скины оружия и бусты. Выбор категории идёт через select-меню под эмбедом, покупка — кнопкой. `/mycollection` показывает всё, что у тебя уже есть. `/equip id:<код>` надевает декоративный предмет, `/unequip category:<категория>` снимает его. Бусты, скины оружия и покраска постоянные и работают всегда.",
+        commands: ["/shop", "/mycollection", "/equip", "/unequip"],
+        keywords: ["shop", "магазин", "косметика", "mycollection", "коллекция", "equip", "надеть"],
+      },
+      {
+        id: "shop-boosts",
+        question: "Что такое бусты в магазине?",
+        answer: "Бусты — это категория из `8` постоянных предметов, которые меняют экономику: `boost_work` (`$150k`, `+15%` к `/work`), `boost_truck` (`$200k`, `+10%` к `/truck`), `boost_luck` (`$300k`, `−5п.п.` к шансу тюрьмы при `/rob`), `boost_cd` (`$500k`, `−15%` кулдауны), `boost_laundering` (`$750k`, `−25%` штрафы), `boost_radio` (`$500k`, алерт по баунти), `boost_watch` (`$1M`, `−25%` кулдауны, не стакается с `boost_cd`), `boost_safe` (`$2M`, `+$50k` к `/daily`). Покупаются раз и работают всегда.",
+        commands: ["/shop", "/mycollection", "/work", "/truck", "/rob", "/daily"],
+        keywords: ["буст", "boost", "усиление", "перманентный бонус", "кулдаун"],
       },
     ],
   },
@@ -494,6 +517,8 @@ const SEARCH_STOPWORDS = new Set([
   "без",
   "в",
   "во",
+  "541024085283700741",
+  "1492082119466287114",
   "где",
   "для",
   "до",
@@ -1021,6 +1046,11 @@ const GAME_FAQ_QUERY_HINTS = [
   "faq",
 ];
 
+const DEFAULT_GAME_FAQ_CHAT_CHANNELS = [
+  "541024085283700741",
+  "1492082119466287114",
+];
+
 const gameFaqChatCooldowns = new Map();
 
 function getGameFaqChatConfig() {
@@ -1030,10 +1060,11 @@ function getGameFaqChatConfig() {
   const minScore = Math.max(1, Number.parseInt(process.env.GAME_FAQ_CHAT_MIN_SCORE || "15", 10) || 15);
   const minStrongScore = Math.max(minScore, Number.parseInt(process.env.GAME_FAQ_CHAT_STRONG_SCORE || "18", 10) || 18);
   const minGap = Math.max(0, Number.parseInt(process.env.GAME_FAQ_CHAT_MIN_GAP || "8", 10) || 8);
-  const channels = String(process.env.GAME_FAQ_CHAT_CHANNELS || "")
+  const configuredChannels = String(process.env.GAME_FAQ_CHAT_CHANNELS || "")
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
+  const channels = configuredChannels.length ? configuredChannels : DEFAULT_GAME_FAQ_CHAT_CHANNELS;
 
   return { enabled, cooldownMs, minScore, minStrongScore, minGap, channels };
 }

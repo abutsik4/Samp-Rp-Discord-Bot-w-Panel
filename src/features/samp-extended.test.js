@@ -26,10 +26,30 @@ const {
   degradeWeapon,
   BLACK_MARKET_ITEMS,
   BLACK_MARKET_GRANTS,
+  getDailyBlackMarketDeals,
+  getWeaponRepairCost,
 } = require("./samp-extended");
 
 function makeDb() {
   return new sqlite3.Database(":memory:");
+}
+
+function findBlackMarketDealDay(type, maxDaysAhead = 730) {
+  const realNow = Date.now;
+  try {
+    const start = Date.UTC(2026, 0, 1, 12, 0, 0, 0);
+    for (let dayOffset = 0; dayOffset < maxDaysAhead; dayOffset += 1) {
+      const candidate = start + dayOffset * 24 * 60 * 60_000;
+      Date.now = () => candidate;
+      const deals = getDailyBlackMarketDeals();
+      if (deals.some((deal) => deal.type === type)) {
+        return candidate;
+      }
+    }
+  } finally {
+    Date.now = realNow;
+  }
+  throw new Error(`Unable to find black market day for deal type: ${type}`);
 }
 
 function makeInteraction(args) {
@@ -736,10 +756,61 @@ test("gang attack summary explicitly says the district is not captured yet", asy
   }
 });
 
+test("territory takeover resets control to 60 after breaking the last defender pressure", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "defender-low", username: "DefenderLow" }), db });
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "attacker-low", username: "AttackerLow" }), db });
+    await dbRun(db, `UPDATE samp_users SET money = 200000 WHERE user_id IN (?, ?)`, ["defender-low", "attacker-low"]);
+
+    await handleSampExtendedCommand({
+      interaction: makeInteraction({ commandName: "gang", userId: "defender-low", username: "DefenderLow", subcommand: "create", options: { name: "Defenders", tag: "DEF" } }),
+      db,
+    });
+    await handleSampExtendedCommand({
+      interaction: makeInteraction({ commandName: "gang", userId: "attacker-low", username: "AttackerLow", subcommand: "create", options: { name: "Attackers", tag: "ATK" } }),
+      db,
+    });
+
+    const defenderGang = await dbGet(db, `SELECT id FROM samp_gangs WHERE leader_id = ?`, ["defender-low"]);
+    const attackerGang = await dbGet(db, `SELECT id FROM samp_gangs WHERE leader_id = ?`, ["attacker-low"]);
+    await dbRun(db, `UPDATE samp_gangs SET treasury = 100000 WHERE id IN (?, ?)`, [defenderGang.id, attackerGang.id]);
+    await dbRun(
+      db,
+      `INSERT INTO samp_gang_territories(district_id, gang_id, pressure, claimed_at, updated_at)
+       VALUES('ganton', ?, 40, datetime('now'), datetime('now'))`,
+      [defenderGang.id]
+    );
+
+    const attack = makeInteraction({
+      commandName: "gang",
+      userId: "attacker-low",
+      username: "AttackerLow",
+      subcommand: "claimterritory",
+      options: { district: "ganton" },
+    });
+    await handleSampExtendedCommand({ interaction: attack, db });
+
+    const territory = await dbGet(db, `SELECT gang_id, pressure FROM samp_gang_territories WHERE district_id = ?`, ["ganton"]);
+    assert.equal(Number(territory.gang_id), Number(attackerGang.id), "ownership should transfer to the attacking gang");
+    assert.equal(Number(territory.pressure), 60, "a successful takeover should reset the district to the base capture pressure");
+    assert.match(String(attack.__getState().lastReply), /Новый контроль: \*\*60%\*\*/i, "takeover reply should explain the new base control value");
+  } finally {
+    db.close();
+  }
+});
+
 test("black market golden deagle purchase persists and is visible in balance", async () => {
   const db = makeDb();
   await ensureSampLifeTables(db);
   await ensureSampExtendedTables(db);
+
+  const fixedNow = findBlackMarketDealDay("weapon_skin");
+  const realNow = Date.now;
+  Date.now = () => fixedNow;
 
   try {
     await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-blackmarket", username: "BlackMarket" }), db });
@@ -791,6 +862,96 @@ test("black market golden deagle purchase persists and is visible in balance", a
     const weaponField = balanceEmbed.fields.find((field) => field.name === "🔫 Оружие");
     assert.match(String(weaponField?.value || ""), /Золотой Desert Eagle/);
   } finally {
+    Date.now = realNow;
+    db.close();
+  }
+});
+
+test("black market repair kit cannot be bought above stash limit", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  const fixedNow = findBlackMarketDealDay("repair_kit");
+  const realNow = Date.now;
+  Date.now = () => fixedNow;
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-bm-limit", username: "BmLimit" }), db });
+    await dbRun(db, `UPDATE samp_users SET money = 300000 WHERE user_id = ?`, ["u-bm-limit"]);
+
+    const repairDeal = getDailyBlackMarketDeals().find((deal) => deal.type === "repair_kit");
+    assert.ok(repairDeal, "repair kit should be available on the mocked day");
+
+    const firstBuy = makeInteraction({
+      commandName: "blackmarket",
+      userId: "u-bm-limit",
+      username: "BmLimit",
+      subcommand: "buy",
+      options: { slot: repairDeal.slot },
+    });
+    await handleSampExtendedCommand({ interaction: firstBuy, db });
+
+    const secondBuy = makeInteraction({
+      commandName: "blackmarket",
+      userId: "u-bm-limit",
+      username: "BmLimit",
+      subcommand: "buy",
+      options: { slot: repairDeal.slot },
+    });
+    await handleSampExtendedCommand({ interaction: secondBuy, db });
+
+    const qty = await dbGet(db, `SELECT qty FROM samp_inventory WHERE user_id = ? AND item_id = ?`, ["u-bm-limit", "bm_repair_kit"]);
+  const secondPayload = secondBuy.__getState().lastReply;
+  const reply = typeof secondPayload === "string" ? secondPayload : String(secondPayload?.content || "");
+
+    assert.equal(Number(qty?.qty || 0), 1);
+    assert.match(reply, /лимит.*тайнике|сначала используй запас/i);
+  } finally {
+    Date.now = realNow;
+    db.close();
+  }
+});
+
+test("black market mystery crate respects the daily purchase limit", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  const fixedNow = findBlackMarketDealDay("mystery_crate");
+  const realNow = Date.now;
+  Date.now = () => fixedNow;
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-bm-daily", username: "BmDaily" }), db });
+    await dbRun(db, `UPDATE samp_users SET money = 300000 WHERE user_id = ?`, ["u-bm-daily"]);
+
+    const crateDeal = getDailyBlackMarketDeals().find((deal) => deal.type === "mystery_crate");
+    assert.ok(crateDeal, "mystery crate should be available on the mocked day");
+
+    const firstBuy = makeInteraction({
+      commandName: "blackmarket",
+      userId: "u-bm-daily",
+      username: "BmDaily",
+      subcommand: "buy",
+      options: { slot: crateDeal.slot },
+    });
+    await handleSampExtendedCommand({ interaction: firstBuy, db });
+
+    const secondBuy = makeInteraction({
+      commandName: "blackmarket",
+      userId: "u-bm-daily",
+      username: "BmDaily",
+      subcommand: "buy",
+      options: { slot: crateDeal.slot },
+    });
+    await handleSampExtendedCommand({ interaction: secondBuy, db });
+
+    const secondPayload = secondBuy.__getState().lastReply;
+    const reply = typeof secondPayload === "string" ? secondPayload : String(secondPayload?.content || "");
+    assert.match(reply, /лимит.*исчерпан|возвращайся завтра/i);
+  } finally {
+    Date.now = realNow;
     db.close();
   }
 });
@@ -1382,7 +1543,7 @@ test("hottip shows richest players", async () => {
   }
 });
 
-test("buycosmetic rejects removed boss title", async () => {
+test("buycosmetic accepts the boss title from the expanded catalog", async () => {
   const db = makeDb();
   await ensureSampLifeTables(db);
   await ensureSampExtendedTables(db);
@@ -1401,7 +1562,8 @@ test("buycosmetic rejects removed boss title", async () => {
 
     const state = buy.__getState();
     const payload = typeof state.lastReply === "string" ? state.lastReply : state.lastReply?.content || "";
-    assert.match(payload, /Нет такого товара/i);
+    assert.match(payload, /Титул: Босс/i);
+    assert.match(payload, /автоматически надет/i);
   } finally {
     db.close();
   }
@@ -1417,6 +1579,58 @@ test("BLACK_MARKET_ITEMS has 14 items with valid grants", () => {
     const grant = BLACK_MARKET_GRANTS[item.type];
     assert.ok(grant, `item ${item.type} should have a grant entry`);
     assert.ok(grant.summary, `item ${item.type} grant should have summary`);
+  }
+});
+
+test("repair cost scales with missing weapon durability", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-repair", username: "RepairUser" }), db });
+    await dbRun(db, `UPDATE samp_users SET money = 500000 WHERE user_id = ?`, ["u-repair"]);
+    await dbRun(db, `INSERT INTO samp_inventory(user_id, item_id, qty, durability) VALUES(?, ?, 1, 99)`, ["u-repair", "heatseeker"]);
+    await dbRun(db, `INSERT INTO samp_user_settings(user_id, key, value) VALUES(?, 'weapon', ?)`, ["u-repair", "heatseeker"]);
+
+    const repair = makeInteraction({ commandName: "repair", userId: "u-repair", username: "RepairUser" });
+    await handleSampExtendedCommand({ interaction: repair, db });
+
+    const user = await dbGet(db, `SELECT money FROM samp_users WHERE user_id = ?`, ["u-repair"]);
+    const weapon = await dbGet(db, `SELECT durability FROM samp_inventory WHERE user_id = ? AND item_id = ?`, ["u-repair", "heatseeker"]);
+    const ledger = await dbGet(db, `SELECT amount, meta_json FROM samp_ledger WHERE type = 'repair' AND from_user = ? ORDER BY id DESC LIMIT 1`, ["u-repair"]);
+    const state = repair.__getState();
+    const payload = typeof state.lastReply === "string" ? state.lastReply : state.lastReply?.content || "";
+
+    assert.equal(getWeaponRepairCost(650000, 99), 1300);
+    assert.equal(Number(user?.money || 0), 498700);
+    assert.equal(Number(weapon?.durability || 0), 100);
+    assert.equal(Number(ledger?.amount || 0), 1300);
+    assert.match(String(ledger?.meta_json || ""), /durability_before/);
+    assert.match(payload, /1(?:\s|\u00a0)300 \$/);
+  } finally {
+    db.close();
+  }
+});
+
+test("repair refuses weapon already at full durability", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  try {
+    await handleSampLifeCommand({ interaction: makeInteraction({ commandName: "reg", userId: "u-repair-full", username: "RepairFull" }), db });
+    await dbRun(db, `INSERT INTO samp_inventory(user_id, item_id, qty, durability) VALUES(?, ?, 1, 100)`, ["u-repair-full", "deagle"]);
+    await dbRun(db, `INSERT INTO samp_user_settings(user_id, key, value) VALUES(?, 'weapon', ?)`, ["u-repair-full", "deagle"]);
+
+    const repair = makeInteraction({ commandName: "repair", userId: "u-repair-full", username: "RepairFull" });
+    await handleSampExtendedCommand({ interaction: repair, db });
+
+    const state = repair.__getState();
+    const payload = typeof state.lastReply === "string" ? state.lastReply : state.lastReply?.content || "";
+    assert.match(payload, /идеальном состоянии/i);
+  } finally {
+    db.close();
   }
 });
 

@@ -1,9 +1,26 @@
 "use strict";
 
-const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
+const {
+  SlashCommandBuilder,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ComponentType,
+} = require("discord.js");
 const { dbRun, dbGet, dbAll } = require("../utils/db-helpers");
 const { withSerializedTransaction } = require("../utils/sqlite-transaction");
-const { getUserCosmetics, applyUserCosmeticsToEmbed } = require("./samp-cosmetics");
+const {
+  getUserCosmetics,
+  applyUserCosmeticsToEmbed,
+  getUserBoostEffects,
+  ensureCosmeticsTables,
+} = require("./samp-cosmetics");
+const {
+  ensureOnboardingTables,
+  startOnboarding,
+  triggerOnboardingEvent,
+} = require("./samp-onboarding");
 const {
   CAR_TUNING_PARTS,
   TUNE_LEVEL_MAX,
@@ -159,9 +176,182 @@ const BLACK_MARKET_INVENTORY_LABELS = {
 const COOLDOWNS_MS = {
   work: 60_000,
   truck: 15 * 60_000,
-  rob: 10 * 60_000,
+  rob: 15 * 60_000,
   race: 5 * 60_000,
   duel: 5 * 60_000,
+};
+
+const CHALLENGE_PAIR_COOLDOWNS_MS = {
+  rob: 60 * 60_000,
+  race: 30 * 60_000,
+  duel: 30 * 60_000,
+};
+
+const TRUCK_ROUTE_TIERS = [
+  {
+    id: "local",
+    name: "Локальный рейс",
+    minSpeed: 0,
+    rewardMin: 2_400,
+    rewardMax: 4_600,
+    crashChance: 0.13,
+    fineMin: 700,
+    fineMax: 1_900,
+  },
+  {
+    id: "county",
+    name: "Окружной рейс",
+    minSpeed: 35,
+    rewardMin: 3_800,
+    rewardMax: 6_900,
+    crashChance: 0.16,
+    fineMin: 1_000,
+    fineMax: 2_500,
+  },
+  {
+    id: "express",
+    name: "Экспресс-рейс",
+    minSpeed: 70,
+    rewardMin: 5_800,
+    rewardMax: 9_800,
+    crashChance: 0.18,
+    fineMin: 1_500,
+    fineMax: 3_400,
+  },
+  {
+    id: "intercity",
+    name: "Межгород",
+    minSpeed: 95,
+    rewardMin: 8_800,
+    rewardMax: 14_500,
+    crashChance: 0.21,
+    fineMin: 2_500,
+    fineMax: 5_500,
+  },
+];
+
+const TRUCK_CARGO_TYPES = [
+  {
+    id: "produce",
+    name: "продукты для маркета",
+    minSpeed: 0,
+    rewardBonusMin: 0,
+    rewardBonusMax: 500,
+    riskDelta: -0.01,
+    fineMultiplier: 0.95,
+  },
+  {
+    id: "furniture",
+    name: "мебельный заказ",
+    minSpeed: 0,
+    rewardBonusMin: 300,
+    rewardBonusMax: 900,
+    riskDelta: 0,
+    fineMultiplier: 1,
+  },
+  {
+    id: "electronics",
+    name: "электронику",
+    minSpeed: 35,
+    rewardBonusMin: 600,
+    rewardBonusMax: 1_600,
+    riskDelta: 0.01,
+    fineMultiplier: 1.08,
+  },
+  {
+    id: "fragile",
+    name: "хрупкий груз",
+    minSpeed: 70,
+    rewardBonusMin: 900,
+    rewardBonusMax: 2_200,
+    riskDelta: 0.02,
+    fineMultiplier: 1.12,
+  },
+  {
+    id: "fuel",
+    name: "топливо",
+    minSpeed: 70,
+    rewardBonusMin: 1_300,
+    rewardBonusMax: 2_800,
+    riskDelta: 0.03,
+    fineMultiplier: 1.18,
+  },
+  {
+    id: "contraband",
+    name: "серый груз без бумаг",
+    minSpeed: 95,
+    rewardBonusMin: 2_500,
+    rewardBonusMax: 4_200,
+    riskDelta: 0.05,
+    fineMultiplier: 1.35,
+  },
+];
+
+const TRUCK_INCIDENTS = [
+  {
+    id: "clear_road",
+    name: "свободная трасса",
+    rewardBonusMin: 250,
+    rewardBonusMax: 800,
+    riskDelta: -0.02,
+    fineMultiplier: 0.9,
+    successText: "Трасса была пустая, и ты пришёл раньше срока.",
+    crashText: "Даже на пустой трассе можно переоценить себя.",
+  },
+  {
+    id: "traffic_jam",
+    name: "пробка у развязки",
+    rewardBonusMin: -200,
+    rewardBonusMax: 300,
+    riskDelta: 0.01,
+    fineMultiplier: 1,
+    successText: "Ты не психанул в пробке и всё равно закрыл заказ.",
+    crashText: "Ты полез объезжать пробку и словил жёсткий контакт.",
+  },
+  {
+    id: "client_tip",
+    name: "нервный VIP-клиент",
+    rewardBonusMin: 700,
+    rewardBonusMax: 1_800,
+    riskDelta: 0.02,
+    fineMultiplier: 1.05,
+    successText: "Клиент доплатил сверху за срочность.",
+    crashText: "Ты гнал ради VIP-клиента и не удержал машину.",
+  },
+  {
+    id: "storm",
+    name: "ливень и скользкая дорога",
+    rewardBonusMin: 500,
+    rewardBonusMax: 1_400,
+    riskDelta: 0.04,
+    fineMultiplier: 1.2,
+    successText: "Погода была ужасная, но рейс ты всё-таки дотащил.",
+    crashText: "Мокрый асфальт отправил тебя в кювет.",
+  },
+  {
+    id: "checkpoint",
+    name: "весовой контроль",
+    rewardBonusMin: 200,
+    rewardBonusMax: 1_000,
+    riskDelta: 0.03,
+    fineMultiplier: 1.25,
+    successText: "Ты не запаниковал на посту и аккуратно вывез рейс.",
+    crashText: "После контроля ты дёрнулся слишком резко и разбил рейс.",
+  },
+];
+
+function getPositiveEnvInt(name, fallback) {
+  const value = Number(process.env[name]);
+  if (!Number.isFinite(value) || value <= 0) return fallback;
+  return Math.floor(value);
+}
+
+const DEFAULT_PVP_BET_MAX = getPositiveEnvInt("SAMP_PVP_BET_MAX", 100_000);
+const PVP_AMOUNT_LIMITS = {
+  raceBetMax: getPositiveEnvInt("SAMP_RACE_MAX_BET", DEFAULT_PVP_BET_MAX),
+  duelBetMax: getPositiveEnvInt("SAMP_DUEL_MAX_BET", DEFAULT_PVP_BET_MAX),
+  pvpRobberyMinLoot: 500,
+  pvpRobberyMaxLoot: getPositiveEnvInt("SAMP_PVP_ROB_MAX_LOOT", 50_000),
 };
 
 const AUTOCOMPLETE_PAGE_SIZE = 25;
@@ -216,6 +406,17 @@ function clampInt(n, min, max) {
   return x;
 }
 
+function normalizeWagerAmount(rawAmount, maxAmount) {
+  const value = Math.floor(Number(rawAmount));
+  if (!Number.isFinite(value) || value < 1) {
+    return { ok: false, message: "Некорректная ставка.", amount: null };
+  }
+  if (value > maxAmount) {
+    return { ok: false, message: `Максимальная ставка — **${fmtMoney(maxAmount)}**.`, amount: null };
+  }
+  return { ok: true, amount: value, message: null };
+}
+
 function pick(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
@@ -224,12 +425,76 @@ function randInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+function clampNumber(n, min, max) {
+  return Math.min(max, Math.max(min, Number(n)));
+}
+
 function carInfo(carId) {
   return CARS[carId] || CARS[DEFAULT_CAR_ID];
 }
 
 function itemInfo(itemId) {
   return ITEMS[itemId] || null;
+}
+
+function getEligibleTruckRouteTiers(car) {
+  const tiers = TRUCK_ROUTE_TIERS.filter((tier) => Number(car?.speed || 0) >= tier.minSpeed);
+  return tiers.length ? tiers : [TRUCK_ROUTE_TIERS[0]];
+}
+
+function getEligibleTruckCargoTypes(car, route) {
+  const cargos = TRUCK_CARGO_TYPES.filter((cargo) => {
+    if (Number(car?.speed || 0) < cargo.minSpeed) return false;
+    if (route.id === "local" && (cargo.id === "fuel" || cargo.id === "contraband")) return false;
+    if (route.id !== "intercity" && cargo.id === "contraband") return false;
+    return true;
+  });
+  return cargos.length ? cargos : [TRUCK_CARGO_TYPES[0]];
+}
+
+function rollTruckContract(user) {
+  const car = carInfo(user?.car_id);
+  const route = pick(getEligibleTruckRouteTiers(car));
+  const cargo = pick(getEligibleTruckCargoTypes(car, route));
+  const incident = pick(TRUCK_INCIDENTS);
+
+  const speedBuffer = Math.max(0, Number(car?.speed || 0) - Number(route.minSpeed || 0));
+  const safetyDelta = Math.min(0.04, speedBuffer / 500);
+  const crashChance = clampNumber(route.crashChance + cargo.riskDelta + incident.riskDelta - safetyDelta, 0.08, 0.35);
+
+  const baseReward = randInt(route.rewardMin, route.rewardMax);
+  const cargoBonus = randInt(cargo.rewardBonusMin, cargo.rewardBonusMax);
+  const incidentBonus = randInt(incident.rewardBonusMin, incident.rewardBonusMax);
+  const rawReward = Math.max(1_500, baseReward + cargoBonus + incidentBonus);
+
+  const rawFine = Math.floor(
+    randInt(route.fineMin, route.fineMax) * cargo.fineMultiplier * incident.fineMultiplier
+  );
+
+  return {
+    route,
+    cargo,
+    incident,
+    car,
+    crashChance,
+    rawReward,
+    rawFine,
+    meta: {
+      routeId: route.id,
+      routeName: route.name,
+      cargoId: cargo.id,
+      cargoName: cargo.name,
+      incidentId: incident.id,
+      incidentName: incident.name,
+      carId: user?.car_id || DEFAULT_CAR_ID,
+      carName: car.name,
+      carSpeed: Number(car?.speed || 0),
+      crashChance,
+      baseReward,
+      cargoBonus,
+      incidentBonus,
+    },
+  };
 }
 
 function isIgnorableInteractionError(error) {
@@ -427,7 +692,7 @@ async function getRaceCarProfile(db, userId, carId) {
 }
 
 function formatRaceCarLabel(carProfile) {
-  return `${carProfile.name}, билд ${carProfile.buildType}, скорость ${carProfile.topSpeed}, старт ${carProfile.launch}, зацеп ${carProfile.grip}, стабильность ${carProfile.stability}, износ ${carProfile.averageDurability}%`;
+  return `${carProfile.name}, билд ${carProfile.buildType}, скорость ${carProfile.topSpeed}, старт ${carProfile.launch}, зацеп ${carProfile.grip}, стабильность ${carProfile.stability}, состояние ${carProfile.averageDurability}%`;
 }
 
 async function applyCarWearFromRace(db, userId, carId, carProfile, { result = "loss" } = {}) {
@@ -605,9 +870,71 @@ async function summarizeRobberyLosses(db, userId, { since = null, limit = 5 } = 
   };
 }
 
+async function summarizePvpMoneyLosses(db, userId, { since = null, limit = 10 } = {}) {
+  const uid = String(userId);
+  const where = [
+    `(
+      (type = 'rob_pvp' AND to_user = ?)
+      OR (type IN ('race', 'duel', 'transfer') AND from_user = ?)
+    )`,
+  ];
+  const params = [uid, uid];
+  const normalizedSince = since ? String(since) : null;
+  if (normalizedSince) {
+    where.push("ts > ?");
+    params.push(normalizedSince);
+  }
+
+  const whereClause = where.join(" AND ");
+  const aggregate = await dbGet(
+    db,
+    `SELECT COUNT(*) AS total_count, COALESCE(SUM(amount), 0) AS total_amount
+     FROM samp_ledger
+     WHERE ${whereClause}`,
+    params
+  );
+  const rows = await dbAll(
+    db,
+    `SELECT id, ts, type, from_user, to_user, amount, meta_json
+     FROM samp_ledger
+     WHERE ${whereClause}
+     ORDER BY ts DESC, id DESC
+     LIMIT ?`,
+    [...params, Math.max(1, Number(limit) || 1)]
+  );
+
+  return {
+    totalCount: Number(aggregate?.total_count || 0),
+    totalAmount: Number(aggregate?.total_amount || 0),
+    rows: rows || [],
+  };
+}
+
 function formatRobberyLossLine(row) {
   const robber = row?.from_user ? `<@${row.from_user}>` : "Неизвестный";
   return `• ${robber} украл **${fmtMoney(row?.amount || 0)}** • ${formatRelativeLedgerTime(row?.ts)} назад`;
+}
+
+function formatPvpMoneyLossLine(row) {
+  const amount = fmtMoney(row?.amount || 0);
+  const ago = formatRelativeLedgerTime(row?.ts);
+  if (row?.type === "rob_pvp") {
+    const robber = row?.from_user ? `<@${row.from_user}>` : "Неизвестный";
+    return `• Ограбление: ${robber} украл **${amount}** • ${ago} назад`;
+  }
+  if (row?.type === "race") {
+    const winner = row?.to_user ? `<@${row.to_user}>` : "соперник";
+    return `• Гонка: ${winner} забрал **${amount}** • ${ago} назад`;
+  }
+  if (row?.type === "duel") {
+    const winner = row?.to_user ? `<@${row.to_user}>` : "соперник";
+    return `• Дуэль: ${winner} забрал **${amount}** • ${ago} назад`;
+  }
+  if (row?.type === "transfer") {
+    const target = row?.to_user ? `<@${row.to_user}>` : "игроку";
+    return `• Перевод: ты отправил ${target} **${amount}** • ${ago} назад`;
+  }
+  return `• Потеря виртов: **${amount}** • ${ago} назад`;
 }
 
 function formatRobberyOccurrenceCount(count) {
@@ -676,6 +1003,38 @@ async function setCooldown(db, userId, action, readyAt) {
      ON CONFLICT(user_id, action) DO UPDATE SET ready_at = excluded.ready_at`,
     [String(userId), String(action), Number(readyAt)]
   );
+}
+
+async function getChallengePairCooldown(db, challengerUserId, targetUserId, action) {
+  const row = await dbGet(
+    db,
+    `SELECT ready_at
+     FROM samp_challenge_pair_cooldowns
+     WHERE challenger_user_id = ?
+       AND target_user_id = ?
+       AND action = ?`,
+    [String(challengerUserId), String(targetUserId), String(action)]
+  );
+  return row ? Number(row.ready_at || 0) : 0;
+}
+
+async function setChallengePairCooldown(db, challengerUserId, targetUserId, action, readyAt) {
+  await dbRun(
+    db,
+    `INSERT INTO samp_challenge_pair_cooldowns(challenger_user_id, target_user_id, action, ready_at)
+     VALUES(?, ?, ?, ?)
+     ON CONFLICT(challenger_user_id, target_user_id, action)
+     DO UPDATE SET ready_at = excluded.ready_at`,
+    [String(challengerUserId), String(targetUserId), String(action), Number(readyAt)]
+  );
+}
+
+function formatChallengePairCooldownMessage(action, targetUserId, remainingMs) {
+  if (action === "rob") {
+    return `⏳ Ты уже недавно пытался ограбить <@${targetUserId}>. Повтори через **${msToHuman(remainingMs)}**.`;
+  }
+  const label = action === "duel" ? "дуэль" : "гонку";
+  return `⏳ Ты уже недавно вызывал <@${targetUserId}> на ${label}. Повтори через **${msToHuman(remainingMs)}**.`;
 }
 
 async function checkAndConsumeCooldown(interaction, db, userId, action) {
@@ -766,6 +1125,56 @@ async function adjustMoney(db, userId, delta) {
   await dbRun(db, `UPDATE samp_users SET money = money + ?, updated_at = datetime('now') WHERE user_id = ?`, [Number(delta), uid]);
 }
 
+async function recordTruckRun(db, userId, opKey, contract, outcome = {}) {
+  await dbRun(
+    db,
+    `INSERT OR IGNORE INTO samp_truck_runs (
+      op_key,
+      user_id,
+      route_id,
+      route_name,
+      cargo_id,
+      cargo_name,
+      incident_id,
+      incident_name,
+      car_id,
+      car_name,
+      car_speed,
+      crash_chance,
+      base_reward,
+      cargo_bonus,
+      incident_bonus,
+      contract_amount,
+      actual_amount,
+      boost_amount,
+      net_amount,
+      crashed
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      String(opKey),
+      String(userId),
+      String(contract?.route?.id || contract?.meta?.routeId || "unknown"),
+      String(contract?.route?.name || contract?.meta?.routeName || "Неизвестный рейс"),
+      String(contract?.cargo?.id || contract?.meta?.cargoId || "unknown"),
+      String(contract?.cargo?.name || contract?.meta?.cargoName || "Неизвестный груз"),
+      String(contract?.incident?.id || contract?.meta?.incidentId || "unknown"),
+      String(contract?.incident?.name || contract?.meta?.incidentName || "Неизвестная ситуация"),
+      String(contract?.meta?.carId || DEFAULT_CAR_ID),
+      String(contract?.meta?.carName || contract?.car?.name || carInfo(DEFAULT_CAR_ID).name),
+      Number(contract?.meta?.carSpeed || contract?.car?.speed || 0),
+      Number(contract?.meta?.crashChance || contract?.crashChance || 0),
+      Number(contract?.meta?.baseReward || 0),
+      Number(contract?.meta?.cargoBonus || 0),
+      Number(contract?.meta?.incidentBonus || 0),
+      Number(outcome.contractAmount ?? 0),
+      Number(outcome.actualAmount ?? 0),
+      Number(outcome.boostAmount ?? 0),
+      Number(outcome.netAmount ?? 0),
+      outcome.crashed ? 1 : 0,
+    ]
+  );
+}
+
 async function transferMoney(db, fromUserId, toUserId, amount, ledgerType, meta = {}, idempotencyKey = null) {
   const amt = Number(amount);
   if (!Number.isFinite(amt) || amt <= 0) throw new Error("Invalid amount");
@@ -814,6 +1223,67 @@ async function transferMoneyWithParticipants(db, fromUserId, toUserId, amount, l
     const check = await dbGet(db, "SELECT money FROM samp_users WHERE user_id = ?", [String(fromUserId)]);
     if (Number(check?.money) < 0) throw new Error("NEGATIVE_BALANCE");
   });
+}
+
+async function settleWagerWithParticipants(
+  db,
+  loserUserId,
+  winnerUserId,
+  requestedAmount,
+  ledgerType,
+  participantCooldowns,
+  pairCooldown,
+  meta = {},
+  idempotencyKey = null
+) {
+  const requested = Number(requestedAmount);
+  if (!Number.isFinite(requested) || requested <= 0) throw new Error("Invalid amount");
+
+  return withTransaction(db, async () => {
+    const loser = await getOrCreateUser(db, loserUserId);
+    await getOrCreateUser(db, winnerUserId);
+
+    const settledAmount = Math.max(0, Math.min(requested, Number(loser?.money || 0)));
+    const ledgerMeta = {
+      ...(meta || {}),
+      requested_amount: requested,
+      settled_amount: settledAmount,
+    };
+    const inserted = await addLedgerUnique(db, ledgerType, loserUserId, winnerUserId, settledAmount, idempotencyKey, ledgerMeta);
+    if (!inserted) throw new Error("DUPLICATE_OPERATION");
+
+    if (pairCooldown?.readyAt > 0) {
+      await setChallengePairCooldown(db, pairCooldown.challengerUserId, pairCooldown.targetUserId, pairCooldown.action, pairCooldown.readyAt);
+    }
+    for (const participant of participantCooldowns || []) {
+      const readyAt = Number(participant?.readyAt || 0);
+      if (readyAt > 0) {
+        await setCooldown(db, participant.userId, participant.action, readyAt);
+      }
+    }
+
+    if (settledAmount > 0) {
+      await adjustMoney(db, loserUserId, -settledAmount);
+      await adjustMoney(db, winnerUserId, settledAmount);
+    }
+
+    const check = await dbGet(db, "SELECT money FROM samp_users WHERE user_id = ?", [String(loserUserId)]);
+    if (Number(check?.money) < 0) throw new Error("NEGATIVE_BALANCE");
+
+    return {
+      requestedAmount: requested,
+      settledAmount,
+      wasReduced: settledAmount < requested,
+    };
+  });
+}
+
+function buildReducedSettlementNote(requestedAmount, settledAmount, loserUserId) {
+  if (Number(settledAmount) >= Number(requestedAmount)) return "";
+  if (Number(settledAmount) > 0) {
+    return `\n⚠️ К моменту расчёта у <@${loserUserId}> осталось только **${fmtMoney(settledAmount)}**, поэтому выплата уменьшена с **${fmtMoney(requestedAmount)}**.`;
+  }
+  return `\n⚠️ К моменту расчёта у <@${loserUserId}> уже не осталось виртов, поэтому ставка не принесла выплату.`;
 }
 
 async function applyMoneyDeltaAtomic(db, userId, delta, { minBalance = null } = {}) {
@@ -923,6 +1393,17 @@ async function ensureSampLifeTables(db) {
 
   await dbRun(
     db,
+    `CREATE TABLE IF NOT EXISTS samp_challenge_pair_cooldowns (
+      challenger_user_id TEXT NOT NULL,
+      target_user_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      ready_at INTEGER NOT NULL,
+      PRIMARY KEY (challenger_user_id, target_user_id, action)
+    )`
+  );
+
+  await dbRun(
+    db,
     `CREATE TABLE IF NOT EXISTS samp_ledger (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       ts TEXT NOT NULL DEFAULT (datetime('now')),
@@ -961,6 +1442,42 @@ async function ensureSampLifeTables(db) {
       PRIMARY KEY (user_id, key)
     )`
   );
+
+    await dbRun(
+      db,
+      `CREATE TABLE IF NOT EXISTS samp_truck_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        op_key TEXT NOT NULL UNIQUE,
+        user_id TEXT NOT NULL,
+        route_id TEXT NOT NULL,
+        route_name TEXT NOT NULL,
+        cargo_id TEXT NOT NULL,
+        cargo_name TEXT NOT NULL,
+        incident_id TEXT NOT NULL,
+        incident_name TEXT NOT NULL,
+        car_id TEXT NOT NULL,
+        car_name TEXT NOT NULL,
+        car_speed INTEGER NOT NULL DEFAULT 0,
+        crash_chance REAL NOT NULL DEFAULT 0,
+        base_reward INTEGER NOT NULL DEFAULT 0,
+        cargo_bonus INTEGER NOT NULL DEFAULT 0,
+        incident_bonus INTEGER NOT NULL DEFAULT 0,
+        contract_amount INTEGER NOT NULL DEFAULT 0,
+        actual_amount INTEGER NOT NULL DEFAULT 0,
+        boost_amount INTEGER NOT NULL DEFAULT 0,
+        net_amount INTEGER NOT NULL DEFAULT 0,
+        crashed INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`
+    );
+    await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_samp_truck_runs_user_created ON samp_truck_runs(user_id, created_at DESC)`);
+    await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_samp_truck_runs_route_created ON samp_truck_runs(route_id, created_at DESC)`);
+    await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_samp_truck_runs_incident_created ON samp_truck_runs(incident_id, created_at DESC)`);
+
+  // Tables owned by sibling modules — create them here so samp-life can
+  // safely read/write boost + onboarding state on the first call.
+  try { await ensureCosmeticsTables(db); } catch (err) { console.error("[samp-life] ensureCosmeticsTables", err?.message || err); }
+  try { await ensureOnboardingTables(db); } catch (err) { console.error("[samp-life] ensureOnboardingTables", err?.message || err); }
 }
 
 // -------------------------
@@ -1015,13 +1532,13 @@ function getSampLifeCommandBuilders() {
       .setName("race")
       .setDescription("SAMP Life: гонка на вирты")
       .addUserOption((o) => o.setName("user").setDescription("С кем гонка").setRequired(true))
-      .addIntegerOption((o) => o.setName("bet").setDescription("Ставка").setRequired(true).setMinValue(1)),
+      .addIntegerOption((o) => o.setName("bet").setDescription("Ставка").setRequired(true).setMinValue(1).setMaxValue(PVP_AMOUNT_LIMITS.raceBetMax)),
 
     new SlashCommandBuilder()
       .setName("duel")
       .setDescription("SAMP Life: дуэль на вирты")
       .addUserOption((o) => o.setName("user").setDescription("С кем дуэль").setRequired(true))
-      .addIntegerOption((o) => o.setName("bet").setDescription("Ставка").setRequired(true).setMinValue(1)),
+      .addIntegerOption((o) => o.setName("bet").setDescription("Ставка").setRequired(true).setMinValue(1).setMaxValue(PVP_AMOUNT_LIMITS.duelBetMax)),
 
     new SlashCommandBuilder()
       .setName("sellcar")
@@ -1086,6 +1603,27 @@ function getSampLifeCommandBuilders() {
 // -------------------------
 // Commands
 // -------------------------
+
+/**
+ * Onboarding helper: after a quest step completes, silently credit the
+ * reward into samp_users and return a short Russian text suffix to append
+ * to the player-facing message. Returns "" if nothing happened.
+ */
+async function maybeCompleteOnboarding(db, userId, stepKey, extra = {}) {
+  try {
+    const res = await triggerOnboardingEvent(db, userId, stepKey, extra);
+    if (!res?.completed) return "";
+    const reward = Number(res.reward || 0);
+    if (reward > 0) {
+      await adjustMoney(db, userId, reward);
+      await addLedger(db, "onboarding_reward", null, userId, reward, { step: res.step?.key, title: res.step?.title }).catch(() => {});
+    }
+    return `\n\n🎯 **Квест новичка: «${res.step.title}»** — выполнено! +${fmtMoney(reward)}. Прогресс: **/quest**.`;
+  } catch (_) {
+    return "";
+  }
+}
+
 async function handleReg(interaction, db) {
   const userId = interaction.user.id;
   const existing = await getUserRow(db, userId);
@@ -1096,11 +1634,13 @@ async function handleReg(interaction, db) {
 
   await getOrCreateUser(db, userId);
   await addLedger(db, "reg", null, userId, START_MONEY, {});
+  await startOnboarding(db, userId).catch(() => {});
 
   await interaction.reply(
     `Добро пожаловать в San Andreas, **${interaction.user.username}**!\n` +
       `Старт: **${fmtMoney(START_MONEY)}** и **${CARS[DEFAULT_CAR_ID].name}**.\n` +
-      `Пиши /work чтобы подняться.`
+      `Пиши /work чтобы подняться.\n\n` +
+      `🎯 **Квест новичка** открыт! Посмотри его через **/quest** — за первые пять шагов можно поднять **+52,000$**.`
   );
 }
 
@@ -1142,7 +1682,7 @@ async function handleBalance(interaction, db) {
       `**${carProfile.name}** • ${carProfile.buildType}`,
       `Скорость: **${carProfile.topSpeed}**${carProfile.topSpeedBonus > 0 ? ` (база ${carProfile.baseTopSpeed} + ${carProfile.topSpeedBonus})` : ""}`,
       `Старт/зацеп: **${carProfile.launch} / ${carProfile.grip}** | Стабильность: **${carProfile.stability}**`,
-      `Тюнинг-уровень: **${carProfile.tuningLevel}/${TUNE_LEVEL_MAX}** | Износ: **${carProfile.averageDurability}%**`,
+      `Тюнинг-уровень: **${carProfile.tuningLevel}/${TUNE_LEVEL_MAX}** | Состояние: **${carProfile.averageDurability}%**`,
     ]), inline: true },
     { name: "🔫 Оружие", value: weaponName ? `**${weaponName}**` : "—", inline: true },
   ];
@@ -1185,28 +1725,28 @@ async function handleMoneyLog(interaction, db) {
   const hours = clampInt(interaction.options.getInteger("hours") ?? 24, 1, 24 * 30) || 24;
   const limit = clampInt(interaction.options.getInteger("limit") ?? 10, 1, 20) || 10;
   const since = toSqliteUtcDateTime(Date.now() - hours * 60 * 60_000);
-  const summary = await summarizeRobberyLosses(db, userId, { since, limit });
+  const summary = await summarizePvpMoneyLosses(db, userId, { since, limit });
 
   if (summary.totalCount <= 0) {
     await interaction.reply({
-      content: `За последние **${hours}ч** никто не грабил тебя через **/rob**.`,
+      content: `За последние **${hours}ч** нет потерь виртов через **/rob**, **/race**, **/duel** или **/pay**.`,
       ephemeral: true,
     });
     return;
   }
 
-  const lines = summary.rows.map(formatRobberyLossLine);
+  const lines = summary.rows.map(formatPvpMoneyLossLine);
   if (summary.totalCount > summary.rows.length) {
     lines.push(`• И ещё **${summary.totalCount - summary.rows.length}** записей в этом окне.`);
   }
 
   const embeds = buildPagedLineEmbeds({
-    title: "SAMP Life — Кто забрал твои вирты",
-    description: `За последние **${hours}ч** тебя успешно ограбили **${summary.totalCount}** раз на **${fmtMoney(summary.totalAmount)}**.`,
+    title: "SAMP Life — История потерь виртов",
+    description: `За последние **${hours}ч** у тебя списали или забрали **${summary.totalCount}** ${formatRobberyOccurrenceCount(summary.totalCount)} на **${fmtMoney(summary.totalAmount)}**.`,
     color: 0xef4444,
     lines,
     linesPerPage: 8,
-    footer: "Показываются только успешные PvP-ограбления через /rob",
+    footer: "Показываются PvP-потери и переводы: /rob, /race, /duel, /pay",
   });
 
   await interaction.reply({ embeds, ephemeral: true });
@@ -1230,17 +1770,27 @@ async function handleWork(interaction, db) {
     levelRow = null;
   }
   const level = levelRow?.level || 1;
-  const earnings = Math.floor(randInt(100, 500) * (1 + level * 0.1));
+  const boosts = await getUserBoostEffects(db, userId).catch(() => null);
+  const baseEarnings = Math.floor(randInt(100, 500) * (1 + level * 0.1));
+  const earnings = Math.floor(baseEarnings * (boosts?.workMultiplier || 1));
+  const boostDelta = earnings - baseEarnings;
 
   const opKey = makeInteractionOpKey(interaction, "work");
   await withTransaction(db, async () => {
     await adjustMoney(db, userId, earnings);
-    const inserted = await addLedgerUnique(db, "work", null, userId, earnings, opKey, { job });
+    const inserted = await addLedgerUnique(db, "work", null, userId, earnings, opKey, { job, base: baseEarnings, boost: boostDelta });
     if (!inserted) throw new Error("DUPLICATE_OPERATION");
+    // Apply cooldown multiplier from boosts.
+    if (boosts && boosts.cooldownMultiplier < 1) {
+      const newReadyAt = nowMs() + Math.floor((COOLDOWNS_MS.work || 60_000) * boosts.cooldownMultiplier);
+      await setCooldown(db, userId, "work", newReadyAt);
+    }
   });
 
   const after = await getUserRow(db, userId);
-  await interaction.editReply(`🛠 Ты ${job} и поднял **${fmtMoney(earnings)}**. Баланс: **${fmtMoney(after.money)}**`);
+  const boostNote = boostDelta > 0 ? ` _(бонус лицензии: +${fmtMoney(boostDelta)})_` : "";
+  const questNote = await maybeCompleteOnboarding(db, userId, "work");
+  await interaction.editReply(`🛠 Ты ${job} и поднял **${fmtMoney(earnings)}**.${boostNote} Баланс: **${fmtMoney(after.money)}**${questNote}`);
 }
 
 async function handleTruck(interaction, db) {
@@ -1252,34 +1802,74 @@ async function handleTruck(interaction, db) {
   if (!(await tryDeferReply(interaction))) return;
   if (!(await checkAndConsumeCooldown(interaction, db, userId, "truck"))) return;
 
-  // Risk model: 18% crash
-  const crash = Math.random() < 0.18;
+  const contract = rollTruckContract(user);
+  const crash = Math.random() < contract.crashChance;
   if (crash) {
-    const rawFine = randInt(800, 2500);
     let fine = 0;
     const opKey = makeInteractionOpKey(interaction, "truck_crash");
     await withTransaction(db, async () => {
       const latest = await getUserRow(db, userId);
-      fine = Math.min(rawFine, Number(latest?.money || 0));
+      fine = Math.min(contract.rawFine, Number(latest?.money || 0));
       if (fine <= 0) return;
-      const inserted = await addLedgerUnique(db, "truck_crash", userId, null, fine, opKey, {});
+      const inserted = await addLedgerUnique(db, "truck_crash", userId, null, fine, opKey, {
+        ...contract.meta,
+        incidentText: contract.incident.crashText,
+      });
       if (!inserted) throw new Error("DUPLICATE_OPERATION");
       await adjustMoney(db, userId, -fine);
+      await recordTruckRun(db, userId, opKey, contract, {
+        crashed: true,
+        contractAmount: contract.rawFine,
+        actualAmount: fine,
+        boostAmount: 0,
+        netAmount: -fine,
+      });
     });
     const after = await getUserRow(db, userId);
-    await interaction.editReply(`🚚💥 Ты улетел в кювет. Штраф/ремонт: **-${fmtMoney(fine)}**. Баланс: **${fmtMoney(after.money)}**`);
+    await interaction.editReply(
+      `🚚💥 Ты улетел в кювет на рейсе **${contract.route.name}**.\n`
+      + `Груз: **${contract.cargo.name}** • Ситуация: **${contract.incident.name}**\n`
+      + `${contract.incident.crashText}\n`
+      + `Штраф/ремонт: **-${fmtMoney(fine)}**. Баланс: **${fmtMoney(after.money)}**`
+    );
     return;
   }
 
-  const earnings = randInt(2500, 6500);
+  const boostsT = await getUserBoostEffects(db, userId).catch(() => null);
+  const baseTruck = contract.rawReward;
+  const earnings = Math.floor(baseTruck * (boostsT?.truckMultiplier || 1));
+  const boostDeltaT = earnings - baseTruck;
   const opKey = makeInteractionOpKey(interaction, "truck");
   await withTransaction(db, async () => {
     await adjustMoney(db, userId, earnings);
-    const inserted = await addLedgerUnique(db, "truck", null, userId, earnings, opKey, {});
+    const inserted = await addLedgerUnique(db, "truck", null, userId, earnings, opKey, {
+      ...contract.meta,
+      base: baseTruck,
+      boost: boostDeltaT,
+      incidentText: contract.incident.successText,
+    });
     if (!inserted) throw new Error("DUPLICATE_OPERATION");
+    await recordTruckRun(db, userId, opKey, contract, {
+      crashed: false,
+      contractAmount: baseTruck,
+      actualAmount: earnings,
+      boostAmount: boostDeltaT,
+      netAmount: earnings,
+    });
+    if (boostsT && boostsT.cooldownMultiplier < 1) {
+      const newReadyAt = nowMs() + Math.floor((COOLDOWNS_MS.truck || 900_000) * boostsT.cooldownMultiplier);
+      await setCooldown(db, userId, "truck", newReadyAt);
+    }
   });
   const after = await getUserRow(db, userId);
-  await interaction.editReply(`🚚 Ты отработал дальнобой и привёз бабки: **${fmtMoney(earnings)}**. Баланс: **${fmtMoney(after.money)}**`);
+  const boostNoteT = boostDeltaT > 0 ? ` _(лицензия дальнобойщика: +${fmtMoney(boostDeltaT)})_` : "";
+  const questNoteT = await maybeCompleteOnboarding(db, userId, "truck");
+  await interaction.editReply(
+    `🚚 Контракт закрыт: **${contract.route.name}**.\n`
+    + `Груз: **${contract.cargo.name}** • Ситуация: **${contract.incident.name}**\n`
+    + `${contract.incident.successText}\n`
+    + `Выплата: **${fmtMoney(earnings)}**.${boostNoteT} Баланс: **${fmtMoney(after.money)}**${questNoteT}`
+  );
 }
 
 async function handleRob(interaction, db) {
@@ -1300,6 +1890,14 @@ async function handleRob(interaction, db) {
 
     const victim = await getUserRow(db, target.id);
     if (!victim) { await interaction.editReply("Этот игрок не зарегистрирован в SAMP Life."); return; }
+
+    const pairRobCd = await getChallengePairCooldown(db, userId, target.id, "rob");
+    if (pairRobCd > nowMs()) {
+      await interaction.editReply(formatChallengePairCooldownMessage("rob", target.id, pairRobCd - nowMs()));
+      return;
+    }
+
+    const robPairReadyAt = nowMs() + CHALLENGE_PAIR_COOLDOWNS_MS.rob;
 
     // Disguise: blocks PvP robbery
     try {
@@ -1329,6 +1927,7 @@ async function handleRob(interaction, db) {
       await withTransaction(db, async () => {
         if (fine > 0) await adjustMoney(db, userId, -fine);
         await dbRun(db, `UPDATE samp_users SET jail_until = ? WHERE user_id = ?`, [nowMs() + jailMs, String(userId)]);
+        await setChallengePairCooldown(db, userId, target.id, "rob", robPairReadyAt);
         const inserted = await addLedgerUnique(db, "rob_pvp_caught", userId, target.id, fine, makeInteractionOpKey(interaction, "rob_pvp_caught"), { jail_ms: jailMs });
         if (!inserted) throw new Error("DUPLICATE_OPERATION");
       });
@@ -1344,7 +1943,7 @@ async function handleRob(interaction, db) {
     // Success: steal 5-15% of victim balance (min 500, max 50,000)
     const pct = randInt(5, 15) / 100;
     const rawSteal = Math.floor(Number(victim.money) * pct);
-    const loot = Math.min(50_000, Math.max(500, rawSteal));
+    const loot = Math.min(PVP_AMOUNT_LIMITS.pvpRobberyMaxLoot, Math.max(PVP_AMOUNT_LIMITS.pvpRobberyMinLoot, rawSteal));
     const actualLoot = Math.min(loot, Number(victim.money));
 
     if (actualLoot <= 0) { await interaction.editReply("У жертвы нет виртов — обчищать нечего."); return; }
@@ -1356,6 +1955,7 @@ async function handleRob(interaction, db) {
       if (realLoot <= 0) throw new Error("INSUFFICIENT");
       await adjustMoney(db, target.id, -realLoot);
       await adjustMoney(db, userId, realLoot);
+      await setChallengePairCooldown(db, userId, target.id, "rob", robPairReadyAt);
       const inserted = await addLedgerUnique(db, "rob_pvp", userId, target.id, realLoot, makeInteractionOpKey(interaction, "rob_pvp"), {});
       if (!inserted) throw new Error("DUPLICATE_OPERATION");
       stolenAmount = realLoot;
@@ -1367,8 +1967,10 @@ async function handleRob(interaction, db) {
   }
 
   // --- Original 24/7 robbery (no target) ---
-  // 35% jail chance. On success: win 2k-10k. On fail: jail 5 min + fine 1k-4k.
-  const caught = Math.random() < 0.35;
+  // Jail chance: base 35%, adjusted by robJailBonus from boost items.
+  const boostsR = await getUserBoostEffects(db, userId).catch(() => null);
+  const jailChance247 = Math.max(0.05, Math.min(0.9, 0.35 + (boostsR?.robJailBonus || 0)));
+  const caught = Math.random() < jailChance247;
   if (caught) {
     const jailMs = 5 * 60_000;
     const rawFine = randInt(1000, 4000);
@@ -1379,7 +1981,7 @@ async function handleRob(interaction, db) {
       const launderQty = await getInventoryQty(db, userId, "bm_laundering");
       if (launderQty > 0) { launderingDiscount247 = 0.40; await consumeInventoryItem(db, userId, "bm_laundering", 1); }
     } catch (_) {}
-    const discountedFine247 = Math.floor(rawFine * (1 - launderingDiscount247));
+    const discountedFine247 = Math.floor(rawFine * (1 - launderingDiscount247) * (1 + (boostsR?.robFinePenalty || 0)));
     const latest = await getUserRow(db, userId);
     const fine = Math.min(discountedFine247, Number(latest?.money || 0));
     await withTransaction(db, async () => {
@@ -1402,6 +2004,10 @@ async function handleRob(interaction, db) {
     await adjustMoney(db, userId, loot);
     const inserted = await addLedgerUnique(db, "rob", null, userId, loot, makeInteractionOpKey(interaction, "rob"), {});
     if (!inserted) throw new Error("DUPLICATE_OPERATION");
+    if (boostsR && boostsR.cooldownMultiplier < 1) {
+      const newReadyAt = nowMs() + Math.floor((COOLDOWNS_MS.rob || 900_000) * boostsR.cooldownMultiplier);
+      await setCooldown(db, userId, "rob", newReadyAt);
+    }
   });
   const after = await getUserRow(db, userId);
   await interaction.editReply(`🕶️ Ты вынес кассу 24/7: **${fmtMoney(loot)}**. Баланс: **${fmtMoney(after.money)}**`);
@@ -1480,7 +2086,8 @@ async function handleBuy(interaction, db) {
     });
 
     const after = await getUserRow(db, userId);
-    await interaction.reply(`✅ Ты купил **${car.name}** за **${fmtMoney(car.price)}**. Баланс: **${fmtMoney(after.money)}**`);
+    const questNoteBuyCar = await maybeCompleteOnboarding(db, userId, "buy_car");
+    await interaction.reply(`✅ Ты купил **${car.name}** за **${fmtMoney(car.price)}**. Баланс: **${fmtMoney(after.money)}**${questNoteBuyCar}`);
     return;
   }
 
@@ -1535,6 +2142,413 @@ async function handleWeapon(interaction, db) {
   await interaction.reply(`✅ Активное оружие: **${weapon.name}**`);
 }
 
+// ---------- Race v2: interactive tactical race ----------
+// Design: challenge (accept button) -> 3 corners (simultaneous secret tactic
+// picks via ephemeral buttons) -> settlement. Car stats bias corner outcomes
+// via stat-vs-stat deltas; RPS (Inside beats Outside, Outside beats Shortcut,
+// Shortcut beats Inside) provides player agency. NOS = peek opponent's pick on
+// one corner (strategic info instead of flat +12). Sabotage = one random
+// corner auto-picks for the affected player.
+
+const RACE_TACTICS = [
+  { id: "inside", emoji: "🏎", label: "Внутренний", stat: "grip", beats: "outside" },
+  { id: "outside", emoji: "🛣", label: "Внешний", stat: "topSpeed", beats: "shortcut" },
+  { id: "shortcut", emoji: "💥", label: "Срезка", stat: "launch", beats: "inside" },
+];
+const RACE_CORNER_COUNT = 3;
+const RACE_ACCEPT_TIMEOUT_MS = 60_000;
+const RACE_PICK_TIMEOUT_MS = 25_000;
+const RACE_RPS_POINTS = 12;
+const RACE_STAT_DELTA_CAP = 4;
+const RACE_JITTER = 3; // per-player per-corner uniform [-RACE_JITTER, +RACE_JITTER]
+
+const activeRaceSessions = new Set(); // pairKey: "userA|userB" sorted
+
+function racePairKey(a, b) {
+  return [String(a), String(b)].sort().join("|");
+}
+
+function pickRandomTactic() {
+  return RACE_TACTICS[Math.floor(Math.random() * RACE_TACTICS.length)];
+}
+
+function getTacticById(id) {
+  return RACE_TACTICS.find((t) => t.id === id) || null;
+}
+
+function resolveCornerScore(myTactic, oppTactic, myCar, oppCar) {
+  // Base RPS
+  let rps = 0;
+  if (myTactic.id !== oppTactic.id) {
+    rps = myTactic.beats === oppTactic.id ? RACE_RPS_POINTS : 0;
+  }
+  // Stat advantage tied to the tactic I chose
+  const myStat = Number(myCar?.[myTactic.stat] || 0);
+  const oppStat = Number(oppCar?.[myTactic.stat] || 0);
+  const raw = Math.round((myStat - oppStat) / 10);
+  const statDelta = Math.max(-RACE_STAT_DELTA_CAP, Math.min(RACE_STAT_DELTA_CAP, raw));
+  // Small per-corner random jitter so identical inputs don't always tie and
+  // so underdogs have a real chance when RPS goes their way.
+  const jitter = randInt(-RACE_JITTER, RACE_JITTER);
+  return { rps, statDelta, jitter, total: rps + statDelta + jitter };
+}
+
+function buildChallengeEmbed({ userId, opponent, bet, p1Car, p2Car }) {
+  return new EmbedBuilder()
+    .setColor(0xf59e0b)
+    .setTitle("🏁 Вызов на гонку «Три поворота»")
+    .setDescription(
+      `<@${userId}> вызывает <@${opponent.id}> на гонку.\nСтавка: **${fmtMoney(bet)}**\n\n` +
+        `**${p1Car.name}** (билд ${p1Car.buildType}) *vs* **${p2Car.name}** (билд ${p2Car.buildType})\n\n` +
+        `Формат: **3 поворота**, на каждом оба игрока тайно выбирают тактику — 🏎 Внутренний / 🛣 Внешний / 💥 Срезка. ` +
+        `Внутренний бьёт Внешний, Внешний бьёт Срезку, Срезка бьёт Внутренний. Стат машины (зацеп/скорость/старт) добавляет до ±${RACE_STAT_DELTA_CAP}, плюс небольшой случайный фактор ±${RACE_JITTER} на каждый поворот. ` +
+        `<@${opponent.id}>, у тебя **60 секунд** чтобы принять.`
+    )
+    .setFooter({ text: "Отказ не списывает кулдаун. Тайм-аут = отказ." });
+}
+
+function buildAcceptRow(sessionId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`race2:${sessionId}:accept`)
+      .setLabel("✅ Принять")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`race2:${sessionId}:decline`)
+      .setLabel("❌ Отказаться")
+      .setStyle(ButtonStyle.Danger)
+  );
+}
+
+function buildTacticRow(sessionId, cornerIdx, { disabled = false } = {}) {
+  const row = new ActionRowBuilder();
+  for (const t of RACE_TACTICS) {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`race2:${sessionId}:pick:${cornerIdx}:${t.id}`)
+        .setLabel(`${t.emoji} ${t.label}`)
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(disabled)
+    );
+  }
+  return row;
+}
+
+function buildNosRow(sessionId, cornerIdx) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`race2:${sessionId}:nos:${cornerIdx}`)
+      .setLabel("🔥 NOS: заглянуть")
+      .setStyle(ButtonStyle.Secondary)
+  );
+}
+
+function buildRaceRunningEmbed({ userId, opponent, bet, p1Car, p2Car, corners, scores, cornerIdx }) {
+  const embed = new EmbedBuilder()
+    .setColor(0x3b82f6)
+    .setTitle(`🏁 Гонка «Три поворота» — поворот ${cornerIdx + 1}/${RACE_CORNER_COUNT}`)
+    .setDescription(
+      `<@${userId}> (**${p1Car.name}**) *vs* <@${opponent.id}> (**${p2Car.name}**)\nСтавка: **${fmtMoney(bet)}**`
+    );
+  if (corners.length > 0) {
+    const lines = corners.map((c, i) => {
+      const t1 = getTacticById(c.p1Pick);
+      const t2 = getTacticById(c.p2Pick);
+      const delta1 = c.p1Corner.total >= 0 ? `+${c.p1Corner.total}` : String(c.p1Corner.total);
+      const delta2 = c.p2Corner.total >= 0 ? `+${c.p2Corner.total}` : String(c.p2Corner.total);
+      return `**${i + 1}.** ${t1?.emoji || "?"} ${delta1} vs ${t2?.emoji || "?"} ${delta2}`;
+    });
+    embed.addFields({ name: "Пройдено", value: lines.join("\n") });
+  }
+  embed.addFields({
+    name: "Счёт",
+    value: `<@${userId}>: **${scores.p1}**\n<@${opponent.id}>: **${scores.p2}**`,
+  });
+  return embed;
+}
+
+async function collectRacePick(message, uid, sessionId, cornerIdx) {
+  try {
+    const pressed = await message.awaitMessageComponent({
+      componentType: ComponentType.Button,
+      filter: (i) =>
+        i.user.id === uid &&
+        i.customId.startsWith(`race2:${sessionId}:pick:${cornerIdx}:`),
+      time: RACE_PICK_TIMEOUT_MS,
+    });
+    const tacticId = pressed.customId.split(":")[4];
+    const tactic = getTacticById(tacticId) || pickRandomTactic();
+    // Acknowledge with disabled buttons so user sees it registered.
+    await pressed
+      .update({
+        content: `✅ Выбор принят: **${tactic.emoji} ${tactic.label}**. Ждём соперника…`,
+        components: [buildTacticRow(sessionId, cornerIdx, { disabled: true })],
+      })
+      .catch(() => {});
+    return { tactic, auto: false };
+  } catch (_err) {
+    const tactic = pickRandomTactic();
+    try {
+      await message.edit({
+        content: `⏱ Тайм-аут. Авто-выбор: **${tactic.emoji} ${tactic.label}**.`,
+        components: [buildTacticRow(sessionId, cornerIdx, { disabled: true })],
+      });
+    } catch (_) {}
+    return { tactic, auto: true };
+  }
+}
+
+async function sendPickPrompt(interaction, uid, sessionId, cornerIdx, extra = "") {
+  return interaction.followUp({
+    content: `🎯 Поворот **${cornerIdx + 1}/${RACE_CORNER_COUNT}** — выбери тактику (${Math.round(RACE_PICK_TIMEOUT_MS / 1000)} сек). ${extra}`,
+    components: [buildTacticRow(sessionId, cornerIdx)],
+    ephemeral: true,
+  });
+}
+
+async function runRaceSession(ctx) {
+  const { interaction, db, userId, opponent, bet, p1, p2, p1Car, p2Car, sessionId, raceReadyAt, racePairReadyAt } = ctx;
+
+  const scores = { p1: 0, p2: 0 };
+  const corners = [];
+
+  // NOS peek: consume 1 charge each (if owner), grants one peek use per race.
+  let p1NosLeft = 0;
+  let p2NosLeft = 0;
+  const notes = [];
+  try {
+    const { getInventoryQty, consumeInventoryItem } = require("./samp-extended");
+    const [q1, q2] = await Promise.all([
+      getInventoryQty(db, userId, "bm_nos_boost"),
+      getInventoryQty(db, opponent.id, "bm_nos_boost"),
+    ]);
+    if (q1 > 0) { p1NosLeft = 1; await consumeInventoryItem(db, userId, "bm_nos_boost", 1); notes.push(`🔥 <@${userId}> активировал NOS (1 использование разведки).`); }
+    if (q2 > 0) { p2NosLeft = 1; await consumeInventoryItem(db, opponent.id, "bm_nos_boost", 1); notes.push(`🔥 <@${opponent.id}> активировал NOS (1 использование разведки).`); }
+  } catch (_) { /* samp-extended optional */ }
+
+  // Sabotage: pick a forced corner for each affected player.
+  let p1SabotageCorner = -1;
+  let p2SabotageCorner = -1;
+  try {
+    const { getUserSetting, setUserSetting: clearSetting } = require("./samp-extended");
+    const [p1SabVal, p2SabVal] = await Promise.all([
+      getUserSetting(db, userId, "sabotaged_until"),
+      getUserSetting(db, opponent.id, "sabotaged_until"),
+    ]);
+    if (p1SabVal && Number(p1SabVal) > nowMs()) { p1SabotageCorner = randInt(0, RACE_CORNER_COUNT - 1); await clearSetting(db, userId, "sabotaged_until", "0"); notes.push(`🔧 <@${userId}> был саботирован — один поворот пройдёт на автопилоте.`); }
+    if (p2SabVal && Number(p2SabVal) > nowMs()) { p2SabotageCorner = randInt(0, RACE_CORNER_COUNT - 1); await clearSetting(db, opponent.id, "sabotaged_until", "0"); notes.push(`🔧 <@${opponent.id}> был саботирован — один поворот пройдёт на автопилоте.`); }
+  } catch (_) {}
+
+  if (notes.length) {
+    try { await interaction.followUp({ content: notes.join("\n") }); } catch (_) {}
+  }
+
+  for (let cornerIdx = 0; cornerIdx < RACE_CORNER_COUNT; cornerIdx++) {
+    await interaction
+      .editReply({
+        embeds: [buildRaceRunningEmbed({ userId, opponent: opponent, bet, p1Car, p2Car, corners, scores, cornerIdx })],
+        components: p1NosLeft || p2NosLeft ? [buildNosRow(sessionId, cornerIdx)] : [],
+      })
+      .catch(() => {});
+
+    // Send pick prompts (respect sabotage auto-picks)
+    const p1Sabotaged = cornerIdx === p1SabotageCorner;
+    const p2Sabotaged = cornerIdx === p2SabotageCorner;
+
+    const [msg1, msg2] = await Promise.all([
+      p1Sabotaged
+        ? null
+        : sendPickPrompt(interaction, userId, sessionId, cornerIdx),
+      p2Sabotaged
+        ? null
+        : sendPickPrompt(interaction, opponent.id, sessionId, cornerIdx),
+    ]);
+
+    // NOS peek: set up a single collector on the public message for either player.
+    const publicMsg = await interaction.fetchReply();
+    let peekCollector = null;
+    if (publicMsg && (p1NosLeft || p2NosLeft)) {
+      peekCollector = publicMsg.createMessageComponentCollector({
+        componentType: ComponentType.Button,
+        time: RACE_PICK_TIMEOUT_MS,
+        filter: (i) => i.customId === `race2:${sessionId}:nos:${cornerIdx}`,
+      });
+    }
+
+    // Start both pick collectors in parallel.
+    const p1PickPromise = p1Sabotaged
+      ? Promise.resolve({ tactic: pickRandomTactic(), auto: true })
+      : collectRacePick(msg1, userId, sessionId, cornerIdx);
+    const p2PickPromise = p2Sabotaged
+      ? Promise.resolve({ tactic: pickRandomTactic(), auto: true })
+      : collectRacePick(msg2, opponent.id, sessionId, cornerIdx);
+
+    // Peek handler: on first click from a NOS-owner, reveal opponent's CURRENT
+    // pick (if resolved) or resolve ASAP. To keep it simple, we poll: if not
+    // yet picked, we reveal whatever becomes picked.
+    if (peekCollector) {
+      peekCollector.on("collect", async (btn) => {
+        try {
+          if (btn.user.id === userId && p1NosLeft > 0) {
+            p1NosLeft = 0;
+            const p2Pick = await p2PickPromise;
+            await btn.reply({
+              content: `🔍 Разведка: соперник выбрал **${p2Pick.tactic.emoji} ${p2Pick.tactic.label}**.`,
+              ephemeral: true,
+            });
+          } else if (btn.user.id === opponent.id && p2NosLeft > 0) {
+            p2NosLeft = 0;
+            const p1Pick = await p1PickPromise;
+            await btn.reply({
+              content: `🔍 Разведка: соперник выбрал **${p1Pick.tactic.emoji} ${p1Pick.tactic.label}**.`,
+              ephemeral: true,
+            });
+          } else {
+            await btn.reply({ content: "У тебя нет заряда NOS на эту гонку.", ephemeral: true });
+          }
+        } catch (_) {}
+      });
+    }
+
+    const [p1Pick, p2Pick] = await Promise.all([p1PickPromise, p2PickPromise]);
+    if (peekCollector) peekCollector.stop();
+
+    const p1Corner = resolveCornerScore(p1Pick.tactic, p2Pick.tactic, p1Car, p2Car);
+    const p2Corner = resolveCornerScore(p2Pick.tactic, p1Pick.tactic, p2Car, p1Car);
+    scores.p1 += p1Corner.total;
+    scores.p2 += p2Corner.total;
+    corners.push({
+      p1Pick: p1Pick.tactic.id,
+      p2Pick: p2Pick.tactic.id,
+      p1Corner,
+      p2Corner,
+    });
+  }
+
+  // Apply wear-based final adjustment (single time) — half of the wear penalty
+  // from car-tuning contributes to the final score, so well-maintained cars
+  // keep their edge without dominating.
+  const p1WearPenalty = Math.max(0, Math.round((55 - Number(p1Car.averageDurability || 100)) / 12));
+  const p2WearPenalty = Math.max(0, Math.round((55 - Number(p2Car.averageDurability || 100)) / 12));
+  scores.p1 -= p1WearPenalty;
+  scores.p2 -= p2WearPenalty;
+
+  // Determine winner; tiebreak = raceScore, then true draw.
+  let winner = null;
+  if (scores.p1 > scores.p2) winner = userId;
+  else if (scores.p2 > scores.p1) winner = opponent.id;
+  else {
+    const r1 = Number(p1Car.raceScore || 0);
+    const r2 = Number(p2Car.raceScore || 0);
+    if (r1 > r2) winner = userId;
+    else if (r2 > r1) winner = opponent.id;
+  }
+
+  // Build final embed summary.
+  const finalEmbed = new EmbedBuilder()
+    .setColor(winner ? 0x22c55e : 0x6b7280)
+    .setTitle("🏁 Финиш!")
+    .setDescription(
+      `<@${userId}> (**${p1Car.name}**) *vs* <@${opponent.id}> (**${p2Car.name}**)\nСтавка: **${fmtMoney(bet)}**`
+    );
+  const recap = corners
+    .map((c, i) => {
+      const t1 = getTacticById(c.p1Pick);
+      const t2 = getTacticById(c.p2Pick);
+      return `**${i + 1}.** ${t1.emoji} ${t1.label} (**${c.p1Corner.total >= 0 ? "+" : ""}${c.p1Corner.total}**) vs ${t2.emoji} ${t2.label} (**${c.p2Corner.total >= 0 ? "+" : ""}${c.p2Corner.total}**)`;
+    })
+    .join("\n");
+  finalEmbed.addFields(
+    { name: "Повороты", value: recap },
+    {
+      name: "Итог",
+      value: `<@${userId}>: **${scores.p1}**${p1WearPenalty ? ` (износ −${p1WearPenalty})` : ""}\n<@${opponent.id}>: **${scores.p2}**${p2WearPenalty ? ` (износ −${p2WearPenalty})` : ""}`,
+    }
+  );
+
+  // Settlement (reuses existing plumbing)
+  if (winner === userId) {
+    const settlement = await settleWagerWithParticipants(
+      db,
+      opponent.id,
+      userId,
+      bet,
+      "race",
+      [
+        { userId, action: "race", readyAt: raceReadyAt },
+        { userId: opponent.id, action: "race", readyAt: raceReadyAt },
+      ],
+      {
+        challengerUserId: userId,
+        targetUserId: opponent.id,
+        action: "race",
+        readyAt: racePairReadyAt,
+      },
+      { loser: opponent.id },
+      makeInteractionOpKey(interaction, "race")
+    );
+    await Promise.all([
+      finalizeRaceVehicleProgress(db, userId, p1.car_id, p1Car, { result: "win", winnings: settlement.settledAmount }),
+      finalizeRaceVehicleProgress(db, opponent.id, p2.car_id, p2Car, { result: "loss", winnings: 0 }),
+    ]);
+    finalEmbed.addFields({
+      name: "💰 Выплата",
+      value: `<@${userId}> забирает **${fmtMoney(settlement.settledAmount)}**.${buildReducedSettlementNote(bet, settlement.settledAmount, opponent.id)}`,
+    });
+  } else if (winner === opponent.id) {
+    const settlement = await settleWagerWithParticipants(
+      db,
+      userId,
+      opponent.id,
+      bet,
+      "race",
+      [
+        { userId, action: "race", readyAt: raceReadyAt },
+        { userId: opponent.id, action: "race", readyAt: raceReadyAt },
+      ],
+      {
+        challengerUserId: userId,
+        targetUserId: opponent.id,
+        action: "race",
+        readyAt: racePairReadyAt,
+      },
+      { loser: userId },
+      makeInteractionOpKey(interaction, "race")
+    );
+    await Promise.all([
+      finalizeRaceVehicleProgress(db, userId, p1.car_id, p1Car, { result: "loss", winnings: 0 }),
+      finalizeRaceVehicleProgress(db, opponent.id, p2.car_id, p2Car, { result: "win", winnings: settlement.settledAmount }),
+    ]);
+    finalEmbed.addFields({
+      name: "💸 Выплата",
+      value: `<@${opponent.id}> забирает **${fmtMoney(settlement.settledAmount)}**.${buildReducedSettlementNote(bet, settlement.settledAmount, userId)}`,
+    });
+  } else {
+    await withTransaction(db, async () => {
+      await setCooldown(db, userId, "race", raceReadyAt);
+      await setCooldown(db, opponent.id, "race", raceReadyAt);
+      await setChallengePairCooldown(db, userId, opponent.id, "race", racePairReadyAt);
+      const inserted = await addLedgerUnique(
+        db,
+        "race_draw",
+        userId,
+        opponent.id,
+        0,
+        makeInteractionOpKey(interaction, "race_draw"),
+        { bet }
+      );
+      if (!inserted) throw new Error("DUPLICATE_OPERATION");
+    });
+    await Promise.all([
+      finalizeRaceVehicleProgress(db, userId, p1.car_id, p1Car, { result: "draw", winnings: 0 }),
+      finalizeRaceVehicleProgress(db, opponent.id, p2.car_id, p2Car, { result: "draw", winnings: 0 }),
+    ]);
+    finalEmbed.addFields({ name: "🤝 Ничья", value: "Разъехались без потерь." });
+  }
+
+  await interaction.editReply({ embeds: [finalEmbed], components: [] });
+}
+
 async function handleRace(interaction, db) {
   const userId = interaction.user.id;
   const opponent = interaction.options.getUser("user", true);
@@ -1549,9 +2563,19 @@ async function handleRace(interaction, db) {
     return;
   }
 
-  const bet = clampInt(betRaw, 1, 2_000_000);
-  if (!bet) {
-    await interaction.reply({ content: "Некорректная ставка.", ephemeral: true });
+  const betCheck = normalizeWagerAmount(betRaw, PVP_AMOUNT_LIMITS.raceBetMax);
+  if (!betCheck.ok) {
+    await interaction.reply({ content: betCheck.message, ephemeral: true });
+    return;
+  }
+  const bet = betCheck.amount;
+
+  const pairKey = racePairKey(userId, opponent.id);
+  if (activeRaceSessions.has(pairKey)) {
+    await interaction.reply({
+      content: "⚠️ У тебя уже идёт гонка с этим соперником. Дождись её завершения.",
+      ephemeral: true,
+    });
     return;
   }
 
@@ -1574,96 +2598,116 @@ async function handleRace(interaction, db) {
     return;
   }
 
+  const pairRaceCd = await getChallengePairCooldown(db, userId, opponent.id, "race");
+  if (pairRaceCd > nowMs()) {
+    await interaction.reply({
+      content: formatChallengePairCooldownMessage("race", opponent.id, pairRaceCd - nowMs()),
+      ephemeral: true,
+    });
+    return;
+  }
+
   if (Number(p1.money) < bet || Number(p2.money) < bet) {
     await interaction.reply({ content: "У кого-то нет денег на ставку.", ephemeral: true });
     return;
   }
-
-  const raceReadyAt = nowMs() + COOLDOWNS_MS.race;
 
   const [p1Car, p2Car] = await Promise.all([
     getRaceCarProfile(db, userId, p1.car_id),
     getRaceCarProfile(db, opponent.id, p2.car_id),
   ]);
 
-  await interaction.deferReply();
+  const sessionId = Math.random().toString(36).slice(2, 10);
+  activeRaceSessions.add(pairKey);
 
-  let p1Bonus = 0;
-  let p2Bonus = 0;
-  let p1Penalty = 0;
-  let p2Penalty = 0;
-  const raceNotes = [];
   try {
-    const { getInventoryQty, consumeInventoryItem } = require("./samp-extended");
-    // NOS boost: +12 race score, consume 1 charge
-    const [p1Nos, p2Nos] = await Promise.all([
-      getInventoryQty(db, userId, "bm_nos_boost"),
-      getInventoryQty(db, opponent.id, "bm_nos_boost"),
-    ]);
-    if (p1Nos > 0) { p1Bonus = 12; await consumeInventoryItem(db, userId, "bm_nos_boost", 1); raceNotes.push(`🔥 <@${userId}> активировал нитро! (+12)`); }
-    if (p2Nos > 0) { p2Bonus = 12; await consumeInventoryItem(db, opponent.id, "bm_nos_boost", 1); raceNotes.push(`🔥 <@${opponent.id}> активировал нитро! (+12)`); }
-    // Sabotage: -15 race score if sabotaged_until > now
-    const { getUserSetting, setUserSetting: clearSetting } = require("./samp-extended");
-    const [p1SabVal, p2SabVal] = await Promise.all([
-      getUserSetting(db, userId, "sabotaged_until"),
-      getUserSetting(db, opponent.id, "sabotaged_until"),
-    ]);
-    if (p1SabVal && Number(p1SabVal) > nowMs()) { p1Penalty = 15; await clearSetting(db, userId, "sabotaged_until", "0"); raceNotes.push(`🔧 <@${userId}> обнаружил саботаж! (-15)`); }
-    if (p2SabVal && Number(p2SabVal) > nowMs()) { p2Penalty = 15; await clearSetting(db, opponent.id, "sabotaged_until", "0"); raceNotes.push(`🔧 <@${opponent.id}> обнаружил саботаж! (-15)`); }
-  } catch (_) { /* samp-extended not available */ }
+    await interaction.reply({
+      embeds: [buildChallengeEmbed({ userId, opponent, bet, p1Car, p2Car })],
+      components: [buildAcceptRow(sessionId)],
+      content: `<@${opponent.id}>, принимаешь вызов?`,
+    });
+    const challengeMsg = await interaction.fetchReply();
 
-  const p1Total = randInt(1, 40) + p1Car.raceScore + p1Bonus - p1Penalty;
-  const p2Total = randInt(1, 40) + p2Car.raceScore + p2Bonus - p2Penalty;
+    let pressed;
+    try {
+      pressed = await challengeMsg.awaitMessageComponent({
+        componentType: ComponentType.Button,
+        filter: (i) =>
+          i.user.id === opponent.id &&
+          i.customId.startsWith(`race2:${sessionId}:`) &&
+          (i.customId.endsWith(":accept") || i.customId.endsWith(":decline")),
+        time: RACE_ACCEPT_TIMEOUT_MS,
+      });
+    } catch (_timeout) {
+      await interaction
+        .editReply({
+          content: `⏱ <@${opponent.id}> не ответил. Гонка не состоялась (кулдаун не списан).`,
+          embeds: [],
+          components: [],
+        })
+        .catch(() => {});
+      return;
+    }
 
-  let winner = null;
-  let text = `🏁 **Гонка!**\n<@${userId}> (**${formatRaceCarLabel(p1Car)}**) VS <@${opponent.id}> (**${formatRaceCarLabel(p2Car)}**)\nСтавка: **${fmtMoney(bet)}**\n${raceNotes.length ? "\n" + raceNotes.join("\n") + "\n" : ""}\n`;
+    if (pressed.customId.endsWith(":decline")) {
+      await pressed
+        .update({
+          content: `❌ <@${opponent.id}> отказался от гонки. Никто ничего не теряет.`,
+          embeds: [],
+          components: [],
+        })
+        .catch(() => {});
+      return;
+    }
 
-  if (p1Total > p2Total) {
-    winner = userId;
-    text += `🚗 **${p1Car.name}** рвёт вперёд и финиширует первым! Победитель: <@${userId}>`;
-  } else if (p2Total > p1Total) {
-    winner = opponent.id;
-    text += `🚙 **${p2Car.name}** дожимает на финише! Победитель: <@${opponent.id}>`;
-  } else {
-    text += "🤝 Ничья! Разъехались без потерь.";
+    // Accepted — re-check state (money/jail/cooldown could have changed).
+    const p1Now = await getOrCreateUser(db, userId);
+    const p2Now = await getOrCreateUser(db, opponent.id);
+    if ((p1Now.jail_until || 0) > nowMs() || (p2Now.jail_until || 0) > nowMs()) {
+      await pressed
+        .update({ content: "🚔 Один из гонщиков в тюрьме — гонка отменена.", embeds: [], components: [] })
+        .catch(() => {});
+      return;
+    }
+    if (Number(p1Now.money) < bet || Number(p2Now.money) < bet) {
+      await pressed
+        .update({ content: "💸 У кого-то уже нет денег на ставку — гонка отменена.", embeds: [], components: [] })
+        .catch(() => {});
+      return;
+    }
+
+    await pressed.update({ content: "✅ Вызов принят. Поехали!", embeds: [], components: [] });
+    await maybeCompleteOnboarding(db, userId, "pvp").catch(() => "");
+
+    const raceReadyAt = nowMs() + COOLDOWNS_MS.race;
+    const racePairReadyAt = nowMs() + CHALLENGE_PAIR_COOLDOWNS_MS.race;
+
+    await runRaceSession({
+      interaction,
+      db,
+      userId,
+      opponent,
+      bet,
+      p1,
+      p2,
+      p1Car,
+      p2Car,
+      sessionId,
+      raceReadyAt,
+      racePairReadyAt,
+    });
+  } catch (err) {
+    console.error("[race] session error", err);
+    try {
+      await interaction.editReply({
+        content: "⚠️ Во время гонки произошла ошибка. Ставка не списана.",
+        embeds: [],
+        components: [],
+      });
+    } catch (_) {}
+  } finally {
+    activeRaceSessions.delete(pairKey);
   }
-
-  if (winner === userId) {
-    await transferMoneyWithParticipants(db, opponent.id, userId, bet, "race", [
-      { userId, action: "race", readyAt: raceReadyAt },
-      { userId: opponent.id, action: "race", readyAt: raceReadyAt },
-    ], { loser: opponent.id }, makeInteractionOpKey(interaction, "race"));
-    await Promise.all([
-      finalizeRaceVehicleProgress(db, userId, p1.car_id, p1Car, { result: "win", winnings: bet }),
-      finalizeRaceVehicleProgress(db, opponent.id, p2.car_id, p2Car, { result: "loss", winnings: 0 }),
-    ]);
-    await interaction.editReply(text + `\n\n💰 Ты поднял **${fmtMoney(bet)}**.`);
-    return;
-  }
-  if (winner === opponent.id) {
-    await transferMoneyWithParticipants(db, userId, opponent.id, bet, "race", [
-      { userId, action: "race", readyAt: raceReadyAt },
-      { userId: opponent.id, action: "race", readyAt: raceReadyAt },
-    ], { loser: userId }, makeInteractionOpKey(interaction, "race"));
-    await Promise.all([
-      finalizeRaceVehicleProgress(db, userId, p1.car_id, p1Car, { result: "loss", winnings: 0 }),
-      finalizeRaceVehicleProgress(db, opponent.id, p2.car_id, p2Car, { result: "win", winnings: bet }),
-    ]);
-    await interaction.editReply(text + `\n\n💸 Ты отдал **${fmtMoney(bet)}**.`);
-    return;
-  }
-
-  await withTransaction(db, async () => {
-    await setCooldown(db, userId, "race", raceReadyAt);
-    await setCooldown(db, opponent.id, "race", raceReadyAt);
-    const inserted = await addLedgerUnique(db, "race_draw", userId, opponent.id, 0, makeInteractionOpKey(interaction, "race_draw"), { bet });
-    if (!inserted) throw new Error("DUPLICATE_OPERATION");
-  });
-  await Promise.all([
-    finalizeRaceVehicleProgress(db, userId, p1.car_id, p1Car, { result: "draw", winnings: 0 }),
-    finalizeRaceVehicleProgress(db, opponent.id, p2.car_id, p2Car, { result: "draw", winnings: 0 }),
-  ]);
-  await interaction.editReply(text);
 }
 
 async function handleDuel(interaction, db) {
@@ -1680,11 +2724,12 @@ async function handleDuel(interaction, db) {
     return;
   }
 
-  const bet = clampInt(betRaw, 1, 2_000_000);
-  if (!bet) {
-    await interaction.reply({ content: "Некорректная ставка.", ephemeral: true });
+  const betCheck = normalizeWagerAmount(betRaw, PVP_AMOUNT_LIMITS.duelBetMax);
+  if (!betCheck.ok) {
+    await interaction.reply({ content: betCheck.message, ephemeral: true });
     return;
   }
+  const bet = betCheck.amount;
 
   const p1 = await getOrCreateUser(db, userId);
   const p2 = await getOrCreateUser(db, opponent.id);
@@ -1705,14 +2750,25 @@ async function handleDuel(interaction, db) {
     return;
   }
 
+  const pairDuelCd = await getChallengePairCooldown(db, userId, opponent.id, "duel");
+  if (pairDuelCd > nowMs()) {
+    await interaction.reply({
+      content: formatChallengePairCooldownMessage("duel", opponent.id, pairDuelCd - nowMs()),
+      ephemeral: true,
+    });
+    return;
+  }
+
   if (Number(p1.money) < bet || Number(p2.money) < bet) {
     await interaction.reply({ content: "У кого-то нет денег на ставку.", ephemeral: true });
     return;
   }
 
   const duelReadyAt = nowMs() + COOLDOWNS_MS.duel;
+  const duelPairReadyAt = nowMs() + CHALLENGE_PAIR_COOLDOWNS_MS.duel;
 
   await interaction.deferReply();
+  await maybeCompleteOnboarding(db, userId, "pvp").catch(() => "");
 
   const p1WeaponId = await getActiveWeapon(db, userId);
   const p2WeaponId = await getActiveWeapon(db, opponent.id);
@@ -1815,6 +2871,7 @@ async function handleDuel(interaction, db) {
     await withTransaction(db, async () => {
       await setCooldown(db, userId, "duel", duelReadyAt);
       await setCooldown(db, opponent.id, "duel", duelReadyAt);
+      await setChallengePairCooldown(db, userId, opponent.id, "duel", duelPairReadyAt);
       const inserted = await addLedgerUnique(db, "duel_draw", userId, opponent.id, 0, makeInteractionOpKey(interaction, "duel_draw"), { bet, p1Hp, p2Hp });
       if (!inserted) throw new Error("DUPLICATE_OPERATION");
     });
@@ -1823,10 +2880,15 @@ async function handleDuel(interaction, db) {
   }
 
   if (winner === userId) {
-    await transferMoneyWithParticipants(db, opponent.id, userId, bet, "duel", [
+    const settlement = await settleWagerWithParticipants(db, opponent.id, userId, bet, "duel", [
       { userId, action: "duel", readyAt: duelReadyAt },
       { userId: opponent.id, action: "duel", readyAt: duelReadyAt },
-    ], { p1Hp, p2Hp }, makeInteractionOpKey(interaction, "duel"));
+    ], {
+      challengerUserId: userId,
+      targetUserId: opponent.id,
+      action: "duel",
+      readyAt: duelPairReadyAt,
+    }, { p1Hp, p2Hp }, makeInteractionOpKey(interaction, "duel"));
     // Bounty collection and weapon degradation (lazy require to avoid circular dep)
     try {
       const { checkAndCollectBounty, degradeWeapon } = require("./samp-extended");
@@ -1836,17 +2898,22 @@ async function handleDuel(interaction, db) {
       const bountyText = bountyResult?.collected
         ? `\n💀 Награда за голову: **${fmtMoney(bountyResult.amount)}**${bountyResult.bonusAmount > 0 ? ` (включая **+${fmtMoney(bountyResult.bonusAmount)}** бонус Золотого Desert Eagle)` : ""}`
         : "";
-      await interaction.editReply(text + `\n\n🏆 Победил <@${userId}> и поднял **${fmtMoney(bet)}**.${bountyText}`);
+      await interaction.editReply(text + `\n\n🏆 Победил <@${userId}> и поднял **${fmtMoney(settlement.settledAmount)}**.${buildReducedSettlementNote(bet, settlement.settledAmount, opponent.id)}${bountyText}`);
     } catch (_) {
-      await interaction.editReply(text + `\n\n🏆 Победил <@${userId}> и поднял **${fmtMoney(bet)}**.`);
+      await interaction.editReply(text + `\n\n🏆 Победил <@${userId}> и поднял **${fmtMoney(settlement.settledAmount)}**.${buildReducedSettlementNote(bet, settlement.settledAmount, opponent.id)}`);
     }
     return;
   }
 
-  await transferMoneyWithParticipants(db, userId, opponent.id, bet, "duel", [
+  const settlement = await settleWagerWithParticipants(db, userId, opponent.id, bet, "duel", [
     { userId, action: "duel", readyAt: duelReadyAt },
     { userId: opponent.id, action: "duel", readyAt: duelReadyAt },
-  ], { p1Hp, p2Hp }, makeInteractionOpKey(interaction, "duel"));
+  ], {
+    challengerUserId: userId,
+    targetUserId: opponent.id,
+    action: "duel",
+    readyAt: duelPairReadyAt,
+  }, { p1Hp, p2Hp }, makeInteractionOpKey(interaction, "duel"));
   try {
     const { checkAndCollectBounty, degradeWeapon } = require("./samp-extended");
     const bountyResult = await checkAndCollectBounty(db, opponent.id, userId);
@@ -1855,9 +2922,9 @@ async function handleDuel(interaction, db) {
     const bountyText = bountyResult?.collected
       ? `\n💀 Награда за голову: **${fmtMoney(bountyResult.amount)}**${bountyResult.bonusAmount > 0 ? ` (включая **+${fmtMoney(bountyResult.bonusAmount)}** бонус Золотого Desert Eagle)` : ""}`
       : "";
-    await interaction.editReply(text + `\n\n💀 Победил <@${opponent.id}>. Ты потерял **${fmtMoney(bet)}**.${bountyText}`);
+    await interaction.editReply(text + `\n\n💀 Победил <@${opponent.id}>. Ты потерял **${fmtMoney(settlement.settledAmount)}**.${buildReducedSettlementNote(bet, settlement.settledAmount, userId)}${bountyText}`);
   } catch (_) {
-    await interaction.editReply(text + `\n\n💀 Победил <@${opponent.id}>. Ты потерял **${fmtMoney(bet)}**.`);
+    await interaction.editReply(text + `\n\n💀 Победил <@${opponent.id}>. Ты потерял **${fmtMoney(settlement.settledAmount)}**.${buildReducedSettlementNote(bet, settlement.settledAmount, userId)}`);
   }
 }
 
@@ -2110,23 +3177,28 @@ async function handleDaily(interaction, db) {
 
   // Find bonus tier
   const tier = DAILY_BONUS_TIERS.find((t) => currentStreak >= t.minStreak) || { bonus: 500, label: "новичок" };
+  const boostsD = await getUserBoostEffects(db, userId).catch(() => null);
+  const boostBonus = Math.max(0, Number(boostsD?.dailyBonus || 0));
+  const totalBonus = tier.bonus + boostBonus;
 
   await withTransaction(db, async () => {
     const existingDaily = await getCooldown(db, userId, "daily");
     if (existingDaily > nowMs()) throw new Error("COOLDOWN_ACTIVE");
-    await adjustMoney(db, userId, tier.bonus);
+    await adjustMoney(db, userId, totalBonus);
     await setCooldown(db, userId, "daily", nowMs() + 24 * 60 * 60_000);
-    const inserted = await addLedgerUnique(db, "daily_bonus", null, userId, tier.bonus, makeInteractionOpKey(interaction, "daily_bonus"), { streak: currentStreak, tier: tier.label });
+    const inserted = await addLedgerUnique(db, "daily_bonus", null, userId, totalBonus, makeInteractionOpKey(interaction, "daily_bonus"), { streak: currentStreak, tier: tier.label, boost: boostBonus });
     if (!inserted) throw new Error("DUPLICATE_OPERATION");
   });
 
   const after = await getUserRow(db, userId);
   const streakInfo = currentStreak > 0 ? `\n🔥 Стрик: **${currentStreak}** дней (бонус: ${tier.label})` : "";
+  const boostNote = boostBonus > 0 ? `\n🏦 Сейф в особняке: +${fmtMoney(boostBonus)}` : "";
+  const questNoteDaily = await maybeCompleteOnboarding(db, userId, "daily", { increment: 1 });
 
   await interaction.editReply(
-    `🎁 Ежедневный бонус: **+${fmtMoney(tier.bonus)}**!${streakInfo}\n` +
+    `🎁 Ежедневный бонус: **+${fmtMoney(totalBonus)}**!${streakInfo}${boostNote}\n` +
       `Баланс: **${fmtMoney(after.money)}**\n` +
-      `_Чем дольше стрик — тем больше бонус!_`
+      `_Чем дольше стрик — тем больше бонус!_${questNoteDaily}`
   );
 }
 
