@@ -2810,20 +2810,20 @@ async function handleGangCommand(interaction, db) {
       if (Number(war.challenger_gang_id) !== Number(betGang.id) && Number(war.defender_gang_id) !== Number(betGang.id)) {
         await interaction.reply({ content: "Эта банда не участвует в текущей войне.", ephemeral: true }); return;
       }
+      await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_gang_war_bets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        war_id INTEGER NOT NULL,
+        user_id TEXT NOT NULL,
+        gang_id INTEGER NOT NULL,
+        amount INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (war_id) REFERENCES samp_gang_wars(id) ON DELETE CASCADE
+      )`);
       const opKey = makeInteractionOpKey(interaction, "gang_war_bet");
       await withTx(db, async () => {
         const inserted = await addLedgerUnique(db, "gang_war_bet", userId, null, amount, opKey, { war_id: war.id, gang_id: betGang.id });
         if (!inserted) throw new Error("DUPLICATE_OPERATION");
         await adjustMoney(db, userId, -amount);
-        await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_gang_war_bets (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          war_id INTEGER NOT NULL,
-          user_id TEXT NOT NULL,
-          gang_id INTEGER NOT NULL,
-          amount INTEGER NOT NULL DEFAULT 0,
-          created_at TEXT NOT NULL DEFAULT (datetime('now')),
-          FOREIGN KEY (war_id) REFERENCES samp_gang_wars(id) ON DELETE CASCADE
-        )`);
         await dbRun(db, "INSERT INTO samp_gang_war_bets(war_id, user_id, gang_id, amount) VALUES(?,?,?,?)", [war.id, userId, betGang.id, amount]);
         await dbRun(db, "UPDATE samp_gang_wars SET bet = bet + ? WHERE id = ?", [amount, war.id]);
       });
