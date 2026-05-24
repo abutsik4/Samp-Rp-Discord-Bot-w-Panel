@@ -622,6 +622,20 @@ async function releaseHeistParticipants(db, participantIds) {
   }
 }
 
+// a5: orphaned heist lobby cleanup
+const heistLobbyCleanups = new Map();
+const HEIST_LOBBY_CLEANUP_MS = 3 * 60 * 1000;
+function scheduleHeistLobbyCleanup(messageId, participantIds, db) {
+  const t = setTimeout(async () => {
+    try { await releaseHeistParticipants(db, participantIds); } catch (_) {}
+    heistLobbyCleanups.delete(messageId);
+  }, HEIST_LOBBY_CLEANUP_MS);
+  heistLobbyCleanups.set(messageId, t);
+}
+function clearHeistLobbyCleanup(messageId) {
+  const t = heistLobbyCleanups.get(messageId); if (t) { clearTimeout(t); heistLobbyCleanups.delete(messageId); }
+}
+
 async function applyHeistCooldown(db, participantIds, options = {}) {
   const entries = Array.isArray(options?.entries)
     ? options.entries
@@ -2253,6 +2267,7 @@ async function handleHeist(interaction, db) {
   let reply;
   try {
     reply = await interaction.reply({ embeds: [embed], components: [row], fetchReply: true });
+    scheduleHeistLobbyCleanup(reply.id, [userId], db);
   } catch (error) {
     await releaseHeistParticipants(db, [userId]).catch(() => {});
     throw error;
@@ -2316,6 +2331,7 @@ async function handleHeist(interaction, db) {
   });
 
   collector.on("end", async (_, reason) => {
+    clearHeistLobbyCleanup(reply.id);
     if (reason !== "started") {
       await releaseHeistParticipants(db, [...participants]).catch(() => {});
       const timeoutEmbed = new EmbedBuilder().setTitle(`⏱️ Время вышло`).setDescription("Не удалось собрать команду.").setColor(0x95a5a6);
