@@ -30,6 +30,7 @@ const { createHistoryRouter } = require("./routes/history");
 const { createChannelsRouter } = require("./routes/channels");
 const { createSampServersRouter } = require("./routes/samp-servers");
 const { createGameplayRouter } = require("./routes/gameplay");
+const { createNexusRouter } = require("./routes/nexus-api");
 
 function createPanelApp({
   client,
@@ -324,6 +325,13 @@ function createPanelApp({
       res.set("Cache-Control", "no-cache, no-store, must-revalidate");
       res.sendFile(spaIndexPath);
     });
+  
+  // Nexus SPA static serve
+  const nexusDir = path.join(__dirname, "..", "..", "public", "panel");
+  app.use("/nexus", express.static(nexusDir, { index: false }));
+  app.get("/nexus/*", (_req, res) => {
+    res.sendFile(path.join(nexusDir, "index.html"));
+  });
     app.get(`${PANEL_BASE}/*`, (req, res, next) => {
       if (req.path.startsWith(`${PANEL_BASE}/api/`)) return next();
       res.set("Cache-Control", "no-cache, no-store, must-revalidate");
