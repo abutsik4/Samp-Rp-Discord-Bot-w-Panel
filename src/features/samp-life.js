@@ -1361,7 +1361,7 @@ async function ensureSampLifeTables(db) {
     db,
     `CREATE TABLE IF NOT EXISTS samp_users (
       user_id TEXT PRIMARY KEY,
-      money INTEGER NOT NULL DEFAULT 0,
+      money INTEGER NOT NULL DEFAULT 0 CHECK(money >= 0),
       car_id TEXT NOT NULL DEFAULT 'bicycle',
       rep INTEGER NOT NULL DEFAULT 0,
       jail_until INTEGER NOT NULL DEFAULT 0,
