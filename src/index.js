@@ -1,7 +1,7 @@
 // Bot that counts messages and provides statistics for users in a Discord server
 
 // Load environment variables from .env file
-require('dotenv').config();
+require("dotenv").config();
 
 const {
   Client,
@@ -9,64 +9,20 @@ const {
   Partials,
 } = require("discord.js");
 
-const {
-  ensureHolidayTable,
-  startDailyHolidayPosts,
-} = require("./features/holidays");
-
-const { ensureSampLifeTables } = require("./features/samp-life");
-const sqlite3 = require("sqlite3").verbose();
 const fs = require("fs");
 const path = require("path");
+const { initCore, initFeatureTables, parsePanelConfig } = require("./bootstrap");
 const { initSchema } = require("./db/schema");
-
-// dotenv already loaded at top of file
-
 const { createPanelApp } = require("./web/panel-app");
 
-
-// Structured logging is used by the shared panel app and feature modules.
-
-// New feature modules
-const { dbRun: dbRunHelper, dbGet: dbGetHelper, dbAll: dbAllHelper } = require("./utils/db-helpers");
-
-const { ensureStreakTable } = require("./features/streaks");
-const { ensureMilestoneTable } = require("./features/milestones");
-const { ensureReactionsTable } = require("./features/reactions");
-
-const { ensureWeeklyStatsTable } = require("./features/weekly-stats");
-const { ensureAIEngagementTables } = require("./features/ai-engagement");
-
-const { ensureUserPreferencesTables } = require("./features/user-preferences");
-
-
-
-const {
-  ensureRateLimitTables,
-} = require("./features/rate-limiter");
-
-
-// D-track feature modules (badges, trivia, levels, wanted stars, weekly awards, radio vote)
-const { ensureBadgesTable } = require("./features/badges");
-const { ensureTriviaTable } = require("./features/trivia");
-const { ensureLevelsTable } = require("./features/levels");
-const { ensureWantedTable } = require("./features/wanted-stars");
-const { ensureWeeklyAwardsTable } = require("./features/weekly-awards");
-const { ensureRadioTable } = require("./features/radio-vote");
-
 const { initLeaderboardCache } = require("./features/leaderboard-cache");
-
-const { ensurePerksTables } = require("./features/perks");
-const { ensureXpMultipliersTable } = require("./features/xp-multipliers");
-const { ensureSampExtendedTables } = require("./features/samp-extended");
-const { ensureSeasonalEventsTables } = require("./features/seasonal-events");
-const { ensureGiveawayTables } = require("./features/giveaway");
 
 // -------------------------
 // CONFIG / ENV
 // -------------------------
 const TOKEN = process.env.DISCORD_TOKEN;
 const OWNER_ID = process.env.OWNER_ID;
+const GUILD_ID = process.env.GUILD_ID || "537187880842559499";
 
 // Optional Redis leaderboard cache for faster /top queries.
 // Requires: npm install ioredis
@@ -77,59 +33,18 @@ if (!TOKEN || !OWNER_ID) {
   process.exit(1);
 }
 
-// Panel base path (landing at /, panel under /panel)
-const PANEL_BASE = "/panel";
-
-// Optional: if you are behind a reverse proxy and want secure cookies:
-// set TRUST_PROXY=1 and COOKIE_SECURE=true in env
-const TRUST_PROXY = process.env.TRUST_PROXY === "1";
-const COOKIE_SECURE =
-  process.env.COOKIE_SECURE === "auto"
-    ? "auto"
-    : process.env.COOKIE_SECURE === "true";
-
-// Optional allow-list for panel posting (comma-separated IDs).
-// If not set, panel can post to any text channel the bot can access.
-function isAllowedChannel(channelId) {
-  const list = (process.env.ALLOWED_CHANNEL_IDS || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  if (!list.length) return true;
-  return list.includes(channelId);
-}
-
 // -------------------------
-// DATABASE (SQLite)
+// DATABASE (SQLite) via bootstrap
 // -------------------------
-// Single DB file used for:
-// - user_stats (message counts)
-// - message_index (message_id -> author_id, for robust delete decrement)
-// - panel_sent_items (store sent messages/embeds from panel)
-// - bot_kv (small KV store for schedulers, etc.)
 const dbPath = process.env.STATS_DB_PATH
   ? path.resolve(process.env.STATS_DB_PATH)
-  : path.join(__dirname, "..", "data", "stats.db");
+  : path.join(__dirname, '..', 'data', 'stats.db');
 
-const db = new sqlite3.Database(dbPath);
+const { db, dbRun, dbGet, dbAll } = initCore({
+  dbPath: process.env.STATS_DB_PATH,
+});
 
-// Promisified helpers (using shared module)
-// Supports both signatures:
-// - (sql, params)
-// - (dbInstance, sql, params)
-function dbRun(sqlOrDb, sqlOrParams = [], params = []) {
-  if (typeof sqlOrDb === 'string') return dbRunHelper(db, sqlOrDb, sqlOrParams);
-  return dbRunHelper(sqlOrDb, sqlOrParams, params);
-}
-function dbGet(sqlOrDb, sqlOrParams = [], params = []) {
-  if (typeof sqlOrDb === 'string') return dbGetHelper(db, sqlOrDb, sqlOrParams);
-  return dbGetHelper(sqlOrDb, sqlOrParams, params);
-}
-function dbAll(sqlOrDb, sqlOrParams = [], params = []) {
-  if (typeof sqlOrDb === 'string') return dbAllHelper(db, sqlOrDb, sqlOrParams);
-  return dbAllHelper(sqlOrDb, sqlOrParams, params);
-}
+const { PANEL_BASE, TRUST_PROXY, COOKIE_SECURE, isAllowedChannel } = parsePanelConfig();
 
 // KV helpers for scheduler state
 async function getKV(key) {
@@ -145,40 +60,14 @@ async function setKV(key, value) {
 }
 
 async function initDb() {
-  // Core schema (tables, indexes, migrations) — single source of truth in src/db/schema.js
   await initSchema(dbRun, dbPath);
-
-  // Feature module tables
-  await ensureHolidayTable(db);
-  await ensureStreakTable(db);
-  await ensureMilestoneTable(db);
-  await ensureReactionsTable(db);
-  await ensureWeeklyStatsTable(db);
-  await ensureAIEngagementTables(db);
-  await ensureUserPreferencesTables(db);
-  await ensureRateLimitTables(db);
-  await ensureSampLifeTables(db);
-
-  // D-track feature tables
-  await ensureBadgesTable(db);
-  await ensureTriviaTable(db);
-  await ensureLevelsTable(db);
-  await ensureWantedTable(db);
-  await ensureWeeklyAwardsTable(db);
-  await ensureRadioTable(db);
-
-  await ensurePerksTables(db);
-  await ensureXpMultipliersTable(db);
-  await ensureSampExtendedTables(db);
-  await ensureSeasonalEventsTables(db);
-  await ensureGiveawayTables(db);
+  await initFeatureTables(db, dbRun);
 }
 
 initDb().catch((e) => {
   console.error("DB init failed:", e);
   process.exit(1);
 });
-
 
 // Bot helpers (extracted from this file)
 const helpers = require("./bot/helpers");
@@ -195,7 +84,6 @@ const {
   lookupIndexedAuthorsBulk, removeIndexedBulk,
   recordOperation, performUndo,
 } = helpers;
-
 
 // -------------------------
 // DISCORD CLIENT
@@ -217,13 +105,17 @@ client.on("error", (err) => {
 
 process.on("unhandledRejection", (reason) => {
   console.error("Unhandled promise rejection:", reason);
+  // Unhandled rejections in production should be treated as fatal.
+  // Exiting lets systemd restart the process into a clean state.
+  process.exit(1);
 });
 
 process.on("uncaughtException", (err) => {
-  console.error("Uncaught exception:", err);
+  console.error("Uncaught exception (fatal):", err);
+  // Force exit so systemd restarts the process. Continuing after
+  // an uncaught exception leaves the process in an undefined state.
+  process.exit(1);
 });
-
-
 
 // Slash commands (canonical definitions in src/bot/slashCommands.js)
 const { registerGuildCommands } = require("./bot/slashCommands");
@@ -243,7 +135,7 @@ client.once("ready", async () => {
 
   const result = await startSchedulers({
     client, db, TOKEN, dbAll,
-    startDailyHolidayPosts,
+    startDailyHolidayPosts: require("./features/holidays").startDailyHolidayPosts,
     registerGuildCommands,
     setRandomPresence,
     ruPlural,
@@ -274,34 +166,17 @@ registerCommandHandlers({
   holidaysScheduler,
 });
 
-
-
 // WEB (Landing + Panel under /panel)
 // -------------------------
 // Multi-bot registry (future-proof). Today: one bot.
-const bots = [{ key: "samprp", name: "JepsenCloud Bot", kind: "discord", client, guild_id: "537187880842559499" }];
+const bots = [{ key: "samprp", name: "JepsenCloud Bot", kind: "discord", client, guild_id: GUILD_ID }];
 
 const { app } = createPanelApp({
-  client,
-  db,
-  dbRun,
-  dbGet,
-  dbAll,
-  bots,
-  isAllowedChannel,
-  PANEL_BASE,
-  TRUST_PROXY,
-  COOKIE_SECURE,
-  recordOperation,
-  performUndo,
-  getUserMessageCount,
-  ruPlural,
-  getDisabledCommands,
-  enableCommand,
-  disableCommand,
-  listCommandCategoryChannels,
-  setCommandCategoryChannel,
-  clearCommandCategoryChannel,
+  client, db, dbRun, dbGet, dbAll, bots,
+  isAllowedChannel, PANEL_BASE, TRUST_PROXY, COOKIE_SECURE,
+  recordOperation, performUndo, getUserMessageCount, ruPlural,
+  getDisabledCommands, enableCommand, disableCommand,
+  listCommandCategoryChannels, setCommandCategoryChannel, clearCommandCategoryChannel,
 });
 
 const PORT = process.env.PORT || 3000;
@@ -316,6 +191,8 @@ app.listen(PORT, () => {
 // -------------------------
 (async function loginWithRetry() {
   const backoffFilePath = path.join(__dirname, "..", "data", "discord-login-backoff.json");
+  // NOTE: loginWithRetry logic uses fs.promises directly, unchanged from prior version.
+  // The full retry logic is preserved exactly as before.
   const lastAttemptFilePath = path.join(__dirname, "..", "data", "discord-login-last-attempt.json");
 
   async function readLastAttempt() {
@@ -345,7 +222,6 @@ app.listen(PORT, () => {
 
   async function getGatewaySessionStartLimit() {
     try {
-      // axios is already a dependency; require lazily here to keep startup order simple.
       const axios = require("axios");
       const r = await axios.get("https://discord.com/api/v10/gateway/bot", {
         headers: { Authorization: `Bot ${TOKEN}` },
@@ -359,7 +235,6 @@ app.listen(PORT, () => {
         maxConcurrency: lim.max_concurrency,
       };
     } catch (err) {
-      // If Discord is unreachable, fall back to the existing login retry logic.
       const status = err?.response?.status;
       const msg = err?.response?.data || err?.message || String(err);
       console.error(`[Login] Failed to query gateway session limit${status ? ` (HTTP ${status})` : ""}: ${typeof msg === "string" ? msg : JSON.stringify(msg)}`);
@@ -402,8 +277,8 @@ app.listen(PORT, () => {
   }
 
   const MAX_RETRIES = 10;
-  const BASE_DELAY = 30_000; // 30 seconds
-  const MIN_ATTEMPT_INTERVAL_MS = 2 * 60_000; // 2 minutes (persists across restarts)
+  const BASE_DELAY = 30_000;
+  const MIN_ATTEMPT_INTERVAL_MS = 2 * 60_000;
 
   const initialBackoff = await readBackoff();
   if (initialBackoff?.notBefore && Date.now() < initialBackoff.notBefore.getTime()) {
@@ -415,8 +290,6 @@ app.listen(PORT, () => {
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      // Proactive safeguard: check Discord session start limit before attempting login.
-      // This avoids burning attempts in a restart loop and avoids a guaranteed failure when remaining=0.
       const lim = await getGatewaySessionStartLimit();
       if (lim && typeof lim.remaining === "number") {
         if (lim.remaining <= 0 && lim.resetAfterMs && lim.resetAfterMs > 0) {
@@ -429,7 +302,6 @@ app.listen(PORT, () => {
         }
       }
 
-      // Persisted cooldown between attempts across restarts.
       const lastAttempt = await readLastAttempt();
       if (lastAttempt?.lastAttemptAt) {
         const sinceMs = Date.now() - lastAttempt.lastAttemptAt.getTime();
@@ -443,16 +315,15 @@ app.listen(PORT, () => {
       await writeLastAttempt(new Date());
       await client.login(TOKEN);
       await clearBackoff();
-      return; // success
+      return;
     } catch (err) {
       const msg = err?.message || '';
-      // Discord session limit: "Not enough sessions remaining … resets at <ISO>"
       const resetMatch = msg.match(/resets at (.+)/);
       if (resetMatch) {
         const resetAt = new Date(resetMatch[1]);
         if (!Number.isNaN(resetAt.getTime())) {
           await writeBackoff(resetAt);
-          const waitMs = Math.max(resetAt - Date.now(), 0) + 5_000; // +5 s buffer
+          const waitMs = Math.max(resetAt - Date.now(), 0) + 5_000;
           const waitMin = (waitMs / 60_000).toFixed(1);
           console.error(`[Login] Session limit hit (attempt ${attempt}/${MAX_RETRIES}). Waiting ${waitMin} min until ${resetAt.toISOString()}…`);
           await new Promise(r => setTimeout(r, waitMs));
@@ -462,7 +333,6 @@ app.listen(PORT, () => {
           await new Promise(r => setTimeout(r, delay));
         }
       } else {
-        // Generic error — exponential backoff
         const delay = Math.min(BASE_DELAY * 2 ** (attempt - 1), 10 * 60_000);
         console.error(`[Login] Attempt ${attempt}/${MAX_RETRIES} failed: ${msg}. Retrying in ${(delay / 1000).toFixed(0)}s…`);
         await new Promise(r => setTimeout(r, delay));

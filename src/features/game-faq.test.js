@@ -112,7 +112,7 @@ test("game faq handler returns matched answer embed", async () => {
   assert.match(replies[0].embeds[0].data.description, /`\/bail`/);
 });
 
-test("game faq chat autoanswer replies to strong gameplay question", async () => {
+test("game faq chat autoanswer is disabled by default", async () => {
   const replies = [];
   const message = {
     content: "как выйти из тюрьмы?",
@@ -128,9 +128,40 @@ test("game faq chat autoanswer replies to strong gameplay question", async () =>
 
   const handled = await tryAnswerGameFaqInChat(message);
 
-  assert.equal(handled, true);
-  assert.equal(replies.length, 1);
-  assert.match(replies[0].embeds[0].data.description, /\/bail/);
+  assert.equal(handled, false);
+  assert.equal(replies.length, 0);
+});
+
+test("game faq chat autoanswer can be re-enabled by env flag", async () => {
+  const previousEnabled = process.env.GAME_FAQ_CHAT_ENABLED;
+  process.env.GAME_FAQ_CHAT_ENABLED = "true";
+
+  try {
+    const replies = [];
+    const message = {
+      content: "как выйти из тюрьмы?",
+      guild: { id: "g1" },
+      channel: { id: "541024085283700741" },
+      author: { id: "u1", bot: false },
+      client: { user: { id: "bot1" } },
+      mentions: { users: { has: () => false } },
+      reply: async (payload) => {
+        replies.push(payload);
+      },
+    };
+
+    const handled = await tryAnswerGameFaqInChat(message);
+
+    assert.equal(handled, true);
+    assert.equal(replies.length, 1);
+    assert.match(replies[0].embeds[0].data.description, /\/bail/);
+  } finally {
+    if (previousEnabled == null) {
+      delete process.env.GAME_FAQ_CHAT_ENABLED;
+    } else {
+      process.env.GAME_FAQ_CHAT_ENABLED = previousEnabled;
+    }
+  }
 });
 
 test("game faq chat autoanswer ignores ambiguous low-signal text", async () => {

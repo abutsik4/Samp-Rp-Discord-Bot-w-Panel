@@ -58,6 +58,7 @@ async function ensureRateLimitTables(db) {
       default_limit INTEGER DEFAULT 10,
       time_window_minutes INTEGER DEFAULT 60,
       role_limits TEXT DEFAULT '[]',
+      user_limits TEXT DEFAULT '[]',
       warning_message TEXT DEFAULT 'Вы превысили лимит сообщений в этом канале.',
       action TEXT DEFAULT 'delete',
       strike_reset_days INTEGER DEFAULT 7,
@@ -140,7 +141,8 @@ async function ensureRateLimitTables(db) {
     'timeout_mappings TEXT DEFAULT \'[]\'',
     'timeouts_enabled INTEGER DEFAULT 1',
     'timeout_duration_per_strike INTEGER DEFAULT 1',
-    'ignore_admins INTEGER DEFAULT 1'
+    'ignore_admins INTEGER DEFAULT 1',
+    'user_limits TEXT DEFAULT \'[]\''
   ];
 
   for (const columnDef of newConfigColumns) {
@@ -170,6 +172,7 @@ async function getRateLimitConfig(db, guildId, channelId) {
 
   // Parse JSON fields
   config.role_limits = JSON.parse(config.role_limits || "[]");
+  config.user_limits = JSON.parse(config.user_limits || "[]");
   config.strike_role_multipliers = JSON.parse(config.strike_role_multipliers || "[]");
   config.timeout_mappings = JSON.parse(config.timeout_mappings || "[]");
   config.enabled = Boolean(config.enabled);
@@ -215,6 +218,7 @@ async function setRateLimitConfig(db, guildId, channelId, config) {
   // Turn-taking: time window is unused; store NULL.
   const timeWindowMinutes = null;
   const roleLimits = jsonVal('role_limits', 'role_limits', []);
+  const userLimits = jsonVal('user_limits', 'user_limits', []);
   const warningMessage = val('warning_message', "Вы превысили лимит сообщений в этом канале.");
   const action = val('action', "delete");
   
@@ -232,13 +236,13 @@ async function setRateLimitConfig(db, guildId, channelId, config) {
       `
       UPDATE rate_limit_config
       SET enabled = ?, default_limit = ?, time_window_minutes = ?, 
-          role_limits = ?, warning_message = ?, action = ?,
+          role_limits = ?, user_limits = ?, warning_message = ?, action = ?,
           strike_reset_days = ?, strike_role_multipliers = ?, timeout_mappings = ?,
           timeouts_enabled = ?, timeout_duration_per_strike = ?, ignore_admins = ?,
           updated_at = strftime('%s', 'now')
       WHERE guild_id = ? AND channel_id = ?
     `,
-      [enabled, defaultLimit, timeWindowMinutes, roleLimits, warningMessage, action,
+      [enabled, defaultLimit, timeWindowMinutes, roleLimits, userLimits, warningMessage, action,
        strikeResetDays, strikeRoleMultipliers, timeoutMappings,
        timeoutsEnabled, timeoutDurationPerStrike, ignoreAdmins,
        guildId, channelId]
@@ -249,12 +253,12 @@ async function setRateLimitConfig(db, guildId, channelId, config) {
       db,
       `
       INSERT INTO rate_limit_config 
-      (guild_id, channel_id, enabled, default_limit, time_window_minutes, role_limits, warning_message, action,
+      (guild_id, channel_id, enabled, default_limit, time_window_minutes, role_limits, user_limits, warning_message, action,
        strike_reset_days, strike_role_multipliers, timeout_mappings,
        timeouts_enabled, timeout_duration_per_strike, ignore_admins)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
-      [guildId, channelId, enabled, defaultLimit, timeWindowMinutes, roleLimits, warningMessage, action,
+      [guildId, channelId, enabled, defaultLimit, timeWindowMinutes, roleLimits, userLimits, warningMessage, action,
        strikeResetDays, strikeRoleMultipliers, timeoutMappings,
        timeoutsEnabled, timeoutDurationPerStrike, ignoreAdmins]
     );
@@ -276,6 +280,7 @@ async function getAllRateLimitConfigs(db, guildId) {
 
   return configs.map((c) => {
     c.role_limits = JSON.parse(c.role_limits || "[]");
+    c.user_limits = JSON.parse(c.user_limits || "[]");
     c.enabled = Boolean(c.enabled);
     return c;
   });
@@ -302,11 +307,21 @@ async function checkRateLimit(db, guildId, channelId, userId, userRoles = [], co
   // Determine user's limit based on roles
   let userLimit = config.default_limit;
 
+  // Explicit per-user override wins over role/default limits.
+  const directUserLimit = Array.isArray(config.user_limits)
+    ? config.user_limits.find((entry) => String(entry?.user_id || "") === String(userId))
+    : null;
+  if (directUserLimit && Number.isFinite(Number(directUserLimit.limit))) {
+    userLimit = Math.max(1, Number.parseInt(directUserLimit.limit, 10) || userLimit);
+  }
+
   // Check role-based limits (highest limit wins)
-  for (const roleLimit of config.role_limits) {
-    if (userRoles.includes(roleLimit.role_id)) {
-      if (roleLimit.limit > userLimit) {
-        userLimit = roleLimit.limit;
+  if (!directUserLimit) {
+    for (const roleLimit of config.role_limits) {
+      if (userRoles.includes(roleLimit.role_id)) {
+        if (roleLimit.limit > userLimit) {
+          userLimit = roleLimit.limit;
+        }
       }
     }
   }

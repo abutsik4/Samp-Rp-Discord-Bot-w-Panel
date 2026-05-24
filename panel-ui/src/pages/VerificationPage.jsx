@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { CheckCircle2, ShieldOff, MessageSquare, User, Search, RefreshCw, AlertTriangle } from "lucide-react";
 import { formatApiError, panelApi } from "../lib/api";
+import { useQuery, useMutation } from "../hooks/useQuery";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { Alert } from "../components/Alert";
@@ -12,64 +13,67 @@ export function VerificationPage({ bot, user }) {
 
   const [messageResult, setMessageResult] = useState(null);
   const [userResult, setUserResult] = useState(null);
-  const [summary, setSummary] = useState(null);
-  const [results, setResults] = useState([]);
-
-  const [loadingResults, setLoadingResults] = useState(false);
-  const [error, setError] = useState("");
 
   const isAdmin = user?.role === "admin";
   const botKey = bot?.key;
 
-  async function loadResults(limit = resultsLimit) {
-    setLoadingResults(true);
-    setError("");
-    try {
-      const data = await panelApi.verifyResults(botKey, { limit: String(limit) });
-      setSummary(data?.summary || null);
-      setResults(data?.results || []);
-    } catch (err) {
-      setError(formatApiError(err, "Failed to load verification results"));
-    } finally {
-      setLoadingResults(false);
-    }
-  }
+  const resultsUrl = isAdmin && botKey
+    ? `/panel/api/${encodeURIComponent(botKey)}/verify/results?limit=${resultsLimit}`
+    : null;
 
-  useEffect(() => {
-    if (isAdmin && botKey) {
-      loadResults(50);
-    }
-  }, [botKey, isAdmin]);
+  const {
+    data: resultsData,
+    loading: loadingResults,
+    error: resultsError,
+    refresh: refreshResults,
+  } = useQuery(resultsUrl, {
+    deps: [botKey, isAdmin],
+    enabled: isAdmin && !!botKey,
+  });
 
-  async function checkMessageCounted(event) {
+  const summary = resultsData?.summary || null;
+  const results = resultsData?.results || [];
+
+  const [checkMessage, { loading: checkingMessage, error: messageError }] = useMutation(
+    panelApi.verifyMessageCounted,
+    {
+      onSuccess: (data) => setMessageResult(data || null),
+      onError: (err) => setMessageResult(null),
+    }
+  );
+
+  const [checkUser, { loading: checkingUser, error: userError }] = useMutation(
+    panelApi.verifyUserStats,
+    {
+      onSuccess: (data) => setUserResult(data || null),
+      onError: (err) => setUserResult(null),
+    }
+  );
+
+  // Determine which error to show (results fetch error takes priority, then mutation errors)
+  const error = resultsError
+    ? formatApiError(resultsError, "Failed to load verification results")
+    : messageError
+    ? formatApiError(messageError, "Failed to verify message")
+    : userError
+    ? formatApiError(userError, "Failed to verify user stats")
+    : "";
+
+  function handleCheckMessage(event) {
     event.preventDefault();
     if (!messageId.trim()) return;
-
-    setError("");
     setMessageResult(null);
-    try {
-      const data = await panelApi.verifyMessageCounted(botKey, { messageId: messageId.trim() });
-      setMessageResult(data || null);
-    } catch (err) {
-      setError(formatApiError(err, "Failed to verify message"));
-    }
+    checkMessage(botKey, { messageId: messageId.trim() });
   }
 
-  async function checkUserStats(event) {
+  function handleCheckUser(event) {
     event.preventDefault();
     if (!userId.trim()) return;
-
-    setError("");
     setUserResult(null);
-    try {
-      const data = await panelApi.verifyUserStats(botKey, {
-        userId: userId.trim(),
-        guildId: String(bot?.guild_id || ""),
-      });
-      setUserResult(data || null);
-    } catch (err) {
-      setError(formatApiError(err, "Failed to verify user stats"));
-    }
+    checkUser(botKey, {
+      userId: userId.trim(),
+      guildId: String(bot?.guild_id || ""),
+    });
   }
 
   if (!isAdmin) {
@@ -125,7 +129,7 @@ export function VerificationPage({ bot, user }) {
 
       <div className="grid-2">
         <SectionCard title="Message Counted Check" icon={MessageSquare}>
-          <form onSubmit={checkMessageCounted}>
+          <form onSubmit={handleCheckMessage}>
             <div className="form-row">
               <label>Message ID</label>
               <div className="input-group">
@@ -138,8 +142,8 @@ export function VerificationPage({ bot, user }) {
               </div>
             </div>
             <div className="row-actions" style={{ marginTop: "0.75rem" }}>
-              <button type="submit">
-                <Search size={13} /> Check message
+              <button type="submit" disabled={checkingMessage}>
+                <Search size={13} /> {checkingMessage ? "Checking…" : "Check message"}
               </button>
             </div>
             {messageResult ? (
@@ -149,7 +153,7 @@ export function VerificationPage({ bot, user }) {
         </SectionCard>
 
         <SectionCard title="User Stats Cross-Check" icon={User}>
-          <form onSubmit={checkUserStats}>
+          <form onSubmit={handleCheckUser}>
             <div className="form-row">
               <label>User ID</label>
               <div className="input-group">
@@ -162,8 +166,8 @@ export function VerificationPage({ bot, user }) {
               </div>
             </div>
             <div className="row-actions" style={{ marginTop: "0.75rem" }}>
-              <button type="submit">
-                <Search size={13} /> Check user
+              <button type="submit" disabled={checkingUser}>
+                <Search size={13} /> {checkingUser ? "Checking…" : "Check user"}
               </button>
             </div>
             {userResult ? (
@@ -194,7 +198,7 @@ export function VerificationPage({ bot, user }) {
             <button
               type="button"
               className="btn--ghost btn--sm"
-              onClick={() => loadResults(resultsLimit)}
+              onClick={refreshResults}
               disabled={loadingResults}
             >
               <RefreshCw size={13} /> {loadingResults ? "Loading…" : "Refresh"}

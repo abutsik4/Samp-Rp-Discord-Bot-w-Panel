@@ -11,7 +11,7 @@ function escapeHtml(str) {
     .replaceAll("'", "&#039;");
 }
 
-function generateChangePasswordPage(PANEL_BASE, { username, userRole, message = null, error = null } = {}) {
+function generateChangePasswordPage(PANEL_BASE, { username, userRole, csrfToken = '', message = null, error = null } = {}) {
   const body = `
     <div class="page-container" style="max-width:700px">
       <div class="topbar">
@@ -23,6 +23,7 @@ function generateChangePasswordPage(PANEL_BASE, { username, userRole, message = 
           <a class="btn btn-secondary" href="${PANEL_BASE}">← Dashboard</a>
           ${userRole === "admin" ? `<a class="btn btn-secondary" href="${PANEL_BASE}/users">👥 Users</a>` : ""}
           <form method="post" action="${PANEL_BASE}/logout" style="margin:0">
+          <input type="hidden" name="_csrf" value="${csrfToken}">
             <button class="btn btn-danger" type="submit">Logout</button>
           </form>
         </div>
@@ -40,6 +41,7 @@ function generateChangePasswordPage(PANEL_BASE, { username, userRole, message = 
         </div>
 
         <form method="post" action="${PANEL_BASE}/change-password">
+        <input type="hidden" name="_csrf" value="${csrfToken}">
           <div class="form-group">
             <label>Current Password</label>
             <input name="currentPassword" type="password" required />

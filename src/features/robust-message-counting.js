@@ -518,7 +518,7 @@ async function cleanupEventLog(db) {
        WHERE id NOT IN (
          SELECT id FROM message_count_events 
          ORDER BY id DESC 
-         LIMIT 10000
+         LIMIT 5000
        )`
     );
   } catch (err) {

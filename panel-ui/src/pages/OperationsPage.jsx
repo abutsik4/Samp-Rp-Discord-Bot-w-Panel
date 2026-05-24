@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery, useMutation } from "../hooks/useQuery";
 import { panelApi } from "../lib/api";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
@@ -19,39 +20,58 @@ function opIcon(operation) {
 
 export function OperationsPage({ bot }) {
   const guildId = bot?.guild_id;
-  const [history, setHistory] = useState([]);
-  const [reports, setReports] = useState([]);
   const [reportDetail, setReportDetail] = useState(null);
   const [expandedReportId, setExpandedReportId] = useState(null);
   const [traceMessageId, setTraceMessageId] = useState("");
   const [traceUserId, setTraceUserId] = useState("");
   const [traceData, setTraceData] = useState(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
 
-  async function loadAll() {
-    setError("");
-    try {
-      const [h, r] = await Promise.all([
-        panelApi.history(bot.key, 50),
-        panelApi.debugReports({ limit: 50, offset: 0 }),
-      ]);
-      setHistory(h.operations || []);
-      setReports(r.reports || []);
-    } catch (e) {
-      setError(e.message || "Failed to load ops data");
-    } finally {
-      setLoading(false);
-    }
-  }
+  // ── Queries ──────────────────────────────────────────────
+  const historyKey = bot.key ? `/panel/api/${encodeURIComponent(bot.key)}/history?limit=50` : null;
+  const reportsKey = "/panel/api/debug/reports?limit=50&offset=0";
 
-  useEffect(() => {
-    loadAll();
-  }, [bot.key]);
+  const { data: historyData, loading: historyLoading, error: historyError, refresh: refreshHistory } = useQuery(historyKey, {
+    deps: [bot.key],
+    onSuccess(data) { /* cache stores it */ },
+  });
+
+  const { data: reportsData, loading: reportsLoading, error: reportsError, refresh: refreshReports } = useQuery(reportsKey);
+
+  const loading = historyLoading || reportsLoading;
+  const error = historyError || reportsError;
+
+  const history = (historyData?.operations) || [];
+  const reports = (reportsData?.reports) || [];
+
+  // ── Mutations ────────────────────────────────────────────
+  const [undoMutate] = useMutation(panelApi.undoHistory, {
+    invalidate: [historyKey],
+  });
+
+  const [toggleReportMutate] = useMutation(panelApi.debugReport, {
+    onSuccess(result) {
+      setReportDetail(result.report || null);
+    },
+  });
+
+  const [reconcileMutate] = useMutation(panelApi.accuracyReconcile);
+
+  const [fullsyncMutate] = useMutation(panelApi.accuracyFullsync);
+
+  const [traceMessageMutate] = useMutation(panelApi.accuracyTraceMessage, {
+    onSuccess(result) {
+      setTraceData(result);
+    },
+  });
+
+  const [traceUserMutate] = useMutation(panelApi.accuracyTraceUser, {
+    onSuccess(result) {
+      setTraceData(result);
+    },
+  });
 
   async function undoOperation(op) {
-    await panelApi.undoHistory(bot.key, op.id);
-    loadAll();
+    await undoMutate(bot.key, op.id);
   }
 
   async function toggleReport(r) {
@@ -61,8 +81,7 @@ export function OperationsPage({ bot }) {
       return;
     }
     setExpandedReportId(r.id);
-    const detail = await panelApi.debugReport(r.id);
-    setReportDetail(detail.report || null);
+    await toggleReportMutate(r.id);
   }
 
   return (
@@ -73,7 +92,7 @@ export function OperationsPage({ bot }) {
         subtitle="Operation history, debug tools and accuracy verification."
       />
 
-      {error ? <Alert type="error">{error}</Alert> : null}
+      {error ? <Alert type="error">{error?.message || error}</Alert> : null}
 
       <SectionCard title="Operation History" icon={History}>
         {loading ? (
@@ -151,13 +170,13 @@ export function OperationsPage({ bot }) {
         <div className="row-actions">
           <button
             className="btn--ghost btn--sm"
-            onClick={async () => { await panelApi.accuracyReconcile({ guildId }); }}
+            onClick={() => reconcileMutate({ guildId })}
           >
             <RefreshCw size={13} />Reconcile guild
           </button>
           <button
             className="btn--ghost btn--sm"
-            onClick={async () => { await panelApi.accuracyFullsync({ guildId }); }}
+            onClick={() => fullsyncMutate({ guildId })}
           >
             <Download size={13} />Full sync
           </button>
@@ -175,9 +194,8 @@ export function OperationsPage({ bot }) {
             <div className="row-actions" style={{ marginTop: "0.5rem" }}>
               <button
                 className="btn--ghost btn--sm"
-                onClick={async () => {
-                  const out = await panelApi.accuracyTraceMessage({ guildId, messageId: traceMessageId, limit: 100 });
-                  setTraceData(out);
+                onClick={() => {
+                  traceMessageMutate({ guildId, messageId: traceMessageId, limit: 100 });
                 }}
               >
                 <Search size={13} />Trace message
@@ -196,9 +214,8 @@ export function OperationsPage({ bot }) {
             <div className="row-actions" style={{ marginTop: "0.5rem" }}>
               <button
                 className="btn--ghost btn--sm"
-                onClick={async () => {
-                  const out = await panelApi.accuracyTraceUser({ guildId, userId: traceUserId, limit: 100 });
-                  setTraceData(out);
+                onClick={() => {
+                  traceUserMutate({ guildId, userId: traceUserId, limit: 100 });
                 }}
               >
                 <Search size={13} />Trace user

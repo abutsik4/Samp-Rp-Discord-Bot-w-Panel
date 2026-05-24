@@ -274,10 +274,11 @@ class SAMPStatusTracker {
     this.lastChannelUpdate = 0; // Track last Discord channel rename time for rate limiting
     // Discord allows only a small number of channel renames per 10 minutes.
     // Default to 5 minutes (2 renames / 10 min) to keep counts reasonably fresh.
-    this.minRenameIntervalMs = Math.max(60 * 1000, Number(config?.minRenameIntervalMs) || 5 * 60 * 1000);
+    this.minRenameIntervalMs = Math.max(60 * 1000, Number(config?.minRenameIntervalMs) || 2 * 60 * 1000);
     this.nextAllowedRenameAt = 0;
     this.lastSkipLogAt = 0;
     this._updateInFlight = false;
+    this._renameRetryTimer = null;  // Scheduled retry when rename skipped due to cooldown
     this.consecutiveFailures = 0;
     this.lastStatus = null; // Cache last status for comparison
   }
@@ -360,18 +361,22 @@ class SAMPStatusTracker {
       // Respect a backoff window (e.g., after rate limiting)
       if (now < this.nextAllowedRenameAt && !statusChanged) {
         if (now - this.lastSkipLogAt > 10 * 60 * 1000) {
-          console.warn(`⚠️ [SAMP] Skipping rename for ${serverAddr} due to backoff until ${new Date(this.nextAllowedRenameAt).toISOString()}`);
+          console.warn(`[SAMP] Skipping rename for ${serverAddr} due to backoff until ${new Date(this.nextAllowedRenameAt).toISOString()}`);
           this.lastSkipLogAt = now;
         }
+        // Schedule a retry when cooldown expires instead of waiting for next poll
+        this._scheduleRenameRetry(this.nextAllowedRenameAt - now);
         return;
       }
 
       // Discord channel renames are aggressively rate limited; avoid thrashing.
       if (withinCooldown && !statusChanged) {
         if (now - this.lastSkipLogAt > 10 * 60 * 1000) {
-          console.warn(`⚠️ [SAMP] Skipping rename for ${serverAddr} (cooldown ${Math.round(this.minRenameIntervalMs / 60000)}m)`);
+          console.warn(`[SAMP] Skipping rename for ${serverAddr} (cooldown ${Math.round(this.minRenameIntervalMs / 60000)}m)`);
           this.lastSkipLogAt = now;
         }
+        // Schedule a retry when cooldown expires
+        this._scheduleRenameRetry(this.minRenameIntervalMs - (now - this.lastChannelUpdate));
         return;
       }
       
@@ -447,8 +452,13 @@ class SAMPStatusTracker {
       this.updateInterval = null;
     }
 
+    if (this._renameRetryTimer) {
+      clearTimeout(this._renameRetryTimer);
+      this._renameRetryTimer = null;
+    }
+
     const serverAddr = `${this.config.serverIp}:${this.config.serverPort || 7777}`;
-    console.log(`🛑 [SAMP] Status tracker stopped for ${serverAddr}`);
+    console.log(`[SAMP] Status tracker stopped for ${serverAddr}`);
   }
 
   /**
@@ -456,6 +466,21 @@ class SAMPStatusTracker {
    */
   get enabled() {
     return this.isRunning;
+  }
+
+  /**
+   * Schedule a delayed rename retry after cooldown expires.
+   * Prevents stale channel names when a rename was skipped.
+   */
+  _scheduleRenameRetry(delayMs) {
+    if (this._renameRetryTimer) {
+      clearTimeout(this._renameRetryTimer);
+    }
+    const delay = Math.max(1000, Math.min(delayMs + 500, 10 * 60 * 1000)); // 1s-10min, add 500ms buffer
+    this._renameRetryTimer = setTimeout(() => {
+      this._renameRetryTimer = null;
+      this.updateChannelName();
+    }, delay);
   }
 
   /**

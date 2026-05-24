@@ -1,55 +1,132 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Bot, Terminal, Cpu, Play, Brain, Calendar, Timer, Save, Trash2, Send, Plus } from "lucide-react";
-import { panelApi } from "../lib/api";
+import { useQuery, useMutation } from "../hooks/useQuery";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { Alert } from "../components/Alert";
+import { panelApi } from "../lib/api";
+
+function botUrl(botKey, path) {
+  return `/panel/api/${encodeURIComponent(botKey)}${path}`;
+}
 
 export function AutomationPage({ bot }) {
   const guildId = bot?.guild_id;
-  const [commands, setCommands] = useState([]);
-  const [aiSettings, setAiSettings] = useState(null);
-  const [aiStats, setAiStats] = useState(null);
-  const [aiHistory, setAiHistory] = useState([]);
+
   const [holidaysDate, setHolidaysDate] = useState(new Date().toISOString().slice(0, 10));
-  const [holidays, setHolidays] = useState([]);
   const [holidayForm, setHolidayForm] = useState({ date: new Date().toISOString().slice(0, 10), title: "", note: "" });
   const [countdownConfig, setCountdownConfig] = useState({ channel_id: "", template_title: "", template_text: "" });
-  const [sendChannels, setSendChannels] = useState([]);
-  const [error, setError] = useState("");
 
-  async function loadAll() {
-    setError("");
-    try {
-      const [cmd, ai, aiModel, hist, h, cd, channels] = await Promise.all([
-        panelApi.commands(bot.key, guildId),
-        panelApi.aiSettings(bot.key, guildId),
-        panelApi.aiModelStats(bot.key),
-        panelApi.aiHistory(bot.key, { guildId, limit: 20 }),
-        panelApi.holidays(bot.key, holidaysDate),
-        panelApi.countdownConfig(bot.key, guildId),
-        panelApi.sendableChannels(bot.key),
-      ]);
-      setCommands(cmd.commands || []);
-      setAiSettings(ai.settings || {});
-      setAiStats({ ...(ai.stats || {}), model: aiModel.stats || null });
-      setAiHistory(hist.history || []);
-      setHolidays(h.items || []);
-      setCountdownConfig(cd.config || {});
-      setSendChannels(channels.items || []);
-    } catch (e) {
-      setError(e.message || "Failed to load automation data");
+  // ── Queries ──────────────────────────────────────────────
+  const { data: commandsData, error: commandsError } = useQuery(
+    bot ? botUrl(bot.key, `/commands${guildId ? `?guildId=${encodeURIComponent(guildId)}` : ""}`) : null,
+    { deps: [bot?.key, guildId] }
+  );
+
+  const { data: aiSettingsData, error: aiSettingsError } = useQuery(
+    bot ? botUrl(bot.key, `/ai-engagement/settings?guildId=${encodeURIComponent(guildId)}`) : null,
+    { deps: [bot?.key, guildId] }
+  );
+
+  const { data: aiModelData } = useQuery(
+    bot ? botUrl(bot.key, "/ai-engagement/model-stats") : null,
+    { deps: [bot?.key] }
+  );
+
+  const { data: aiHistoryData, error: aiHistoryError } = useQuery(
+    bot ? botUrl(bot.key, `/ai-engagement/history?guildId=${encodeURIComponent(guildId)}&limit=20`) : null,
+    { deps: [bot?.key, guildId] }
+  );
+
+  const { data: holidaysData, error: holidaysError } = useQuery(
+    bot ? botUrl(bot.key, `/holidays${holidaysDate ? `?date=${encodeURIComponent(holidaysDate)}` : ""}`) : null,
+    { deps: [bot?.key, holidaysDate] }
+  );
+
+  const { data: countdownData } = useQuery(
+    bot ? botUrl(bot.key, `/countdown/config?guildId=${encodeURIComponent(guildId)}`) : null,
+    { deps: [bot?.key, guildId] }
+  );
+
+  const { data: sendChannelsData } = useQuery(
+    bot ? botUrl(bot.key, "/sendable-channels") : null,
+    { deps: [bot?.key] }
+  );
+
+  // ── Derived data ──────────────────────────────────────────
+  const commands = commandsData?.commands || [];
+  const aiSettings = aiSettingsData?.settings ?? null;
+  const aiStats = aiSettingsData
+    ? { ...(aiSettingsData.stats || {}), model: aiModelData?.stats || null }
+    : null;
+  const aiHistory = aiHistoryData?.history || [];
+  const holidays = holidaysData?.items || [];
+  const sendChannels = sendChannelsData?.items || [];
+
+  // Sync countdown config from server data
+  const effectiveCountdownConfig = countdownData?.config ?? countdownConfig;
+
+  const queryError = commandsError || aiSettingsError || aiHistoryError || holidaysError;
+
+  // ── Mutations ─────────────────────────────────────────────
+  const invalidateAutomation = [
+    bot ? botUrl(bot.key, `/commands${guildId ? `?guildId=${encodeURIComponent(guildId)}` : ""}`) : null,
+    bot ? botUrl(bot.key, `/ai-engagement/settings?guildId=${encodeURIComponent(guildId)}`) : null,
+    bot ? botUrl(bot.key, `/ai-engagement/history?guildId=${encodeURIComponent(guildId)}&limit=20`) : null,
+    bot ? botUrl(bot.key, `/holidays${holidaysDate ? `?date=${encodeURIComponent(holidaysDate)}` : ""}`) : null,
+    bot ? botUrl(bot.key, `/countdown/config?guildId=${encodeURIComponent(guildId)}`) : null,
+  ].filter(Boolean);
+
+  const invalidateHolidays = [
+    bot ? botUrl(bot.key, `/holidays${holidaysDate ? `?date=${encodeURIComponent(holidaysDate)}` : ""}`) : null,
+  ].filter(Boolean);
+
+  const [toggleCommandMut] = useMutation(
+    (args) => panelApi.toggleCommand(bot.key, args),
+    { invalidate: invalidateAutomation }
+  );
+
+  const [saveAiSettingsMut] = useMutation(
+    (args) => panelApi.aiSaveSettings(bot.key, args),
+    { invalidate: invalidateAutomation }
+  );
+
+  const [aiTestMut] = useMutation(
+    (args) => panelApi.aiTest(bot.key, args),
+  );
+
+  const [aiTrainMut] = useMutation(
+    (args) => panelApi.aiTrain(bot.key, args),
+    { invalidate: invalidateAutomation }
+  );
+
+  const [addHolidayMut] = useMutation(
+    (args) => panelApi.addHoliday(bot.key, args),
+    {
+      invalidate: invalidateHolidays,
+      onSuccess: () => setHolidayForm((p) => ({ ...p, title: "", note: "" })),
     }
-  }
+  );
 
-  useEffect(() => {
-    loadAll();
-  }, [bot.key, holidaysDate]);
+  const [deleteHolidayMut] = useMutation(
+    (id) => panelApi.deleteHoliday(bot.key, id),
+    { invalidate: invalidateHolidays }
+  );
 
-  async function toggleCommand(name, currentEnabled) {
-    await panelApi.toggleCommand(bot.key, { commandName: name, enabled: !currentEnabled });
-    loadAll();
-  }
+  const [saveCountdownMut] = useMutation(
+    (args) => panelApi.saveCountdownConfig(bot.key, args),
+    { invalidate: invalidateAutomation }
+  );
+
+  const [testCountdownMut] = useMutation(
+    (args) => panelApi.testCountdown(bot.key, args),
+  );
+
+  // ── Local state for editable AI settings ──────────────────
+  const [localAiSettings, setLocalAiSettings] = useState(null);
+
+  // Sync local AI settings from query data
+  const effectiveAiSettings = localAiSettings ?? aiSettings;
 
   return (
     <div className="page">
@@ -59,7 +136,7 @@ export function AutomationPage({ bot }) {
         subtitle="Commands, AI engagement, holidays and countdown configuration."
       />
 
-      {error ? <Alert type="error">{error}</Alert> : null}
+      {queryError ? <Alert type="error">{queryError.message || "Failed to load automation data"}</Alert> : null}
 
       <SectionCard title="Slash Commands" icon={Terminal}>
         <div className="table-wrap">
@@ -77,7 +154,7 @@ export function AutomationPage({ bot }) {
                       <input
                         type="checkbox"
                         checked={cmd.enabled !== false}
-                        onChange={() => toggleCommand(cmd.name, cmd.enabled !== false)}
+                        onChange={() => toggleCommandMut({ commandName: cmd.name, enabled: !(cmd.enabled !== false) })}
                       />
                       <div className="toggle-track">
                         <div className="toggle-thumb"></div>
@@ -94,14 +171,14 @@ export function AutomationPage({ bot }) {
 
       <div className="grid grid-2">
         <SectionCard title="AI Engagement" icon={Cpu}>
-          {aiSettings ? (
+          {effectiveAiSettings ? (
             <>
               <div className="form-row" style={{ marginBottom: 12 }}>
                 <label className="toggle-switch">
                   <input
                     type="checkbox"
-                    checked={!!aiSettings.enabled}
-                    onChange={(e) => setAiSettings((p) => ({ ...p, enabled: e.target.checked }))}
+                    checked={!!effectiveAiSettings.enabled}
+                    onChange={(e) => setLocalAiSettings((p) => ({ ...p, enabled: e.target.checked }))}
                   />
                   <div className="toggle-track">
                     <div className="toggle-thumb"></div>
@@ -115,9 +192,9 @@ export function AutomationPage({ bot }) {
                   Response Chance (%)
                   <input
                     type="number"
-                    value={Math.round((aiSettings.response_chance || 0) * 100)}
+                    value={Math.round((effectiveAiSettings.response_chance || 0) * 100)}
                     onChange={(e) =>
-                      setAiSettings((p) => ({ ...p, response_chance: Number(e.target.value) / 100 }))
+                      setLocalAiSettings((p) => ({ ...p, response_chance: Number(e.target.value) / 100 }))
                     }
                   />
                 </label>
@@ -141,25 +218,24 @@ export function AutomationPage({ bot }) {
               <div className="row-actions" style={{ marginTop: 12 }}>
                 <button
                   className="btn--ghost btn--sm"
-                  onClick={async () => {
-                    await panelApi.aiSaveSettings(bot.key, { guildId, settings: aiSettings });
-                    loadAll();
+                  onClick={() => {
+                    saveAiSettingsMut({ guildId, settings: effectiveAiSettings });
+                    setLocalAiSettings(null);
                   }}
                 >
                   <Save size={13} /> Save AI Settings
                 </button>
                 <button
                   className="btn--ghost btn--sm"
-                  onClick={async () => { await panelApi.aiTest(bot.key, { guildId }); }}
+                  onClick={() => aiTestMut({ guildId })}
                 >
                   <Play size={13} /> Test
                 </button>
                 <button
                   className="btn--ghost btn--sm"
-                  onClick={async () => {
+                  onClick={() => {
                     const channelId = sendChannels[0]?.id;
-                    if (channelId) await panelApi.aiTrain(bot.key, { channelId, messageLimit: 500 });
-                    loadAll();
+                    if (channelId) aiTrainMut({ channelId, messageLimit: 500 });
                   }}
                 >
                   <Brain size={13} /> Train
@@ -222,10 +298,7 @@ export function AutomationPage({ bot }) {
                       <button
                         className="btn--icon btn--danger-icon"
                         title="Delete"
-                        onClick={async () => {
-                          await panelApi.deleteHoliday(bot.key, item.id);
-                          loadAll();
-                        }}
+                        onClick={() => deleteHolidayMut(item.id)}
                       >
                         <Trash2 size={13} />
                       </button>
@@ -265,11 +338,7 @@ export function AutomationPage({ bot }) {
           <div className="row-actions" style={{ marginTop: 10 }}>
             <button
               className="btn--ghost btn--sm"
-              onClick={async () => {
-                await panelApi.addHoliday(bot.key, holidayForm);
-                setHolidayForm((p) => ({ ...p, title: "", note: "" }));
-                loadAll();
-              }}
+              onClick={() => addHolidayMut(holidayForm)}
             >
               <Plus size={13} /> Add Holiday
             </button>
@@ -281,7 +350,7 @@ export function AutomationPage({ bot }) {
             <label>
               Channel
               <select
-                value={countdownConfig.channel_id || ""}
+                value={effectiveCountdownConfig.channel_id || ""}
                 onChange={(e) => setCountdownConfig((p) => ({ ...p, channel_id: e.target.value }))}
               >
                 <option value="">Select channel</option>
@@ -293,7 +362,7 @@ export function AutomationPage({ bot }) {
             <label>
               Title template
               <input
-                value={countdownConfig.template_title || ""}
+                value={effectiveCountdownConfig.template_title || ""}
                 onChange={(e) => setCountdownConfig((p) => ({ ...p, template_title: e.target.value }))}
               />
             </label>
@@ -302,23 +371,20 @@ export function AutomationPage({ bot }) {
             Text template
             <textarea
               rows={3}
-              value={countdownConfig.template_text || ""}
+              value={effectiveCountdownConfig.template_text || ""}
               onChange={(e) => setCountdownConfig((p) => ({ ...p, template_text: e.target.value }))}
             />
           </label>
           <div className="row-actions" style={{ marginTop: 12 }}>
             <button
               className="btn--ghost btn--sm"
-              onClick={async () => {
-                await panelApi.saveCountdownConfig(bot.key, { guildId, config: countdownConfig });
-                loadAll();
-              }}
+              onClick={() => saveCountdownMut({ guildId, config: effectiveCountdownConfig })}
             >
               <Save size={13} /> Save
             </button>
             <button
               className="btn--ghost btn--sm"
-              onClick={async () => { await panelApi.testCountdown(bot.key, { guildId }); }}
+              onClick={() => testCountdownMut({ guildId })}
             >
               <Send size={13} /> Send test countdown
             </button>

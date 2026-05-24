@@ -2,6 +2,14 @@ const { Router } = require("express");
 const bcrypt = require("bcryptjs");
 
 const { generateLoginPage } = require("../login-page");
+// Validate CSRF token for legacy form POST routes (API routes protected by panel-app middleware)
+function checkCsrf(req, res, next) {
+  const token = (req.body && req.body._csrf) || req.get("X-CSRF-Token");
+  if (!token || token !== (req.session && req.session.csrfToken)) {
+    return res.redirect(302, "/panel/login?error=" + encodeURIComponent("CSRF token mismatch"));
+  }
+  next();
+}
 const { generatePanelHomePage } = require("../panel-home-page");
 const { generateUsersPage } = require("../users-page");
 const { generateChangePasswordPage } = require("../change-password-page");
@@ -202,13 +210,14 @@ function createAuthRouter(ctx) {
     const error = String(req.query?.error || "").trim() || null;
     res.send(
       generateLoginPage(PANEL_BASE, {
+        csrfToken: req.session?.csrfToken,
         error,
         showSetupWarning: !hasEnvHash && !hasDbUsers,
       })
     );
   });
 
-  router.post(`${PANEL_BASE}/login`, loginLimiter, async (req, res) => {
+  router.post(`${PANEL_BASE}/login`, loginLimiter, checkCsrf, async (req, res) => {
     const username = String(req.body.username || "");
     const password = String(req.body.password || "");
 
@@ -221,7 +230,7 @@ function createAuthRouter(ctx) {
     return res.redirect(`${PANEL_BASE}`);
   });
 
-  router.post(`${PANEL_BASE}/logout`, (req, res) => {
+  router.post(`${PANEL_BASE}/logout`, checkCsrf, (req, res) => {
     req.session.destroy(() => res.redirect(`${PANEL_BASE}/login`));
   });
 
@@ -240,6 +249,7 @@ function createAuthRouter(ctx) {
         generateUsersPage(users, PANEL_BASE, {
           username: req.session.user.username,
           userRole: req.session.user.role,
+          csrfToken: req.session?.csrfToken,
           message,
           error,
         })
@@ -251,7 +261,7 @@ function createAuthRouter(ctx) {
   });
 
   // Create user
-  router.post(`${PANEL_BASE}/users/create`, requireAuth, requireAdmin, async (req, res) => {
+  router.post(`${PANEL_BASE}/users/create`, requireAuth, requireAdmin, checkCsrf, async (req, res) => {
     try {
       const { username, password, role } = req.body;
       
@@ -280,7 +290,7 @@ function createAuthRouter(ctx) {
   });
 
   // Delete user
-  router.post(`${PANEL_BASE}/users/delete`, requireAuth, requireAdmin, async (req, res) => {
+  router.post(`${PANEL_BASE}/users/delete`, requireAuth, requireAdmin, checkCsrf, async (req, res) => {
     try {
       const { username } = req.body;
       if (username === req.session.user.username) {
@@ -295,7 +305,7 @@ function createAuthRouter(ctx) {
   });
 
   // Update user role
-  router.post(`${PANEL_BASE}/users/update-role`, requireAuth, requireAdmin, async (req, res) => {
+  router.post(`${PANEL_BASE}/users/update-role`, requireAuth, requireAdmin, checkCsrf, async (req, res) => {
     try {
       const { username, role } = req.body;
       if (username === req.session.user.username) {
@@ -310,7 +320,7 @@ function createAuthRouter(ctx) {
   });
 
   // Reset user password (admin)
-  router.post(`${PANEL_BASE}/users/reset-password`, requireAuth, requireAdmin, async (req, res) => {
+  router.post(`${PANEL_BASE}/users/reset-password`, requireAuth, requireAdmin, checkCsrf, async (req, res) => {
     try {
       const { username, newPassword, confirmPassword } = req.body;
       
@@ -342,6 +352,7 @@ function createAuthRouter(ctx) {
       generateChangePasswordPage(PANEL_BASE, {
         username: req.session.user.username,
         userRole: req.session.user.role,
+        csrfToken: req.session?.csrfToken,
         message,
         error,
       })
@@ -349,7 +360,7 @@ function createAuthRouter(ctx) {
   });
 
   // Change own password action
-  router.post(`${PANEL_BASE}/change-password`, requireAuth, async (req, res) => {
+  router.post(`${PANEL_BASE}/change-password`, requireAuth, checkCsrf, async (req, res) => {
     try {
       const { currentPassword, newPassword, confirmPassword } = req.body;
       const username = req.session.user.username;

@@ -1,0 +1,484 @@
+// Bot that counts messages and provides statistics for users in a Discord server
+
+// Load environment variables from .env file
+require('dotenv').config();
+
+const {
+  Client,
+  GatewayIntentBits,
+  Partials,
+} = require("discord.js");
+
+const {
+  ensureHolidayTable,
+  startDailyHolidayPosts,
+} = require("./features/holidays");
+
+const { ensureSampLifeTables } = require("./features/samp-life");
+const sqlite3 = require("sqlite3").verbose();
+const fs = require("fs");
+const path = require("path");
+const { initSchema } = require("./db/schema");
+
+// dotenv already loaded at top of file
+
+const { createPanelApp } = require("./web/panel-app");
+
+
+// Structured logging is used by the shared panel app and feature modules.
+
+// New feature modules
+const { dbRun: dbRunHelper, dbGet: dbGetHelper, dbAll: dbAllHelper } = require("./utils/db-helpers");
+
+const { ensureStreakTable } = require("./features/streaks");
+const { ensureMilestoneTable } = require("./features/milestones");
+const { ensureReactionsTable } = require("./features/reactions");
+
+const { ensureWeeklyStatsTable } = require("./features/weekly-stats");
+const { ensureAIEngagementTables } = require("./features/ai-engagement");
+
+const { ensureUserPreferencesTables } = require("./features/user-preferences");
+
+
+
+const {
+  ensureRateLimitTables,
+} = require("./features/rate-limiter");
+
+
+// D-track feature modules (badges, trivia, levels, wanted stars, weekly awards, radio vote)
+const { ensureBadgesTable } = require("./features/badges");
+const { ensureTriviaTable } = require("./features/trivia");
+const { ensureLevelsTable } = require("./features/levels");
+const { ensureWantedTable } = require("./features/wanted-stars");
+const { ensureWeeklyAwardsTable } = require("./features/weekly-awards");
+const { ensureRadioTable } = require("./features/radio-vote");
+
+const { initLeaderboardCache } = require("./features/leaderboard-cache");
+
+const { ensurePerksTables } = require("./features/perks");
+const { ensureXpMultipliersTable } = require("./features/xp-multipliers");
+const { ensureSampExtendedTables } = require("./features/samp-extended");
+const { ensurePrestigeTables } = require("./features/samp-prestige");
+const { ensureSeasonalEventsTables } = require("./features/seasonal-events");
+const { ensureGiveawayTables } = require("./features/giveaway");
+
+// -------------------------
+// CONFIG / ENV
+// -------------------------
+const TOKEN = process.env.DISCORD_TOKEN;
+const OWNER_ID = process.env.OWNER_ID;
+
+// Optional Redis leaderboard cache for faster /top queries.
+// Requires: npm install ioredis
+initLeaderboardCache({ url: process.env.REDIS_URL });
+
+if (!TOKEN || !OWNER_ID) {
+  console.error("Please set DISCORD_TOKEN and OWNER_ID in your .env file.");
+  process.exit(1);
+}
+
+// Panel base path (landing at /, panel under /panel)
+const PANEL_BASE = "/panel";
+
+// Optional: if you are behind a reverse proxy and want secure cookies:
+// set TRUST_PROXY=1 and COOKIE_SECURE=true in env
+const TRUST_PROXY = process.env.TRUST_PROXY === "1";
+const COOKIE_SECURE =
+  process.env.COOKIE_SECURE === "auto"
+    ? "auto"
+    : process.env.COOKIE_SECURE === "true";
+
+// Optional allow-list for panel posting (comma-separated IDs).
+// If not set, panel can post to any text channel the bot can access.
+function isAllowedChannel(channelId) {
+  const list = (process.env.ALLOWED_CHANNEL_IDS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (!list.length) return true;
+  return list.includes(channelId);
+}
+
+// -------------------------
+// DATABASE (SQLite)
+// -------------------------
+// Single DB file used for:
+// - user_stats (message counts)
+// - message_index (message_id -> author_id, for robust delete decrement)
+// - panel_sent_items (store sent messages/embeds from panel)
+// - bot_kv (small KV store for schedulers, etc.)
+const dbPath = process.env.STATS_DB_PATH
+  ? path.resolve(process.env.STATS_DB_PATH)
+  : path.join(__dirname, "..", "data", "stats.db");
+
+const db = new sqlite3.Database(dbPath);
+
+// Set busy timeout to 5 seconds to avoid SQLITE_BUSY under concurrent writes
+db.configure("busyTimeout", 5000);
+
+// Promisified DB helpers (dual-signature for backward compatibility)
+// DEPRECATED short form: dbRun(sql, params) — implicitly uses module-level db
+// Preferred explicit form: dbRun(db, sql, params) — clearly passes db instance
+// TODO: Migrate all short-form calls to explicit (db, sql, params) then remove dual signature
+function dbRun(sqlOrDb, sqlOrParams = [], params = []) {
+  if (typeof sqlOrDb === 'string') return dbRunHelper(db, sqlOrDb, sqlOrParams);
+  return dbRunHelper(sqlOrDb, sqlOrParams, params);
+}
+function dbGet(sqlOrDb, sqlOrParams = [], params = []) {
+  if (typeof sqlOrDb === 'string') return dbGetHelper(db, sqlOrDb, sqlOrParams);
+  return dbGetHelper(sqlOrDb, sqlOrParams, params);
+}
+function dbAll(sqlOrDb, sqlOrParams = [], params = []) {
+  if (typeof sqlOrDb === 'string') return dbAllHelper(db, sqlOrDb, sqlOrParams);
+  return dbAllHelper(sqlOrDb, sqlOrParams, params);
+}
+
+// KV helpers for scheduler state
+async function getKV(key) {
+  const row = await dbGet(`SELECT value FROM bot_kv WHERE key = ?`, [key]);
+  return row ? row.value : null;
+}
+async function setKV(key, value) {
+  await dbRun(
+    `INSERT INTO bot_kv (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [key, String(value)]
+  );
+}
+
+async function initDb() {
+  // Core schema (tables, indexes, migrations) — single source of truth in src/db/schema.js
+  await initSchema(dbRun, dbPath);
+
+  // Feature module tables
+  await ensureHolidayTable(db);
+  await ensureStreakTable(db);
+  await ensureMilestoneTable(db);
+  await ensureReactionsTable(db);
+  await ensureWeeklyStatsTable(db);
+  await ensureAIEngagementTables(db);
+  await ensureUserPreferencesTables(db);
+  await ensureRateLimitTables(db);
+  await ensureSampLifeTables(db);
+
+  // D-track feature tables
+  await ensureBadgesTable(db);
+  await ensureTriviaTable(db);
+  await ensureLevelsTable(db);
+  await ensureWantedTable(db);
+  await ensureWeeklyAwardsTable(db);
+  await ensureRadioTable(db);
+
+  await ensurePerksTables(db);
+  await ensureXpMultipliersTable(db);
+  await ensureSampExtendedTables(db);
+  await ensurePrestigeTables(db);
+  await ensureSeasonalEventsTables(db);
+  await ensureGiveawayTables(db);
+}
+
+initDb().catch((e) => {
+  console.error("DB init failed:", e);
+  process.exit(1);
+});
+
+
+// Bot helpers (extracted from this file)
+const helpers = require("./bot/helpers");
+helpers.init({ db, dbRun, dbGet, dbAll });
+
+const {
+  sleep, ruPlural, formatTimeOnServer,
+  disableCommand, enableCommand, isCommandDisabled, getDisabledCommands,
+  setCommandCategoryChannel, clearCommandCategoryChannel, getCommandCategoryChannel, listCommandCategoryChannels,
+  incrementMessageCount, decrementMessageCount, getUserMessageCount, resetStats,
+  getCachedLeaderboard, setCachedLeaderboard, getTopUsers,
+  STATUS_POOL, STATUS_ROTATION_ENABLED, STATUS_ROTATION_INTERVAL_MINUTES, setRandomPresence,
+  indexMessage, cacheUserUsername, lookupIndexedAuthor, removeIndexedMessage,
+  lookupIndexedAuthorsBulk, removeIndexedBulk,
+  recordOperation, performUndo,
+} = helpers;
+
+
+// -------------------------
+// DISCORD CLIENT
+// -------------------------
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessageReactions,
+  ],
+  partials: [Partials.Channel, Partials.Message, Partials.Reaction],
+});
+
+client.on("error", (err) => {
+  console.error("Discord client error:", err);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled promise rejection:", reason);
+  // Unhandled rejections in production should be treated as fatal.
+  // Exiting lets systemd restart the process into a clean state.
+  process.exit(1);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception (fatal):", err);
+  // Force exit so systemd restarts the process. Continuing after
+  // an uncaught exception leaves the process in an undefined state.
+  process.exit(1);
+});
+
+
+
+// Slash commands (canonical definitions in src/bot/slashCommands.js)
+const { registerGuildCommands } = require("./bot/slashCommands");
+
+// Backfill utility (extracted to src/features/backfill.js)
+const { backfillGuild: _backfillGuildCore } = require("./features/backfill");
+function backfillGuild(guild) {
+  return _backfillGuildCore(guild, { resetStats, incrementMessageCount, indexMessage, sleep });
+}
+
+// Schedulers (extracted to src/bot/schedulers.js)
+const { startSchedulers } = require("./bot/schedulers");
+let holidaysScheduler = null;
+
+client.once("ready", async () => {
+  console.log(`Logged in as ${client.user.tag} (JepsenCloud bot ready).`);
+
+  const result = await startSchedulers({
+    client, db, TOKEN, dbAll,
+    startDailyHolidayPosts,
+    registerGuildCommands,
+    setRandomPresence,
+    ruPlural,
+    STATUS_ROTATION_ENABLED,
+    STATUS_ROTATION_INTERVAL_MINUTES,
+  });
+  holidaysScheduler = result.holidaysScheduler;
+});
+
+// Event handlers (extracted to src/bot/events/handlers.js)
+const { registerEventHandlers } = require("./bot/events/handlers");
+registerEventHandlers({
+  client, db, TOKEN,
+  registerGuildCommands,
+  cacheUserUsername, getCommandCategoryChannel, getUserMessageCount,
+  lookupIndexedAuthor, lookupIndexedAuthorsBulk,
+  dbAll,
+});
+
+// Command handlers (extracted to src/bot/commands/dispatcher.js)
+const { registerCommandHandlers } = require("./bot/commands/dispatcher");
+registerCommandHandlers({
+  client, db, dbRun, dbGet, dbAll,
+  OWNER_ID, TOKEN,
+  isCommandDisabled, getCommandCategoryChannel, getUserMessageCount,
+  ruPlural, formatTimeOnServer, performUndo,
+  registerGuildCommands, backfillGuild,
+  holidaysScheduler,
+});
+
+
+
+// WEB (Landing + Panel under /panel)
+// -------------------------
+// Multi-bot registry (future-proof). Today: one bot.
+const bots = [{ key: "samprp", name: "JepsenCloud Bot", kind: "discord", client, guild_id: "537187880842559499" }];
+
+const { app } = createPanelApp({
+  client,
+  db,
+  dbRun,
+  dbGet,
+  dbAll,
+  bots,
+  isAllowedChannel,
+  PANEL_BASE,
+  TRUST_PROXY,
+  COOKIE_SECURE,
+  recordOperation,
+  performUndo,
+  getUserMessageCount,
+  ruPlural,
+  getDisabledCommands,
+  enableCommand,
+  disableCommand,
+  listCommandCategoryChannels,
+  setCommandCategoryChannel,
+  clearCommandCategoryChannel,
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`JepsenCloud running on http://localhost:${PORT}`);
+  console.log(`Landing: http://localhost:${PORT}/`);
+  console.log(`Panel:   http://localhost:${PORT}${PANEL_BASE}/login`);
+});
+
+// -------------------------
+// DISCORD LOGIN (with retry on session exhaustion)
+// -------------------------
+(async function loginWithRetry() {
+  const backoffFilePath = path.join(__dirname, "..", "data", "discord-login-backoff.json");
+  const lastAttemptFilePath = path.join(__dirname, "..", "data", "discord-login-last-attempt.json");
+
+  async function readLastAttempt() {
+    try {
+      const raw = await fs.promises.readFile(lastAttemptFilePath, "utf8");
+      const parsed = JSON.parse(raw);
+      const lastAttemptAt = parsed?.lastAttemptAt ? new Date(parsed.lastAttemptAt) : null;
+      if (!lastAttemptAt || Number.isNaN(lastAttemptAt.getTime())) return null;
+      return { lastAttemptAt };
+    } catch (err) {
+      if (err?.code === "ENOENT") return null;
+      console.error(`[Login] Failed to read last-attempt file: ${err?.message || String(err)}`);
+      return null;
+    }
+  }
+
+  async function writeLastAttempt(lastAttemptAt) {
+    try {
+      const tmpPath = `${lastAttemptFilePath}.tmp`;
+      const payload = JSON.stringify({ lastAttemptAt: lastAttemptAt.toISOString() });
+      await fs.promises.writeFile(tmpPath, payload, "utf8");
+      await fs.promises.rename(tmpPath, lastAttemptFilePath);
+    } catch (err) {
+      console.error(`[Login] Failed to write last-attempt file: ${err?.message || String(err)}`);
+    }
+  }
+
+  async function getGatewaySessionStartLimit() {
+    try {
+      // axios is already a dependency; require lazily here to keep startup order simple.
+      const axios = require("axios");
+      const r = await axios.get("https://discord.com/api/v10/gateway/bot", {
+        headers: { Authorization: `Bot ${TOKEN}` },
+        timeout: 15_000,
+      });
+      const lim = r.data?.session_start_limit;
+      if (!lim) return null;
+      return {
+        remaining: lim.remaining,
+        resetAfterMs: lim.reset_after,
+        maxConcurrency: lim.max_concurrency,
+      };
+    } catch (err) {
+      // If Discord is unreachable, fall back to the existing login retry logic.
+      const status = err?.response?.status;
+      const msg = err?.response?.data || err?.message || String(err);
+      console.error(`[Login] Failed to query gateway session limit${status ? ` (HTTP ${status})` : ""}: ${typeof msg === "string" ? msg : JSON.stringify(msg)}`);
+      return null;
+    }
+  }
+
+  async function readBackoff() {
+    try {
+      const raw = await fs.promises.readFile(backoffFilePath, "utf8");
+      const parsed = JSON.parse(raw);
+      const notBefore = parsed?.notBefore ? new Date(parsed.notBefore) : null;
+      if (!notBefore || Number.isNaN(notBefore.getTime())) return null;
+      return { notBefore };
+    } catch (err) {
+      if (err?.code === "ENOENT") return null;
+      console.error(`[Login] Failed to read backoff file: ${err?.message || String(err)}`);
+      return null;
+    }
+  }
+
+  async function writeBackoff(notBefore) {
+    try {
+      const tmpPath = `${backoffFilePath}.tmp`;
+      const payload = JSON.stringify({ notBefore: notBefore.toISOString() });
+      await fs.promises.writeFile(tmpPath, payload, "utf8");
+      await fs.promises.rename(tmpPath, backoffFilePath);
+    } catch (err) {
+      console.error(`[Login] Failed to write backoff file: ${err?.message || String(err)}`);
+    }
+  }
+
+  async function clearBackoff() {
+    try {
+      await fs.promises.unlink(backoffFilePath);
+    } catch (err) {
+      if (err?.code === "ENOENT") return;
+      console.error(`[Login] Failed to clear backoff file: ${err?.message || String(err)}`);
+    }
+  }
+
+  const MAX_RETRIES = 10;
+  const BASE_DELAY = 30_000; // 30 seconds
+  const MIN_ATTEMPT_INTERVAL_MS = 2 * 60_000; // 2 minutes (persists across restarts)
+
+  const initialBackoff = await readBackoff();
+  if (initialBackoff?.notBefore && Date.now() < initialBackoff.notBefore.getTime()) {
+    const waitMs = initialBackoff.notBefore.getTime() - Date.now() + 5_000;
+    const waitMin = (waitMs / 60_000).toFixed(1);
+    console.error(`[Login] Backoff active from previous run. Waiting ${waitMin} min until ${initialBackoff.notBefore.toISOString()}…`);
+    await new Promise(r => setTimeout(r, waitMs));
+  }
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      // Proactive safeguard: check Discord session start limit before attempting login.
+      // This avoids burning attempts in a restart loop and avoids a guaranteed failure when remaining=0.
+      const lim = await getGatewaySessionStartLimit();
+      if (lim && typeof lim.remaining === "number") {
+        if (lim.remaining <= 0 && lim.resetAfterMs && lim.resetAfterMs > 0) {
+          const resetAt = new Date(Date.now() + lim.resetAfterMs);
+          await writeBackoff(resetAt);
+          const waitMs = Math.max(resetAt.getTime() - Date.now(), 0) + 5_000;
+          const waitMin = (waitMs / 60_000).toFixed(1);
+          console.error(`[Login] Session limit pre-check: remaining=0. Waiting ${waitMin} min until ${resetAt.toISOString()}…`);
+          await new Promise(r => setTimeout(r, waitMs));
+        }
+      }
+
+      // Persisted cooldown between attempts across restarts.
+      const lastAttempt = await readLastAttempt();
+      if (lastAttempt?.lastAttemptAt) {
+        const sinceMs = Date.now() - lastAttempt.lastAttemptAt.getTime();
+        if (sinceMs >= 0 && sinceMs < MIN_ATTEMPT_INTERVAL_MS) {
+          const waitMs = MIN_ATTEMPT_INTERVAL_MS - sinceMs;
+          console.error(`[Login] Cooldown active. Waiting ${(waitMs / 1000).toFixed(0)}s before next login attempt…`);
+          await new Promise(r => setTimeout(r, waitMs));
+        }
+      }
+
+      await writeLastAttempt(new Date());
+      await client.login(TOKEN);
+      await clearBackoff();
+      return; // success
+    } catch (err) {
+      const msg = err?.message || '';
+      // Discord session limit: "Not enough sessions remaining … resets at <ISO>"
+      const resetMatch = msg.match(/resets at (.+)/);
+      if (resetMatch) {
+        const resetAt = new Date(resetMatch[1]);
+        if (!Number.isNaN(resetAt.getTime())) {
+          await writeBackoff(resetAt);
+          const waitMs = Math.max(resetAt - Date.now(), 0) + 5_000; // +5 s buffer
+          const waitMin = (waitMs / 60_000).toFixed(1);
+          console.error(`[Login] Session limit hit (attempt ${attempt}/${MAX_RETRIES}). Waiting ${waitMin} min until ${resetAt.toISOString()}…`);
+          await new Promise(r => setTimeout(r, waitMs));
+        } else {
+          console.error(`[Login] Session limit hit (attempt ${attempt}/${MAX_RETRIES}) but could not parse reset time: ${msg}`);
+          const delay = Math.min(BASE_DELAY * 2 ** (attempt - 1), 10 * 60_000);
+          await new Promise(r => setTimeout(r, delay));
+        }
+      } else {
+        // Generic error — exponential backoff
+        const delay = Math.min(BASE_DELAY * 2 ** (attempt - 1), 10 * 60_000);
+        console.error(`[Login] Attempt ${attempt}/${MAX_RETRIES} failed: ${msg}. Retrying in ${(delay / 1000).toFixed(0)}s…`);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+  }
+  console.error('[Login] All retry attempts exhausted. The web panel is still running. Restart the process later to reconnect Discord.');
+})();

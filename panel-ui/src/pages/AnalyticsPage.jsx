@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { TrendingUp, MessageSquare, Users, Clock, Zap } from "lucide-react";
 import {
   LineChart, Line, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { panelApi } from "../lib/api";
+import { useQuery } from "../hooks/useQuery";
 import { Alert } from "../components/Alert";
 import { LoadingSkeleton } from "../components/LoadingSkeleton";
 import { EmptyState } from "../components/EmptyState";
@@ -34,31 +34,18 @@ function ChartTooltip({ active, payload, label }) {
 
 export function AnalyticsPage({ botKey }) {
   const [days, setDays] = useState(30);
-  const [data, setData] = useState(null);
-  const [channels, setChannels] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
 
-  async function load(currentDays) {
-    setLoading(true);
-    setError("");
-    try {
-      const [analytics, byChannel] = await Promise.all([
-        panelApi.analytics(botKey, { days: String(currentDays) }),
-        panelApi.analyticsChannels(botKey, { days: String(currentDays) }),
-      ]);
-      setData(analytics || null);
-      setChannels(byChannel?.channels || []);
-    } catch (err) {
-      setError(err.message || "Failed to load analytics");
-    } finally {
-      setLoading(false);
-    }
-  }
+  const analyticsUrl = `/panel/api/${encodeURIComponent(botKey)}/analytics?days=${days}`;
+  const channelsUrl = `/panel/api/${encodeURIComponent(botKey)}/analytics/channels?days=${days}`;
 
-  useEffect(() => {
-    load(days);
-  }, [botKey, days]);
+  const { data: analyticsData, loading: analyticsLoading, error: analyticsError } = useQuery(analyticsUrl, { deps: [botKey, days] });
+  const { data: channelsData, loading: channelsLoading } = useQuery(channelsUrl, { deps: [botKey, days] });
+
+  const loading = analyticsLoading || channelsLoading;
+  const error = analyticsError?.message || null;
+
+  const data = analyticsData || null;
+  const channels = channelsData?.channels || [];
 
   const topChannelsData = channels.slice(0, 10).map((ch) => ({
     name: ch.name || ch.id,

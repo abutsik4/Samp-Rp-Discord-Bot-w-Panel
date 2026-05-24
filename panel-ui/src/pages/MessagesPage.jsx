@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { MessageSquare, Hash, FileText, FileEdit, Plus, Save, X, Pencil, Trash2 } from "lucide-react";
 import { panelApi } from "../lib/api";
+import { useQuery, useMutation } from "../hooks/useQuery";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { Alert } from "../components/Alert";
@@ -24,7 +25,6 @@ function messagePreview(item) {
   if (!embed) return "-";
   const parts = [embed.title, embed.description].filter(Boolean);
   if (!parts.length) return "-";
-  // Take first meaningful line
   const firstLine = parts.join(" — ").split("\n")[0];
   return firstLine.length > 100 ? firstLine.slice(0, 100) + "…" : firstLine;
 }
@@ -41,48 +41,53 @@ const emptyForm = {
 };
 
 export function MessagesPage({ botKey, user }) {
-  const [messages, setMessages] = useState([]);
-  const [channels, setChannels] = useState([]);
   const [form, setForm] = useState(emptyForm);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  const [error, setError] = useState("");
 
   const isAdmin = user?.role === "admin";
 
-  const loadData = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const [msgs, ch] = await Promise.all([
-        panelApi.listMessages(botKey),
-        panelApi.sendableChannels(botKey),
-      ]);
-      setMessages(msgs?.messages || []);
-      setChannels(ch?.items || []);
-    } catch (err) {
-      setError(err.message || "Failed to load messages");
-    } finally {
-      setLoading(false);
-    }
-  };
+  // ── Queries ─────────────────────────────────────────────
+  const messagesUrl = `/panel/api/${encodeURIComponent(botKey)}/messages`;
+  const channelsUrl = `/panel/api/${encodeURIComponent(botKey)}/sendable-channels`;
 
-  useEffect(() => {
-    loadData();
-  }, [botKey]);
+  const { data: messagesData, loading: messagesLoading, refresh: refreshMessages } = useQuery(messagesUrl, { deps: [botKey] });
+  const { data: channelsData } = useQuery(channelsUrl, { deps: [botKey] });
+
+  const messages = messagesData?.messages || [];
+  const channels = channelsData?.items || [];
 
   const channelOptions = useMemo(
     () => channels.map((c) => ({ id: c.id || c.channelId || c.value, name: c.name || c.label || c.id })),
     [channels]
   );
 
-  /** Resolve channel name from ID, falling back to the raw ID */
   function channelName(channelId) {
     if (!channelId) return "-";
     const found = channelOptions.find((c) => c.id === channelId);
     return found ? `#${found.name}` : channelId;
   }
+
+  // ── Mutations ───────────────────────────────────────────
+  const [createMessage, { loading: creating }] = useMutation(panelApi.createMessage, {
+    invalidate: [messagesUrl],
+    onSuccess: () => { setForm(emptyForm); setError(""); },
+    onError: (err) => setError(err.message || "Failed to create message"),
+  });
+
+  const [updateMessage, { loading: updating }] = useMutation(panelApi.updateMessage, {
+    invalidate: [messagesUrl],
+    onSuccess: () => { setForm(emptyForm); setError(""); },
+    onError: (err) => setError(err.message || "Failed to update message"),
+  });
+
+  const [deleteMsg, { loading: deleting }] = useMutation(panelApi.deleteMessage, {
+    invalidate: [messagesUrl],
+    onSuccess: () => setDeleteConfirmId(null),
+    onError: (err) => setError(err.message || "Failed to delete message"),
+  });
+
+  const saving = creating || updating;
 
   function editMessage(item) {
     const embed = parseEmbed(item.embed);
@@ -96,16 +101,12 @@ export function MessagesPage({ botKey, user }) {
       embedFooter: embed?.footer || "",
       embedColor: embed?.color || "#00aeff",
     });
-    // Scroll to the form
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   async function submit(event) {
     event.preventDefault();
     if (!isAdmin) return;
-
-    setSaving(true);
-    setError("");
 
     const payload = {
       channelId: form.channelId || null,
@@ -122,31 +123,10 @@ export function MessagesPage({ botKey, user }) {
           : null,
     };
 
-    try {
-      if (form.id) {
-        await panelApi.updateMessage(botKey, form.id, payload);
-      } else {
-        await panelApi.createMessage(botKey, payload);
-      }
-      setForm(emptyForm);
-      await loadData();
-    } catch (err) {
-      setError(err.message || "Failed to save message");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function deleteMessage(id) {
-    if (!isAdmin) return;
-
-    setError("");
-    try {
-      await panelApi.deleteMessage(botKey, id);
-      setDeleteConfirmId(null);
-      await loadData();
-    } catch (err) {
-      setError(err.message || "Failed to delete message");
+    if (form.id) {
+      await updateMessage(botKey, form.id, payload);
+    } else {
+      await createMessage(botKey, payload);
     }
   }
 
@@ -182,7 +162,6 @@ export function MessagesPage({ botKey, user }) {
                       {item.name}
                     </option>
                   ))}
-                  {/* Keep current channel visible even if not in sendable list */}
                   {form.channelId && !channelOptions.some((c) => c.id === form.channelId) && (
                     <option value={form.channelId}>{form.channelId} (current)</option>
                   )}
@@ -273,7 +252,7 @@ export function MessagesPage({ botKey, user }) {
       </SectionCard>
 
       <SectionCard title="All Messages" icon={MessageSquare}>
-        {loading ? (
+        {messagesLoading ? (
           <p className="text-muted">Loading...</p>
         ) : messages.length === 0 ? (
           <EmptyState
@@ -319,7 +298,8 @@ export function MessagesPage({ botKey, user }) {
                             Delete?
                             <button
                               className="btn--sm btn--danger"
-                              onClick={() => deleteMessage(item.id)}
+                              disabled={deleting}
+                              onClick={() => deleteMsg(botKey, item.id)}
                             >
                               Yes
                             </button>

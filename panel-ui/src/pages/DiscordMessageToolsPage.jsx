@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Pencil, Hash, MessageSquare, Download, RefreshCw, Save, X, Trash2, Copy } from "lucide-react";
-import { formatApiError, panelApi } from "../lib/api";
+import { panelApi } from "../lib/api";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { Alert } from "../components/Alert";
+import { useQuery, useMutation } from "../hooks/useQuery";
 
 const emptyForm = {
   channelId: "",
@@ -17,37 +18,68 @@ const emptyForm = {
 };
 
 export function DiscordMessageToolsPage({ botKey, user }) {
-  const [channels, setChannels] = useState([]);
   const [form, setForm] = useState(emptyForm);
-  const [loadingChannels, setLoadingChannels] = useState(true);
-  const [loadingMessage, setLoadingMessage] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
 
   const isAdmin = user?.role === "admin";
+
+  const { data: channelsData, loading: loadingChannels, error: channelsError, refresh: refreshChannels } = useQuery(
+    botKey ? `/panel/api/discord/sendable-channels?botKey=${encodeURIComponent(botKey)}` : null,
+    {
+      enabled: !!botKey,
+      onSuccess: () => {},
+    }
+  );
+
+  const channels = useMemo(
+    () => channelsData?.items || [],
+    [channelsData]
+  );
 
   const channelOptions = useMemo(
     () => channels.map((item) => ({ id: item.id || item.channelId || item.value, name: item.name || item.id })),
     [channels]
   );
 
-  async function loadChannels() {
-    setLoadingChannels(true);
-    setError("");
-    try {
-      const data = await panelApi.sendableChannels(botKey);
-      setChannels(data?.items || []);
-    } catch (err) {
-      setError(formatApiError(err, "Failed to load channels"));
-    } finally {
-      setLoadingChannels(false);
+  const [loadMessageMutate, { loading: loadingMessage }] = useMutation(
+    (args) => panelApi.discordMessage(args.botKey, args.payload),
+    {
+      onSuccess: (data) => {
+        const msg = data?.message;
+        setForm((prev) => ({
+          ...prev,
+          content: msg?.content || "",
+          embedTitle: msg?.embed?.title || "",
+          embedDescription: msg?.embed?.description || "",
+          embedFooter: msg?.embed?.footer || "",
+          embedColor: msg?.embed?.color || "#00aeff",
+          clearEmbed: false,
+        }));
+        setResult(data || null);
+        setError("");
+      },
+      onError: (err) => {
+        setError(err?.message || "Failed to load Discord message");
+      },
     }
-  }
+  );
 
-  useEffect(() => {
-    loadChannels();
-  }, [botKey]);
+  const [saveMessageMutate, { loading: saving }] = useMutation(
+    (args) => panelApi.editDiscordMessage(args.botKey, args.payload),
+    {
+      onSuccess: (data) => {
+        setResult(data || null);
+        setError("");
+      },
+      onError: (err) => {
+        setError(err?.message || "Failed to edit Discord message");
+      },
+    }
+  );
+
+  // Combine errors from query and mutations
+  const displayError = error || (channelsError ? (channelsError.message || "Failed to load channels") : "");
 
   async function loadMessage(event) {
     event.preventDefault();
@@ -55,32 +87,18 @@ export function DiscordMessageToolsPage({ botKey, user }) {
       setError("Channel ID and message ID are required");
       return;
     }
-
-    setLoadingMessage(true);
     setError("");
     setResult(null);
-
     try {
-      const data = await panelApi.discordMessage(botKey, {
-        channelId: form.channelId.trim(),
-        messageId: form.messageId.trim(),
+      await loadMessageMutate({
+        botKey,
+        payload: {
+          channelId: form.channelId.trim(),
+          messageId: form.messageId.trim(),
+        },
       });
-
-      const msg = data?.message;
-      setForm((prev) => ({
-        ...prev,
-        content: msg?.content || "",
-        embedTitle: msg?.embed?.title || "",
-        embedDescription: msg?.embed?.description || "",
-        embedFooter: msg?.embed?.footer || "",
-        embedColor: msg?.embed?.color || "#00aeff",
-        clearEmbed: false,
-      }));
-      setResult(data || null);
-    } catch (err) {
-      setError(formatApiError(err, "Failed to load Discord message"));
-    } finally {
-      setLoadingMessage(false);
+    } catch {
+      // error handled in onError
     }
   }
 
@@ -88,7 +106,6 @@ export function DiscordMessageToolsPage({ botKey, user }) {
     event.preventDefault();
     if (!isAdmin) return;
 
-    setSaving(true);
     setError("");
     setResult(null);
 
@@ -112,12 +129,9 @@ export function DiscordMessageToolsPage({ botKey, user }) {
     };
 
     try {
-      const data = await panelApi.editDiscordMessage(botKey, payload);
-      setResult(data || null);
-    } catch (err) {
-      setError(formatApiError(err, "Failed to edit Discord message"));
-    } finally {
-      setSaving(false);
+      await saveMessageMutate({ botKey, payload });
+    } catch {
+      // error handled in onError
     }
   }
 
@@ -131,7 +145,7 @@ export function DiscordMessageToolsPage({ botKey, user }) {
         subtitle="Load and edit existing bot messages by ID."
       />
 
-      {error ? <Alert type="error">{error}</Alert> : null}
+      {displayError ? <Alert type="error">{displayError}</Alert> : null}
 
       <SectionCard
         title="Select Message"
@@ -178,7 +192,7 @@ export function DiscordMessageToolsPage({ botKey, user }) {
           <button
             type="button"
             className="btn--ghost btn--sm"
-            onClick={loadChannels}
+            onClick={refreshChannels}
             disabled={loadingChannels}
           >
             <RefreshCw size={13} /> Refresh channels

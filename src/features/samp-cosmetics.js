@@ -350,6 +350,8 @@ async function getUserBoostEffects(db, userId) {
     cooldownMultiplier: 1.0,
     dailyBonus: 0,
     bountyAlert: false,
+    robLossMitigation: 0,
+    stashCapMultiplier: 1.0,
   };
   const owned = await getOwnedCosmeticIds(db, userId);
   for (const id of owned) {
@@ -367,12 +369,32 @@ async function getUserBoostEffects(db, userId) {
     if (typeof eff.dailyBonus === "number") effects.dailyBonus += eff.dailyBonus;
     if (eff.bountyAlert) effects.bountyAlert = true;
   }
+  // Mansion bonuses — lazy require to avoid circular import.
+  try {
+    const { getUserMansion } = require("./samp-prestige");
+    const mansion = await getUserMansion(db, userId);
+    const b = mansion?.bonuses;
+    if (b) {
+      if (typeof b.workMultiplier === "number") effects.workMultiplier *= (1 + b.workMultiplier);
+      if (typeof b.cooldownMultiplier === "number") {
+        effects.cooldownMultiplier = Math.min(effects.cooldownMultiplier, b.cooldownMultiplier);
+      }
+      if (typeof b.robLossMitigation === "number") {
+        effects.robLossMitigation = Math.max(effects.robLossMitigation, b.robLossMitigation);
+      }
+      if (typeof b.stashCapMultiplier === "number") {
+        effects.stashCapMultiplier = Math.max(effects.stashCapMultiplier, b.stashCapMultiplier);
+      }
+    }
+  } catch (_) { /* prestige module optional */ }
   effects.workMultiplier = Math.max(1.0, Math.min(4.0, effects.workMultiplier));
   effects.truckMultiplier = Math.max(1.0, Math.min(4.0, effects.truckMultiplier));
   effects.robJailBonus = Math.max(-0.5, Math.min(0.5, effects.robJailBonus));
   effects.robFinePenalty = Math.max(-0.75, Math.min(0, effects.robFinePenalty));
   effects.cooldownMultiplier = Math.max(0.25, Math.min(1.0, effects.cooldownMultiplier));
   effects.dailyBonus = Math.max(0, Math.min(500_000, effects.dailyBonus));
+  effects.robLossMitigation = Math.max(0, Math.min(0.5, effects.robLossMitigation));
+  effects.stashCapMultiplier = Math.max(1.0, Math.min(3.0, effects.stashCapMultiplier));
   return effects;
 }
 

@@ -1055,7 +1055,7 @@ const gameFaqChatCooldowns = new Map();
 
 function getGameFaqChatConfig() {
   const enabledRaw = process.env.GAME_FAQ_CHAT_ENABLED;
-  const enabled = enabledRaw == null ? true : enabledRaw === "1" || enabledRaw === "true";
+  const enabled = enabledRaw == null ? false : enabledRaw === "1" || enabledRaw === "true";
   const cooldownMs = Math.max(0, Number.parseInt(process.env.GAME_FAQ_CHAT_COOLDOWN_MS || "45000", 10) || 45000);
   const minScore = Math.max(1, Number.parseInt(process.env.GAME_FAQ_CHAT_MIN_SCORE || "15", 10) || 15);
   const minStrongScore = Math.max(minScore, Number.parseInt(process.env.GAME_FAQ_CHAT_STRONG_SCORE || "18", 10) || 18);

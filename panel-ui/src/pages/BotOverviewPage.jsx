@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import {
   LayoutDashboard, Wifi, WifiOff, Activity, Clock,
@@ -6,6 +6,7 @@ import {
   RefreshCw, Download, RotateCcw, Shield, Bot, BarChart2, History,
 } from "lucide-react";
 import { formatApiError, panelApi } from "../lib/api";
+import { useQuery, useMutation } from "../hooks/useQuery";
 import { PageHeader } from "../components/PageHeader";
 import { StatCard } from "../components/StatCard";
 import { SectionCard } from "../components/SectionCard";
@@ -18,75 +19,97 @@ function asNumber(value) {
 }
 
 export function BotOverviewPage({ bot, botKey, user }) {
-  const [status, setStatus] = useState(null);
-  const [analytics, setAnalytics] = useState(null);
-  const [history, setHistory] = useState([]);
-  const [strikes, setStrikes] = useState([]);
-  const [servers, setServers] = useState([]);
-  const [commands, setCommands] = useState([]);
-  const [busyAction, setBusyAction] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-
   const isAdmin = user?.role === "admin";
   const guildId = String(bot?.guild_id || "");
+  const enc = encodeURIComponent;
+
+  const statusUrl = '/api/status';
+  const analyticsUrl = `/panel/api/${enc(botKey)}/analytics?days=7`;
+  const historyUrl = `/panel/api/${enc(botKey)}/history?limit=8`;
+  const strikesUrl = `/panel/api/${enc(botKey)}/rate-limits/strikes?guildId=${guildId}`;
+  const serversUrl = `/panel/api/${enc(botKey)}/samp-servers`;
+  const commandsUrl = `/panel/api/${enc(botKey)}/commands?guildId=${guildId}`;
+
+  const deps = [botKey, guildId];
+  const queryOpts = { deps, enabled: !!botKey };
+
+  const {
+    data: statusData, loading: loadingStatus, error: errorStatus, refresh: refreshStatus,
+  } = useQuery(statusUrl, queryOpts);
+
+  const {
+    data: analyticsData, loading: loadingAnalytics, error: errorAnalytics, refresh: refreshAnalytics,
+  } = useQuery(analyticsUrl, queryOpts);
+
+  const {
+    data: historyData, loading: loadingHistory, error: errorHistory, refresh: refreshHistory,
+  } = useQuery(historyUrl, queryOpts);
+
+  const {
+    data: strikesData, loading: loadingStrikes, error: errorStrikes, refresh: refreshStrikes,
+  } = useQuery(strikesUrl, queryOpts);
+
+  const {
+    data: serversData, loading: loadingServers, error: errorServers, refresh: refreshServers,
+  } = useQuery(serversUrl, queryOpts);
+
+  const {
+    data: commandsData, loading: loadingCommands, error: errorCommands, refresh: refreshCommands,
+  } = useQuery(commandsUrl, queryOpts);
+
+  const [reconcile, { loading: loadingReconcile, error: errorReconcile }] = useMutation(
+    () => panelApi.accuracyReconcile({ guildId }),
+    {
+      invalidate: [statusUrl, analyticsUrl, historyUrl, strikesUrl, serversUrl, commandsUrl],
+    }
+  );
+
+  const [fullsync, { loading: loadingFullsync, error: errorFullsync }] = useMutation(
+    () => panelApi.accuracyFullsync({ guildId }),
+    {
+      invalidate: [statusUrl, analyticsUrl, historyUrl, strikesUrl, serversUrl, commandsUrl],
+    }
+  );
+
+  const status = statusData?.bot || null;
+  const analytics = analyticsData || null;
+  const history = historyData?.operations || [];
+  const strikes = strikesData?.users || [];
+  const servers = serversData?.servers || [];
+  const commands = commandsData?.commands || [];
+
+  const loading = loadingStatus || loadingAnalytics || loadingHistory || loadingStrikes || loadingServers || loadingCommands;
+  const busyAction = loadingReconcile ? "reconcile" : loadingFullsync ? "fullsync" : "";
+
+  const firstError = [errorStatus, errorAnalytics, errorHistory, errorStrikes, errorServers, errorCommands, errorReconcile, errorFullsync].find(Boolean);
+  const error = firstError ? formatApiError(firstError, "Some overview data failed to load") : "";
 
   const disabledCommands = useMemo(
     () => (commands || []).filter((item) => item?.enabled === false).length,
     [commands]
   );
 
-  async function loadOverview() {
-    setLoading(true);
-    setError("");
-
-    const results = await Promise.allSettled([
-      panelApi.status(),
-      panelApi.analytics(botKey, { days: "7" }),
-      panelApi.history(botKey, 8),
-      panelApi.rateLimitStrikes(botKey, guildId),
-      panelApi.sampServers(botKey),
-      panelApi.commands(botKey, guildId),
-    ]);
-
-    const [statusRes, analyticsRes, historyRes, strikesRes, serversRes, commandsRes] = results;
-
-    if (statusRes.status === "fulfilled") setStatus(statusRes.value?.bot || null);
-    if (analyticsRes.status === "fulfilled") setAnalytics(analyticsRes.value || null);
-    if (historyRes.status === "fulfilled") setHistory(historyRes.value?.operations || []);
-    if (strikesRes.status === "fulfilled") setStrikes(strikesRes.value?.users || []);
-    if (serversRes.status === "fulfilled") setServers(serversRes.value?.servers || []);
-    if (commandsRes.status === "fulfilled") setCommands(commandsRes.value?.commands || []);
-
-    const firstFailure = results.find((item) => item.status === "rejected");
-    if (firstFailure?.reason) {
-      setError(formatApiError(firstFailure.reason, "Some overview data failed to load"));
-    }
-
-    setLoading(false);
+  function refreshAll() {
+    refreshStatus();
+    refreshAnalytics();
+    refreshHistory();
+    refreshStrikes();
+    refreshServers();
+    refreshCommands();
   }
 
   async function runOpsAction(type) {
     if (!isAdmin) return;
-    setBusyAction(type);
-    setError("");
     try {
       if (type === "reconcile") {
-        await panelApi.accuracyReconcile({ guildId });
+        await reconcile();
       } else {
-        await panelApi.accuracyFullsync({ guildId });
+        await fullsync();
       }
-      await loadOverview();
-    } catch (err) {
-      setError(formatApiError(err, "Operation failed"));
-    } finally {
-      setBusyAction("");
+    } catch (_err) {
+      // error handled by useMutation
     }
   }
-
-  useEffect(() => {
-    loadOverview();
-  }, [botKey, guildId]);
 
   const base = `/bot/${botKey}`;
   const isOnline = status?.online;
@@ -101,7 +124,7 @@ export function BotOverviewPage({ bot, botKey, user }) {
           <button
             type="button"
             className="btn--ghost btn--sm"
-            onClick={loadOverview}
+            onClick={refreshAll}
             disabled={busyAction !== ""}
           >
             <RotateCcw size={13} />

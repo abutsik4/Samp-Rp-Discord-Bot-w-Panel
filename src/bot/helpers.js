@@ -138,55 +138,52 @@ async function isCommandCategoryAllowedInChannel(guildId, commandCategory, chann
 
 // ── Stats: increment / decrement / query ───────────────────────────────
 
-function incrementMessageCount(guildId, userId) {
-  _db.run(
-    `INSERT INTO user_stats (guild_id, user_id, message_count)
-     VALUES (?, ?, 1)
-     ON CONFLICT(guild_id, user_id)
-     DO UPDATE SET message_count = message_count + 1`,
-    [guildId, userId],
-    (err) => {
-      if (err) console.error("Error incrementing message count:", err);
-    }
-  );
-}
-
-function decrementMessageCount(guildId, userId, by = 1) {
-  const n = Number.isFinite(by) && by > 0 ? Math.floor(by) : 1;
-  _db.run(
-    `UPDATE user_stats
-     SET message_count = CASE
-       WHEN message_count - ? < 0 THEN 0
-       ELSE message_count - ?
-     END
-     WHERE guild_id = ? AND user_id = ?`,
-    [n, n, guildId, userId],
-    (err) => {
-      if (err) console.error("Error decrementing message count:", err);
-    }
-  );
-}
-
-function getUserMessageCount(guildId, userId) {
-  return new Promise((resolve, reject) => {
-    _db.get(
-      `SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`,
-      [guildId, userId],
-      (err, row) => {
-        if (err) return reject(err);
-        resolve(row ? row.message_count : 0);
-      }
+async function incrementMessageCount(guildId, userId) {
+  try {
+    await _dbRun(
+      `INSERT INTO user_stats (guild_id, user_id, message_count)
+       VALUES (?, ?, 1)
+       ON CONFLICT(guild_id, user_id)
+       DO UPDATE SET message_count = message_count + 1`,
+      [guildId, userId]
     );
-  });
+  } catch (err) {
+    console.error("Error incrementing message count:", err);
+  }
 }
 
-function resetStats() {
-  return new Promise((resolve, reject) => {
-    _db.run(`DELETE FROM user_stats`, (err) => {
-      if (err) return reject(err);
-      resolve();
-    });
-  });
+async function decrementMessageCount(guildId, userId, by = 1) {
+  const n = Number.isFinite(by) && by > 0 ? Math.floor(by) : 1;
+  try {
+    await _dbRun(
+      `UPDATE user_stats
+       SET message_count = CASE
+         WHEN message_count - ? < 0 THEN 0
+         ELSE message_count - ?
+       END
+       WHERE guild_id = ? AND user_id = ?`,
+      [n, n, guildId, userId]
+    );
+  } catch (err) {
+    console.error("Error decrementing message count:", err);
+  }
+}
+
+async function getUserMessageCount(guildId, userId) {
+  try {
+    const row = await _dbGet(
+      `SELECT message_count FROM user_stats WHERE guild_id = ? AND user_id = ?`,
+      [guildId, userId]
+    );
+    return row ? row.message_count : 0;
+  } catch (err) {
+    console.error("Error getting message count:", err);
+    return 0;
+  }
+}
+
+async function resetStats() {
+  await _dbRun(`DELETE FROM user_stats`);
 }
 
 // ── Leaderboard caching ────────────────────────────────────────────────
@@ -210,22 +207,21 @@ function setCachedLeaderboard(guildId, limit, data) {
   }
 }
 
-function getTopUsers(guildId, limit) {
+async function getTopUsers(guildId, limit) {
   const fetchLimit = limit + 10;
-  return new Promise((resolve, reject) => {
-    _db.all(
+  try {
+    return await _dbAll(
       `SELECT user_id, message_count
        FROM user_stats
        WHERE guild_id = ?
        ORDER BY message_count DESC
        LIMIT ?`,
-      [guildId, fetchLimit],
-      (err, rows) => {
-        if (err) return reject(err);
-        resolve(rows || []);
-      }
-    );
-  });
+      [guildId, fetchLimit]
+    ) || [];
+  } catch (err) {
+    console.error("Error getting top users:", err);
+    return [];
+  }
 }
 
 // ── Presence rotation ──────────────────────────────────────────────────

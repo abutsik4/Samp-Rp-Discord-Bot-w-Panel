@@ -18,7 +18,7 @@ function formatDateTime(value) {
   return d.toLocaleString("ru-RU", { timeZone: "Europe/Moscow" });
 }
 
-function generateUsersPage(users, PANEL_BASE, { username, userRole, message = null, error = null } = {}) {
+function generateUsersPage(users, PANEL_BASE, { username, userRole, csrfToken = '', message = null, error = null } = {}) {
   const rows = (Array.isArray(users) ? users : [])
     .map((u) => {
       const isSelf = username && u.username === username;
@@ -57,6 +57,7 @@ function generateUsersPage(users, PANEL_BASE, { username, userRole, message = nu
           <a class="btn btn-secondary" href="${PANEL_BASE}">← Dashboard</a>
           <a class="btn btn-secondary" href="${PANEL_BASE}/change-password">🔐 Password</a>
           <form method="post" action="${PANEL_BASE}/logout" style="margin:0">
+          <input type="hidden" name="_csrf" value="${csrfToken}">
             <button class="btn btn-danger" type="submit">Logout</button>
           </form>
         </div>
@@ -65,6 +66,7 @@ function generateUsersPage(users, PANEL_BASE, { username, userRole, message = nu
       <div class="card">
         <div class="card-title">Create new user</div>
         <form method="post" action="${PANEL_BASE}/users/create" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+          <input type="hidden" name="_csrf" value="${csrfToken}">
           <div class="form-group" style="margin:0">
             <label>Username</label>
             <input name="username" required minlength="3" maxlength="50" pattern="[a-zA-Z0-9_-]+" />
@@ -117,6 +119,7 @@ function generateUsersPage(users, PANEL_BASE, { username, userRole, message = nu
           </div>
           <div class="muted" style="margin-top:8px">User: <strong id="resetUser"></strong></div>
           <form method="post" action="${PANEL_BASE}/users/reset-password" style="margin-top:12px">
+          <input type="hidden" name="_csrf" value="${csrfToken}">
             <input type="hidden" name="username" id="resetUserInput" />
             <div class="form-group">
               <label>New password</label>
@@ -135,9 +138,11 @@ function generateUsersPage(users, PANEL_BASE, { username, userRole, message = nu
       </div>
 
       <form id="deleteForm" method="post" action="${PANEL_BASE}/users/delete" style="display:none">
+        <input type="hidden" name="_csrf" value="${csrfToken}">
         <input type="hidden" name="username" id="deleteUserInput" />
       </form>
       <form id="roleForm" method="post" action="${PANEL_BASE}/users/update-role" style="display:none">
+        <input type="hidden" name="_csrf" value="${csrfToken}">
         <input type="hidden" name="username" id="roleUserInput" />
         <input type="hidden" name="role" id="roleValueInput" />
       </form>

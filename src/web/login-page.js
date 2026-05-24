@@ -11,7 +11,7 @@ function escapeHtml(str) {
     .replaceAll("'", "&#039;");
 }
 
-function generateLoginPage(PANEL_BASE, { error = null, showSetupWarning = false } = {}) {
+function generateLoginPage(PANEL_BASE, { error = null, showSetupWarning = false, csrfToken = '' } = {}) {
   const body = `
     <div class="page-container" style="max-width:520px">
       <div class="topbar">
@@ -36,6 +36,7 @@ function generateLoginPage(PANEL_BASE, { error = null, showSetupWarning = false 
         ` : ""}
 
         <form method="post" action="${PANEL_BASE}/login">
+          <input type="hidden" name="_csrf" value="${csrfToken || ""}">
           <div class="form-group">
             <label>Username</label>
             <input name="username" autocomplete="username" required />

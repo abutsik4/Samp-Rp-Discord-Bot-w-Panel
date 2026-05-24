@@ -5,7 +5,13 @@ import {
   MessageSquare, Wrench, BarChart2, TrendingUp,
   CheckCircle2, Shield, History, Server, Gamepad2,
 } from "lucide-react";
+import { QueryClientProvider } from "./lib/QueryClient";
 import { authApi } from "./lib/api";
+import { useQuery } from "./hooks/useQuery";
+import { AppErrorBoundary } from "./components/AppErrorBoundary";
+import { ToastProvider } from "./components/Toaster";
+import { ResponsiveSidebar } from "./components/ResponsiveSidebar";
+import { BotHeader, ResponsiveSubnav } from "./components/ResponsiveSubnav";
 import { LoginPage } from "./pages/LoginPage";
 import { BotOverviewPage } from "./pages/BotOverviewPage";
 import { MessagesPage } from "./pages/MessagesPage";
@@ -35,9 +41,7 @@ function useSession() {
     }
   };
 
-  useEffect(() => {
-    refresh();
-  }, []);
+  useEffect(() => { refresh(); }, []);
 
   return { loading, user, setUser, refresh };
 }
@@ -55,15 +59,9 @@ function ProtectedRoute({ user, loading, children }) {
 }
 
 function DashboardHome({ user }) {
-  const [bots, setBots] = useState([]);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    authApi
-      .bots()
-      .then((data) => setBots(data?.items || []))
-      .catch((err) => setError(err.message || "Failed to load bots"));
-  }, []);
+  const { data: botsData, error: botsError } = useQuery("/panel/api/auth/bots");
+  const bots = botsData?.items || [];
+  const error = botsError?.message || null;
 
   return (
     <div>
@@ -106,18 +104,18 @@ function DashboardHome({ user }) {
   );
 }
 
-const BOT_NAV = [
-  { to: "",             end: true, icon: LayoutDashboard, label: "Overview" },
-  { to: "/messages",              icon: MessageSquare,    label: "Messages" },
-  { to: "/discord-tools",         icon: Wrench,           label: "Discord Tools" },
-  { to: "/stats",                 icon: BarChart2,        label: "Stats" },
-  { to: "/analytics",             icon: TrendingUp,       label: "Analytics" },
-  { to: "/verification",          icon: CheckCircle2,     label: "Verification" },
-  { to: "/moderation",            icon: Shield,           label: "Moderation" },
-  { to: "/automation",            icon: Bot,              label: "Automation" },
-  { to: "/operations",            icon: History,          label: "Operations" },
-  { to: "/samp-servers",          icon: Server,           label: "SA-MP Servers" },
-  { to: "/gameplay",              icon: Gamepad2,         label: "Gameplay" },
+const BOT_NAV_ITEMS = [
+  { key: "overview",    to: "",             end: true, icon: LayoutDashboard, label: "Overview" },
+  { key: "messages",    to: "/messages",              icon: MessageSquare,   label: "Messages" },
+  { key: "discord-tools", to: "/discord-tools",      icon: Wrench,           label: "Discord Tools" },
+  { key: "stats",       to: "/stats",                 icon: BarChart2,        label: "Stats" },
+  { key: "analytics",   to: "/analytics",             icon: TrendingUp,       label: "Analytics" },
+  { key: "verification", to: "/verification",          icon: CheckCircle2,    label: "Verification" },
+  { key: "moderation",  to: "/moderation",             icon: Shield,           label: "Moderation" },
+  { key: "automation",  to: "/automation",             icon: Bot,              label: "Automation" },
+  { key: "operations",  to: "/operations",             icon: History,           label: "Operations" },
+  { key: "samp-servers", to: "/samp-servers",           icon: Server,            label: "SA-MP Servers" },
+  { key: "gameplay",    to: "/gameplay",               icon: Gamepad2,          label: "Gameplay" },
 ];
 
 function BotLayout({ user }) {
@@ -136,6 +134,24 @@ function BotLayout({ user }) {
       .finally(() => setLoading(false));
   }, [botKey]);
 
+  // Resolve which subnav tab is active based on current path
+  const location = window.location.pathname;
+  const base = `/bot/${botKey}`;
+  const subnavItems = BOT_NAV_ITEMS.map((item) => ({
+    key: item.key,
+    icon: <item.icon size={13} />,
+    label: item.label,
+    onClick: () => {}, // NavLink handles navigation
+  }));
+
+  // Determine active key from path
+  const relativePath = location.startsWith(base) ? location.slice(base.length) || "/" : "/";
+  const activeKey = BOT_NAV_ITEMS.find((item) => {
+    const itemPath = item.to || "/";
+    if (item.end) return relativePath === "/";
+    return relativePath.startsWith(itemPath);
+  })?.key || "overview";
+
   if (loading) {
     return (
       <div className="fullscreen-center">
@@ -146,20 +162,20 @@ function BotLayout({ user }) {
 
   if (!bot) return <Navigate to="/" replace />;
 
-  const base = `/bot/${botKey}`;
-
   return (
     <div>
-      <div className="bot-header">
-        <div className="bot-header__name">
-          <Bot size={18} />
-          {bot.name || bot.key}
-        </div>
-        <span className="bot-header__guild">Guild: {bot.guild_id || "n/a"}</span>
-      </div>
+      <BotHeader
+        botName={bot.name || bot.key}
+        guildName={`Guild: ${bot.guild_id || "n/a"}`}
+        botIcon={<Bot size={18} style={{ color: "var(--color-accent)" }} />}
+        subnavItems={subnavItems}
+        activeKey={activeKey}
+        onTabChange={() => {}}
+      />
 
+      {/* Actual nav links rendered as NavLink for routing */}
       <nav className="subnav">
-        {BOT_NAV.map(({ to, end, icon: Icon, label }) => (
+        {BOT_NAV_ITEMS.map(({ to, end, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={`${base}${to}`}
@@ -190,67 +206,25 @@ function BotLayout({ user }) {
   );
 }
 
-function AppLayout({ user, onLogout, children }) {
-  const navigate = useNavigate();
-
+function AppLayout({ user, onLogout }) {
   return (
     <div className="layout">
-      <aside className="sidebar">
-        <div className="sidebar-brand">
-          <Bot size={20} />
-          JepsenCloud Panel
-        </div>
-
-        <span className="sidebar-section-label">Navigation</span>
-
-        <nav className="sidebar-nav">
-          <NavLink
-            to="/"
-            end
-            className={({ isActive }) => `sidebar-link${isActive ? " active" : ""}`}
-          >
-            <LayoutDashboard size={16} />
-            Dashboard
-          </NavLink>
-
-          {user?.role === "admin" && (
-            <NavLink
-              to="/users"
-              className={({ isActive }) => `sidebar-link${isActive ? " active" : ""}`}
-            >
-              <Users size={16} />
-              Users
-            </NavLink>
-          )}
-        </nav>
-
-        <div className="sidebar-footer">
-          <div className="sidebar-user">
-            <User size={14} />
-            <span className="username">{user?.username}</span>
-            <span className={`badge ${user?.role === "admin" ? "badge--admin" : ""}`}>
-              {user?.role}
-            </span>
-          </div>
-          <button
-            className="sidebar-link sidebar-link--danger"
-            onClick={async () => {
-              await onLogout();
-              navigate("/login", { replace: true });
-            }}
-          >
-            <LogOut size={16} />
-            Log out
-          </button>
-        </div>
-      </aside>
-      <main className="content">{children}</main>
+      <ResponsiveSidebar user={user} onLogout={onLogout} />
+      <main className="content">
+        <Routes>
+          <Route path="/"             element={<DashboardHome user={user} />} />
+          <Route path="/users"        element={<UserManagementPage user={user} />} />
+          <Route path="/bot/:botKey/*" element={<BotLayout user={user} />} />
+          <Route path="*"             element={<Navigate to="/" replace />} />
+        </Routes>
+      </main>
     </div>
   );
 }
 
 export function App() {
   const session = useSession();
+  const navigate = useNavigate();
 
   const actions = useMemo(
     () => ({
@@ -262,6 +236,7 @@ export function App() {
           await authApi.logout();
         } finally {
           session.setUser(null);
+          navigate("/login", { replace: true });
         }
       },
     }),
@@ -269,33 +244,30 @@ export function App() {
   );
 
   return (
-    <Routes>
-      <Route
-        path="/login"
-        element={
-          session.user ? (
-            <Navigate to="/" replace />
-          ) : (
-            <LoginPage onLoginSuccess={actions.onLoginSuccess} loading={session.loading} />
-          )
-        }
-      />
+    <QueryClientProvider><AppErrorBoundary>
+      <ToastProvider>
+        <Routes>
+          <Route
+            path="/login"
+            element={
+              session.user ? (
+                <Navigate to="/" replace />
+              ) : (
+                <LoginPage onLoginSuccess={actions.onLoginSuccess} loading={session.loading} />
+              )
+            }
+          />
 
-      <Route
-        path="/*"
-        element={
-          <ProtectedRoute user={session.user} loading={session.loading}>
-            <AppLayout user={session.user} onLogout={actions.onLogout}>
-              <Routes>
-                <Route path="/"             element={<DashboardHome user={session.user} />} />
-                <Route path="/users"        element={<UserManagementPage user={session.user} />} />
-                <Route path="/bot/:botKey/*" element={<BotLayout user={session.user} />} />
-                <Route path="*"             element={<Navigate to="/" replace />} />
-              </Routes>
-            </AppLayout>
-          </ProtectedRoute>
-        }
-      />
-    </Routes>
+          <Route
+            path="/*"
+            element={
+              <ProtectedRoute user={session.user} loading={session.loading}>
+                <AppLayout user={session.user} onLogout={actions.onLogout} />
+              </ProtectedRoute>
+            }
+          />
+        </Routes>
+      </ToastProvider>
+    </AppErrorBoundary></QueryClientProvider>
   );
 }

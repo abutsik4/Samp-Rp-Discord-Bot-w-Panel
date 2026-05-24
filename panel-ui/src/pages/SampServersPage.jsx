@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Pencil, Plus, RefreshCw, Save, Server, Square, Trash2, X } from "lucide-react";
 import { panelApi } from "../lib/api";
+import { useQuery, useMutation } from "../hooks/useQuery";
 import { Alert } from "../components/Alert";
 import { EmptyState } from "../components/EmptyState";
 import { PageHeader } from "../components/PageHeader";
@@ -17,30 +18,98 @@ const EMPTY_FORM = {
 };
 
 export function SampServersPage({ bot }) {
-  const [servers, setServers] = useState([]);
-  const [channels, setChannels] = useState([]);
+  const serversUrl = `/panel/api/${encodeURIComponent(bot.key)}/samp-servers`;
+  const channelsUrl = `/panel/api/${encodeURIComponent(bot.key)}/sendable-channels`;
+
+  const { data: serversData, loading: serversLoading, error: serversError, refresh: refreshServers } = useQuery(serversUrl, { deps: [bot.key] });
+  const { data: channelsData, loading: channelsLoading, error: channelsError } = useQuery(channelsUrl, { deps: [bot.key] });
+
+  const servers = serversData?.servers || [];
+  const channels = channelsData?.items || [];
+
+  const loading = serversLoading || channelsLoading;
+  const queryError = serversError || channelsError;
+
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState("");
-  const [error, setError] = useState("");
+  const [mutationError, setMutationError] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
 
-  async function loadAll() {
-    setError("");
-    try {
-      const [s, c] = await Promise.all([
-        panelApi.sampServers(bot.key),
-        panelApi.sendableChannels(bot.key),
-      ]);
-      setServers(s.servers || []);
-      setChannels(c.items || []);
-    } catch (e) {
-      setError(e.message || "Failed to load SAMP servers");
-    }
-  }
+  const error = queryError?.message || mutationError;
 
-  useEffect(() => {
-    loadAll();
-  }, [bot.key]);
+  const [addServer, { loading: adding }] = useMutation(
+    (payload) => panelApi.addSampServer(bot.key, payload),
+    {
+      invalidate: [serversUrl],
+      onSuccess: () => {
+        setEditingId("");
+        setForm(EMPTY_FORM);
+        setMutationError("");
+      },
+      onError: (err) => {
+        setMutationError(err.message || "Failed to add server");
+      },
+    }
+  );
+
+  const [updateServer, { loading: updating }] = useMutation(
+    ({ serverId, payload }) => panelApi.updateSampServer(bot.key, serverId, payload),
+    {
+      invalidate: [serversUrl],
+      onSuccess: () => {
+        setEditingId("");
+        setForm(EMPTY_FORM);
+        setMutationError("");
+      },
+      onError: (err) => {
+        setMutationError(err.message || "Failed to update server");
+      },
+    }
+  );
+
+  const [removeServer, { loading: removing }] = useMutation(
+    (serverId) => panelApi.removeSampServer(bot.key, serverId),
+    {
+      invalidate: [serversUrl],
+      onSuccess: () => {
+        setConfirmDeleteId(null);
+        setMutationError("");
+      },
+      onError: (err) => {
+        setMutationError(err.message || "Failed to delete server");
+      },
+    }
+  );
+
+  const [startServer, { loading: starting }] = useMutation(
+    (serverId) => panelApi.startSampServer(bot.key, serverId),
+    {
+      invalidate: [serversUrl],
+      onError: (err) => {
+        setMutationError(err.message || "Failed to start server");
+      },
+    }
+  );
+
+  const [stopServer, { loading: stopping }] = useMutation(
+    (serverId) => panelApi.stopSampServer(bot.key, serverId),
+    {
+      invalidate: [serversUrl],
+      onError: (err) => {
+        setMutationError(err.message || "Failed to stop server");
+      },
+    }
+  );
+
+  const [refreshServer, { loading: refreshing }] = useMutation(
+    (serverId) => panelApi.refreshSampServer(bot.key, serverId),
+    {
+      invalidate: [serversUrl],
+      onError: (err) => {
+        setMutationError(err.message || "Failed to refresh server");
+      },
+    }
+  );
 
   function handleEdit(s) {
     setEditingId(s.server_id);
@@ -53,52 +122,46 @@ export function SampServersPage({ bot }) {
   }
 
   async function handleSave() {
-    setError("");
+    setMutationError("");
     try {
       if (editingId) {
-        await panelApi.updateSampServer(bot.key, editingId, form);
+        await updateServer({ serverId: editingId, payload: form });
       } else {
-        await panelApi.addSampServer(bot.key, form);
+        await addServer(form);
       }
-      setEditingId("");
-      setForm(EMPTY_FORM);
-      loadAll();
-    } catch (e) {
-      setError(e.message || "Failed to save server");
+    } catch {
+      // error handled in onError callback
     }
   }
 
   async function handleDelete(serverId) {
-    setError("");
+    setMutationError("");
     try {
-      await panelApi.removeSampServer(bot.key, serverId);
-      setConfirmDeleteId(null);
-      loadAll();
-    } catch (e) {
-      setError(e.message || "Failed to delete server");
+      await removeServer(serverId);
+    } catch {
+      // error handled in onError callback
     }
   }
 
   async function handleToggle(s) {
-    setError("");
+    setMutationError("");
     try {
       if (s.enabled) {
-        await panelApi.stopSampServer(bot.key, s.server_id);
+        await stopServer(s.server_id);
       } else {
-        await panelApi.startSampServer(bot.key, s.server_id);
+        await startServer(s.server_id);
       }
-      loadAll();
-    } catch (e) {
-      setError(e.message || "Failed to toggle server");
+    } catch {
+      // error handled in onError callback
     }
   }
 
   async function handleRefresh(serverId) {
-    setError("");
+    setMutationError("");
     try {
-      await panelApi.refreshSampServer(bot.key, serverId);
-    } catch (e) {
-      setError(e.message || "Failed to refresh server");
+      await refreshServer(serverId);
+    } catch {
+      // error handled in onError callback
     }
   }
 
@@ -112,7 +175,7 @@ export function SampServersPage({ bot }) {
 
       {error && <Alert type="error">{error}</Alert>}
 
-      {servers.length === 0 ? (
+      {servers.length === 0 && !loading ? (
         <EmptyState
           icon={Server}
           title="No servers configured"
@@ -146,6 +209,7 @@ export function SampServersPage({ bot }) {
                   className="btn--icon"
                   onClick={() => handleRefresh(s.server_id)}
                   title="Refresh"
+                  disabled={refreshing}
                 >
                   <RefreshCw size={13} />
                 </button>
@@ -153,6 +217,7 @@ export function SampServersPage({ bot }) {
                   className="btn--icon"
                   onClick={() => handleToggle(s)}
                   title={s.enabled ? "Stop" : "Start"}
+                  disabled={starting || stopping}
                 >
                   <Square size={13} />
                 </button>
@@ -162,6 +227,7 @@ export function SampServersPage({ bot }) {
                     <button
                       className="btn--sm btn--danger"
                       onClick={() => handleDelete(s.server_id)}
+                      disabled={removing}
                     >
                       Yes
                     </button>
@@ -247,7 +313,7 @@ export function SampServersPage({ bot }) {
           </label>
         </div>
         <div className="row-actions mt-3">
-          <button className="btn--sm" onClick={handleSave}>
+          <button className="btn--sm" onClick={handleSave} disabled={adding || updating}>
             <Save size={13} />
             {editingId ? "Save" : "Create"}
           </button>

@@ -1705,6 +1705,28 @@ async function handleBalance(interaction, db) {
   if (stashLines.length > 0) {
     fields.push({ name: "🕶️ Тайник", value: stashLines.join("\n"), inline: false });
   }
+  // Prestige (mansion / aircraft / crew) — best-effort, never blocks /balance.
+  try {
+    const { getUserMansion, getUserAircraft, getUserCrew } = require("./samp-prestige");
+    const [mansion, aircraft, crew] = await Promise.all([
+      getUserMansion(db, userId),
+      getUserAircraft(db, userId),
+      getUserCrew(db, userId),
+    ]);
+    if (mansion || (aircraft && aircraft.length) || (crew && crew.length)) {
+      const prestigeLines = [];
+      if (mansion) {
+        const benefitParts = [];
+        if (mansion.dailyRent) benefitParts.push(`+${fmtMoney(mansion.dailyRent)}/24ч`);
+        if (mansion.bonuses?.robLossMitigation) benefitParts.push(`☂️ −${Math.round(mansion.bonuses.robLossMitigation * 100)}% потерь`);
+        const benefitNote = benefitParts.length ? ` _(${benefitParts.join(" · ")})_` : "";
+        prestigeLines.push(`${mansion.emoji} **${mansion.name}** _(${mansion.district})_${benefitNote}`);
+      }
+      if (aircraft && aircraft.length) prestigeLines.push(`✈️ ${aircraft.map((a) => `${a.emoji} ${a.name}`).join(", ")}`);
+      if (crew && crew.length) prestigeLines.push(`👥 Команда: ${crew.map((m) => `${m.role.emoji} ${m.role.name}`).join(", ")}`);
+      fields.push({ name: "🏖️ Резиденция и команда", value: prestigeLines.join("\n"), inline: false });
+    }
+  } catch (e) { console.error("[samp-life] prestige profile field error", e); }
   fields.push({ name: "⚖️ Статус", value: jailText, inline: false });
 
   const embed = new EmbedBuilder()
@@ -1762,7 +1784,20 @@ async function handleWork(interaction, db) {
   if (!(await checkAndConsumeCooldown(interaction, db, userId, "work"))) return;
 
   const jobs = ["разносил пиццу", "мыл тачку босса", "грузил ящики в порту", "таскал колёса на шинке"]; 
-  const job = pick(jobs);
+  let job = pick(jobs);
+  let aircraftFlavor = false;
+  let aircraftBonus = 0;
+  // Aircraft owners get a rare aviation-flavored job with a flat bonus.
+  try {
+    const { AIRCRAFT_WORK_FLAVOR_CHANCE, AIRCRAFT_WORK_FLAVOR_BONUS_MIN, AIRCRAFT_WORK_FLAVOR_BONUS_MAX, AIRCRAFT_WORK_FLAVOR_LINES } = require("./constants/prestige");
+    const { getUserAircraft } = require("./samp-prestige");
+    const owned = await getUserAircraft(db, userId).catch(() => []);
+    if (owned && owned.length > 0 && Math.random() < AIRCRAFT_WORK_FLAVOR_CHANCE) {
+      job = pick(AIRCRAFT_WORK_FLAVOR_LINES);
+      aircraftBonus = randInt(AIRCRAFT_WORK_FLAVOR_BONUS_MIN, AIRCRAFT_WORK_FLAVOR_BONUS_MAX);
+      aircraftFlavor = true;
+    }
+  } catch (_) { /* prestige module optional */ }
   let levelRow = null;
   try {
     levelRow = await dbGet(db, "SELECT level FROM user_levels WHERE guild_id = ? AND user_id = ?", [interaction.guild?.id, userId]);
@@ -1772,13 +1807,13 @@ async function handleWork(interaction, db) {
   const level = levelRow?.level || 1;
   const boosts = await getUserBoostEffects(db, userId).catch(() => null);
   const baseEarnings = Math.floor(randInt(100, 500) * (1 + level * 0.1));
-  const earnings = Math.floor(baseEarnings * (boosts?.workMultiplier || 1));
-  const boostDelta = earnings - baseEarnings;
+  const earnings = Math.floor(baseEarnings * (boosts?.workMultiplier || 1)) + aircraftBonus;
+  const boostDelta = earnings - baseEarnings - aircraftBonus;
 
   const opKey = makeInteractionOpKey(interaction, "work");
   await withTransaction(db, async () => {
     await adjustMoney(db, userId, earnings);
-    const inserted = await addLedgerUnique(db, "work", null, userId, earnings, opKey, { job, base: baseEarnings, boost: boostDelta });
+    const inserted = await addLedgerUnique(db, "work", null, userId, earnings, opKey, { job, base: baseEarnings, boost: boostDelta, aircraft_flavor: aircraftFlavor, aircraft_bonus: aircraftBonus });
     if (!inserted) throw new Error("DUPLICATE_OPERATION");
     // Apply cooldown multiplier from boosts.
     if (boosts && boosts.cooldownMultiplier < 1) {
@@ -1789,8 +1824,9 @@ async function handleWork(interaction, db) {
 
   const after = await getUserRow(db, userId);
   const boostNote = boostDelta > 0 ? ` _(бонус лицензии: +${fmtMoney(boostDelta)})_` : "";
+  const aviationNote = aircraftFlavor ? ` ✈️ _(авиа-бонус: +${fmtMoney(aircraftBonus)})_` : "";
   const questNote = await maybeCompleteOnboarding(db, userId, "work");
-  await interaction.editReply(`🛠 Ты ${job} и поднял **${fmtMoney(earnings)}**.${boostNote} Баланс: **${fmtMoney(after.money)}**${questNote}`);
+  await interaction.editReply(`🛠 Ты ${job} и поднял **${fmtMoney(earnings)}**.${boostNote}${aviationNote} Баланс: **${fmtMoney(after.money)}**${questNote}`);
 }
 
 async function handleTruck(interaction, db) {
@@ -1909,6 +1945,23 @@ async function handleRob(interaction, db) {
       }
     } catch (_) {}
 
+    // Bodyguard / private security intercept (consumes daily counter on victim).
+    let bgLootMitigation = 0;
+    try {
+      const { consumeBodyguardIntercept } = require("./samp-prestige");
+      const bg = await consumeBodyguardIntercept(db, target.id);
+      if (bg?.intercepted) {
+        const roleName = bg.role === "private_security" ? "Частная охрана" : "Телохранитель";
+        const remainingNote = bg.remaining > 0 ? ` _(остались интерсепты: ${bg.remaining})_` : "";
+        await setChallengePairCooldown(db, userId, target.id, "rob", robPairReadyAt);
+        await interaction.editReply(
+          `🛡️ **${roleName}** жертвы перехватил тебя. Ограбление сорвано, никто никому ничего.${remainingNote}`
+        );
+        return;
+      }
+      if (bg?.mitigated) bgLootMitigation = bg.mitigated;
+    } catch (e) { console.error("[samp-life] bodyguard hook error", e); }
+
     // 40% caught (higher risk PvP)
     const caught = Math.random() < 0.40;
     if (caught) {
@@ -1943,7 +1996,12 @@ async function handleRob(interaction, db) {
     // Success: steal 5-15% of victim balance (min 500, max 50,000)
     const pct = randInt(5, 15) / 100;
     const rawSteal = Math.floor(Number(victim.money) * pct);
-    const loot = Math.min(PVP_AMOUNT_LIMITS.pvpRobberyMaxLoot, Math.max(PVP_AMOUNT_LIMITS.pvpRobberyMinLoot, rawSteal));
+    let loot = Math.min(PVP_AMOUNT_LIMITS.pvpRobberyMaxLoot, Math.max(PVP_AMOUNT_LIMITS.pvpRobberyMinLoot, rawSteal));
+    if (bgLootMitigation > 0) loot = Math.max(1, Math.floor(loot * (1 - bgLootMitigation)));
+    // Mansion: victim's residence security reduces loot taken.
+    const victimBoosts = await getUserBoostEffects(db, target.id).catch(() => null);
+    const mansionMitigation = Math.max(0, Math.min(0.5, Number(victimBoosts?.robLossMitigation || 0)));
+    if (mansionMitigation > 0) loot = Math.max(1, Math.floor(loot * (1 - mansionMitigation)));
     const actualLoot = Math.min(loot, Number(victim.money));
 
     if (actualLoot <= 0) { await interaction.editReply("У жертвы нет виртов — обчищать нечего."); return; }
@@ -1962,7 +2020,9 @@ async function handleRob(interaction, db) {
     });
 
     const after = await getUserRow(db, userId);
-    await interaction.editReply(`🕶️ Ты обчистил <@${target.id}> на **${fmtMoney(stolenAmount)}**! Баланс: **${fmtMoney(after.money)}**`);
+    const psNote = bgLootMitigation > 0 ? ` _(охрана подранила добычу: −${Math.round(bgLootMitigation * 100)}%)_` : "";
+    const mansionNote = mansionMitigation > 0 ? ` _(резиденция жертвы охраняется: −${Math.round(mansionMitigation * 100)}%)_` : "";
+    await interaction.editReply(`🕶️ Ты обчистил <@${target.id}> на **${fmtMoney(stolenAmount)}**!${psNote}${mansionNote} Баланс: **${fmtMoney(after.money)}**`);
     return;
   }
 

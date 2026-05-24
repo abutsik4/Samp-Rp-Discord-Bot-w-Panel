@@ -16,7 +16,7 @@ const { tryAnswerGameFaqInChat } = require("../../features/game-faq");
 const { createWhitelistSet, getCountableChannelIds, isChannelWhitelistedForCounting } = require("../../features/message-counting-rules");
 
 const SAMP_GAME_COMMAND_CATEGORY = "samp_game";
-const SAMP_GAME_COMMAND_BYPASS_USER_ID = "143160841225633792";
+const SAMP_GAME_COMMAND_BYPASS_USER_ID = process.env.SAMP_GAME_COMMAND_BYPASS_USER_ID || process.env.OWNER_ID || "143160841225633792";
 
 /**
  * Register all Discord event handlers on the client.

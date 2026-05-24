@@ -1,31 +1,27 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Navigate } from "react-router-dom";
 import { Users, Key, Trash2, UserPlus, Lock, Save, X, Shield } from "lucide-react";
 import { authApi, formatApiError } from "../lib/api";
+import { useQuery, useMutation } from "../hooks/useQuery";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { Alert } from "../components/Alert";
 
 export function UserManagementPage({ user }) {
-  const [users, setUsers] = useState([]);
-  const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
   // Create form state
   const [newUsername, setNewUsername] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState("user");
-  const [creating, setCreating] = useState(false);
 
   // Reset password modal state
   const [resetTarget, setResetTarget] = useState(null);
   const [resetPassword, setResetPassword] = useState("");
-  const [resetting, setResetting] = useState(false);
 
   // Change own password state
   const [selfCurrentPw, setSelfCurrentPw] = useState("");
   const [selfNewPw, setSelfNewPw] = useState("");
-  const [changingOwnPw, setChangingOwnPw] = useState(false);
 
   // Inline delete confirm state
   const [deleteConfirm, setDeleteConfirm] = useState(null);
@@ -34,108 +30,45 @@ export function UserManagementPage({ user }) {
     return <Navigate to="/" replace />;
   }
 
-  async function loadUsers() {
-    setError("");
-    try {
-      const data = await authApi.users();
-      setUsers(data?.users || []);
-    } catch (e) {
-      setError(formatApiError(e, "Failed to load users"));
-    }
-  }
+  // ── Queries ─────────────────────────────────────────────
+  const usersUrl = "/panel/api/auth/users";
+  const { data: usersData, error: queryError, refresh: refreshUsers } = useQuery(usersUrl);
+  const users = usersData?.users || [];
+  const error = queryError?.message || null;
 
-  useEffect(() => {
-    loadUsers();
-  }, []);
-
+  // ── Mutations ───────────────────────────────────────────
   function flash(msg) {
     setSuccess(msg);
     setTimeout(() => setSuccess(""), 4000);
   }
 
-  async function handleCreate(e) {
-    e.preventDefault();
-    setError("");
-    setCreating(true);
-    try {
-      await authApi.createUser(newUsername, newPassword, newRole);
-      setNewUsername("");
-      setNewPassword("");
-      setNewRole("user");
-      flash(`User "${newUsername}" created.`);
-      await loadUsers();
-    } catch (e) {
-      setError(formatApiError(e, "Failed to create user"));
-    } finally {
-      setCreating(false);
-    }
-  }
+  const [createUserMut, { loading: creating }] = useMutation(authApi.createUser, {
+    invalidate: [usersUrl],
+    onSuccess: () => { setNewUsername(""); setNewPassword(""); setNewRole("user"); flash(`User "${newUsername}" created.`); },
+    onError: (e) => { /* error displayed via queryError after invalidation */ },
+  });
 
-  async function handleDelete(username) {
-    setError("");
-    try {
-      await authApi.deleteUser(username);
-      flash(`User "${username}" deleted.`);
-      setDeleteConfirm(null);
-      await loadUsers();
-    } catch (e) {
-      setError(formatApiError(e, "Failed to delete user"));
-    }
-  }
+  const [deleteUserMut, { loading: deleting }] = useMutation(authApi.deleteUser, {
+    invalidate: [usersUrl],
+    onSuccess: () => { setDeleteConfirm(null); flash(`User deleted.`); },
+  });
 
-  async function handleRoleChange(username, role) {
-    setError("");
-    try {
-      await authApi.updateUserRole(username, role);
-      flash(`Role updated for "${username}".`);
-      await loadUsers();
-    } catch (e) {
-      setError(formatApiError(e, "Failed to update role"));
-    }
-  }
+  const [updateRoleMut] = useMutation(authApi.updateUserRole, {
+    invalidate: [usersUrl],
+    onSuccess: () => flash("Role updated."),
+  });
 
-  async function handleResetPassword(e) {
-    e.preventDefault();
-    if (!resetTarget) return;
-    setError("");
-    setResetting(true);
-    try {
-      await authApi.adminResetPassword(resetTarget, resetPassword);
-      flash(`Password reset for "${resetTarget}".`);
-      setResetTarget(null);
-      setResetPassword("");
-    } catch (e) {
-      setError(formatApiError(e, "Failed to reset password"));
-    } finally {
-      setResetting(false);
-    }
-  }
+  const [resetPasswordMut, { loading: resetting }] = useMutation(authApi.adminResetPassword, {
+    onSuccess: () => { flash(`Password reset for "${resetTarget}".`); setResetTarget(null); setResetPassword(""); },
+    onError: (e) => { /* error shown via alert */ },
+  });
 
-  async function handleChangeSelfPassword(e) {
-    e.preventDefault();
-    setError("");
-    setChangingOwnPw(true);
-    try {
-      await authApi.changeSelfPassword(selfCurrentPw, selfNewPw);
-      flash("Your password has been changed.");
-      setSelfCurrentPw("");
-      setSelfNewPw("");
-    } catch (e) {
-      setError(formatApiError(e, "Failed to change password"));
-    } finally {
-      setChangingOwnPw(false);
-    }
-  }
+  const [changeSelfPwMut, { loading: changingOwnPw }] = useMutation(authApi.changeSelfPassword, {
+    onSuccess: () => { flash("Your password has been changed."); setSelfCurrentPw(""); setSelfNewPw(""); },
+  });
 
-  function openModal(u) {
-    setResetTarget(u.username);
-    setResetPassword("");
-  }
-
-  function closeModal() {
-    setResetTarget(null);
-    setResetPassword("");
-  }
+  // ── Error aggregation ───────────────────────────────────
+  const displayError = error || null;
 
   return (
     <div className="page">
@@ -145,22 +78,22 @@ export function UserManagementPage({ user }) {
         subtitle="Manage panel accounts and access levels."
       />
 
-      {error ? <Alert type="error">{error}</Alert> : null}
+      {displayError ? <Alert type="error">{displayError}</Alert> : null}
       {success ? <Alert type="success">{success}</Alert> : null}
 
       {/* Reset Password Modal */}
       {resetTarget ? (
-        <div className="modal-overlay" onClick={closeModal}>
+        <div className="modal-overlay" onClick={() => { setResetTarget(null); setResetPassword(""); }}>
           <div className="modal-box" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div className="modal-title">
                 <Key size={16} /> Reset Password: {resetTarget}
               </div>
-              <button className="btn--icon" onClick={closeModal}>
+              <button className="btn--icon" onClick={() => { setResetTarget(null); setResetPassword(""); }}>
                 <X size={13} />
               </button>
             </div>
-            <form onSubmit={handleResetPassword}>
+            <form onSubmit={(e) => { e.preventDefault(); resetPasswordMut(resetTarget, resetPassword); }}>
               <div className="form-row">
                 <label>New Password</label>
                 <div className="input-group">
@@ -182,7 +115,7 @@ export function UserManagementPage({ user }) {
                 <button
                   type="button"
                   className="btn--ghost btn--sm"
-                  onClick={closeModal}
+                  onClick={() => { setResetTarget(null); setResetPassword(""); }}
                 >
                   Cancel
                 </button>
@@ -231,7 +164,7 @@ export function UserManagementPage({ user }) {
                     ) : (
                       <select
                         value={u.role}
-                        onChange={(e) => handleRoleChange(u.username, e.target.value)}
+                        onChange={(e) => updateRoleMut(u.username, e.target.value)}
                       >
                         <option value="admin">admin</option>
                         <option value="user">user</option>
@@ -242,7 +175,7 @@ export function UserManagementPage({ user }) {
                     <div className="row-actions">
                       <button
                         className="btn--icon"
-                        onClick={() => openModal(u)}
+                        onClick={() => { setResetTarget(u.username); setResetPassword(""); }}
                         title="Reset Password"
                       >
                         <Key size={13} />
@@ -253,7 +186,7 @@ export function UserManagementPage({ user }) {
                             Delete?{" "}
                             <button
                               className="btn--sm btn--danger"
-                              onClick={() => handleDelete(u.username)}
+                              onClick={() => deleteUserMut(u.username)}
                             >
                               Yes
                             </button>
@@ -285,7 +218,7 @@ export function UserManagementPage({ user }) {
 
       {/* Create User */}
       <SectionCard title="Create New User" icon={UserPlus}>
-        <form onSubmit={handleCreate}>
+        <form onSubmit={(e) => { e.preventDefault(); createUserMut(newUsername, newPassword, newRole); }}>
           <div className="form-grid">
             <div className="form-row">
               <label>Username</label>
@@ -332,7 +265,7 @@ export function UserManagementPage({ user }) {
 
       {/* Change own password */}
       <SectionCard title="Change Your Password" icon={Lock}>
-        <form onSubmit={handleChangeSelfPassword}>
+        <form onSubmit={(e) => { e.preventDefault(); changeSelfPwMut(selfCurrentPw, selfNewPw); }}>
           <div className="form-grid">
             <div className="form-row">
               <label>Current Password</label>

@@ -9,6 +9,8 @@ const path = require('path');
  */
 
 const MODEL_PATH = path.join(__dirname, '../../data/markov-model.json');
+const MAX_STATES = 50000;        // Maximum Markov chain states before pruning
+const MAX_MODEL_FILE_SIZE = 5 * 1024 * 1024; // Refuse to load models larger than 5 MB
 
 class MarkovChain {
   constructor(order = 2) {
@@ -68,6 +70,31 @@ class MarkovChain {
   reset() {
     this.chain = {};
     this.startWords = [];
+  }
+
+  /**
+   * Prune least-used states to keep the model under MAX_STATES.
+   * Keeps the most frequently used states (longest transition arrays = most trained).
+   */
+  prune(maxStates = MAX_STATES) {
+    const stateCount = Object.keys(this.chain).length;
+    if (stateCount <= maxStates) return 0;
+
+    // Sort states by number of transitions ascending (least-used first)
+    const entries = Object.entries(this.chain)
+      .sort((a, b) => a[1].length - b[1].length);
+
+    const toRemove = stateCount - maxStates;
+    let removed = 0;
+    for (let i = 0; i < toRemove && i < entries.length; i++) {
+      const state = entries[i][0];
+      delete this.chain[state];
+      // Also remove from startWords if present
+      const swIdx = this.startWords.indexOf(state);
+      if (swIdx !== -1) this.startWords.splice(swIdx, 1);
+      removed++;
+    }
+    return removed;
   }
 
   /**
@@ -269,6 +296,12 @@ const markovModel = new MarkovChain(2);
  */
 function saveModel() {
   try {
+    // Prune before saving to prevent unbounded growth
+    const pruned = markovModel.prune(MAX_STATES);
+    if (pruned > 0) {
+      console.log();
+    }
+
     const dataDir = path.dirname(MODEL_PATH);
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
@@ -286,10 +319,24 @@ function saveModel() {
 function loadModel() {
   try {
     if (fs.existsSync(MODEL_PATH)) {
+      // Refuse to load overly large model files
+      const stat = fs.statSync(MODEL_PATH);
+      const sizeMB = (stat.size / 1024 / 1024).toFixed(1);
+      const maxMB = (MAX_MODEL_FILE_SIZE / 1024 / 1024).toFixed(0);
+      if (stat.size > MAX_MODEL_FILE_SIZE) {
+        console.warn("[Markov] Model file too large (" + sizeMB + " MB > " + maxMB + " MB) - resetting to empty model");
+        markovModel.reset();
+        return false;
+      }
       const data = JSON.parse(fs.readFileSync(MODEL_PATH, 'utf8'));
       markovModel.fromJSON(data);
+      // Prune if loaded model exceeds state limit
+      const pruned = markovModel.prune(MAX_STATES);
+      if (pruned > 0) {
+        console.log("[Markov] Pruned " + pruned + " excess states after loading");
+      }
       const stats = markovModel.getStats();
-      console.log(`[Markov] Model loaded from disk: ${stats.states} states, ${stats.totalTransitions} transitions`);
+      console.log("[Markov] Model loaded from disk: " + stats.states + " states, " + stats.totalTransitions + " transitions");
       return true;
     }
   } catch (err) {
@@ -352,13 +399,29 @@ async function trainFromDiscordChannel(client, channelId, limit = 500) {
     let lastId = null;
     let totalFetched = 0;
 
-    // Fetch messages in batches
+    // Fetch messages in batches with rate-limit retry
     while (totalFetched < limit) {
       const batchSize = Math.min(100, limit - totalFetched);
       const options = { limit: batchSize };
       if (lastId) options.before = lastId;
 
-      const batch = await channel.messages.fetch(options);
+      let batch;
+      let retries = 0;
+      const MAX_RETRIES = 3;
+      while (true) {
+        try {
+          batch = await channel.messages.fetch(options);
+          break; // success
+        } catch (fetchErr) {
+          const isRateLimit = fetchErr.status === 429 || fetchErr.code === 429 || /rate\s*limit/i.test(fetchErr.message || '');
+          if (!isRateLimit || retries >= MAX_RETRIES) throw fetchErr;
+          const delay = Math.min(1000 * 2 ** retries, 8000); // 1s, 2s, 4s
+          console.warn(`[Markov] Rate limited fetching messages (retry ${retries + 1}/${MAX_RETRIES}), waiting ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          retries++;
+        }
+      }
+
       if (batch.size === 0) break;
 
       batch.forEach(msg => {
@@ -372,7 +435,7 @@ async function trainFromDiscordChannel(client, channelId, limit = 500) {
       lastId = batch.last().id;
       totalFetched += batch.size;
       
-      // Respect rate limits
+      // Respect rate limits — 1s between batches
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
 

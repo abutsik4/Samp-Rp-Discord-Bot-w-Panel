@@ -1,23 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { BarChart2, ChevronLeft, ChevronRight, Search, Sliders, X } from "lucide-react";
 import { panelApi } from "../lib/api";
+import { useQuery, useMutation } from "../hooks/useQuery";
 import { Alert } from "../components/Alert";
 import { LoadingSkeleton } from "../components/LoadingSkeleton";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 
 export function StatsPage({ bot, botKey, user }) {
-  const [rows, setRows] = useState([]);
   const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
   const [limit] = useState(50);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [adjustUserId, setAdjustUserId] = useState("");
   const [adjustDelta, setAdjustDelta] = useState("");
   const [adjustSuccess, setAdjustSuccess] = useState("");
-  const [busy, setBusy] = useState(false);
 
   const canEdit = user?.role === "admin";
 
@@ -32,29 +28,35 @@ export function StatsPage({ bot, botKey, user }) {
     [bot?.guild_id, limit, offset, search]
   );
 
-  async function load() {
-    setLoading(true);
-    setError("");
-    try {
-      const data = await panelApi.statsUsers(botKey, query);
-      setRows(data?.users || []);
-      setTotal(data?.pagination?.total || 0);
-    } catch (err) {
-      setError(err.message || "Failed to load stats");
-    } finally {
-      setLoading(false);
+  const statsUrl = useMemo(() => {
+    if (!bot?.guild_id) return null;
+    const qs = new URLSearchParams(query).toString();
+    return `/panel/api/${encodeURIComponent(botKey)}/stats/users${qs ? `?${qs}` : ""}`;
+  }, [bot?.guild_id, botKey, query]);
+
+  const { data, loading, error, refresh: refreshStats } = useQuery(statsUrl, {
+    deps: [bot?.guild_id, botKey, offset],
+    enabled: !!bot?.guild_id,
+  });
+
+  const rows = data?.users || [];
+  const total = data?.pagination?.total || 0;
+
+  const [applyAdjust, { loading: busy, error: adjustError }] = useMutation(
+    panelApi.adjustUserStats,
+    {
+      invalidate: statsUrl ? [statsUrl] : [],
+      onSuccess: () => {
+        setAdjustDelta("");
+        setAdjustSuccess("Adjustment applied successfully.");
+      },
+      onError: () => {},
     }
-  }
+  );
 
-  useEffect(() => {
-    if (!bot?.guild_id) return;
-    load();
-  }, [bot?.guild_id, botKey, offset]);
-
-  async function runSearch(event) {
+  function runSearch(event) {
     event.preventDefault();
     setOffset(0);
-    await load();
   }
 
   function clearSearch() {
@@ -62,34 +64,29 @@ export function StatsPage({ bot, botKey, user }) {
     setOffset(0);
   }
 
-  async function applyAdjust(event) {
+  async function handleSubmitAdjust(event) {
     event.preventDefault();
     if (!canEdit) return;
 
     const delta = Number(adjustDelta);
     if (!adjustUserId || !Number.isFinite(delta) || delta === 0) {
-      setError("Provide valid user ID and non-zero delta");
       return;
     }
 
-    setBusy(true);
-    setError("");
     setAdjustSuccess("");
+
     try {
-      await panelApi.adjustUserStats(botKey, {
+      await applyAdjust(botKey, {
         guildId: bot.guild_id,
         userId: adjustUserId,
         delta,
       });
-      setAdjustDelta("");
-      setAdjustSuccess("Adjustment applied successfully.");
-      await load();
-    } catch (err) {
-      setError(err.message || "Failed to apply adjustment");
-    } finally {
-      setBusy(false);
+    } catch {
+      // error is captured by useMutation
     }
   }
+
+  const displayError = error?.message || adjustError?.message || "";
 
   return (
     <div className="page">
@@ -99,7 +96,7 @@ export function StatsPage({ bot, botKey, user }) {
         subtitle="User message leaderboard and manual adjustments."
       />
 
-      {error && <Alert type="error">{error}</Alert>}
+      {displayError && <Alert type="error">{displayError}</Alert>}
       {adjustSuccess && <Alert type="success">{adjustSuccess}</Alert>}
 
       <form className="flex items-center gap-2 mb-4" onSubmit={runSearch}>
@@ -195,7 +192,7 @@ export function StatsPage({ bot, botKey, user }) {
 
       {canEdit && (
         <SectionCard title="Manual Adjustment" icon={Sliders}>
-          <form className="form-grid" onSubmit={applyAdjust}>
+          <form className="form-grid" onSubmit={handleSubmitAdjust}>
             <div className="form-row">
               <label>
                 User ID

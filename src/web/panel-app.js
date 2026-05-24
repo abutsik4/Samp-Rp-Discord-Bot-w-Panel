@@ -82,7 +82,7 @@ function createPanelApp({
   const app = express();
   if (TRUST_PROXY) app.set("trust proxy", 1);
 
-  const cookieSecure = COOKIE_SECURE === "auto" ? "auto" : !!COOKIE_SECURE;
+  const cookieSecure = COOKIE_SECURE === true || String(COOKIE_SECURE).toLowerCase() === "true";
 
   const panelHttpLogger = createLogger("panel-http");
 
@@ -90,7 +90,7 @@ function createPanelApp({
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", "data:", "https:"],
         connectSrc: ["'self'"],
@@ -143,14 +143,55 @@ function createPanelApp({
         return s || "CHANGE_THIS_IN_PROD";
       })(),
       resave: false,
+      rolling: true,
       saveUninitialized: false,
       cookie: {
         httpOnly: true,
         sameSite: "lax",
         secure: cookieSecure,
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
       },
     })
   );
+
+  // CSRF protection: double-submit cookie pattern
+  // Generate a CSRF token on authenticated requests and verify on state-changing methods.
+  app.use((req, res, next) => {
+    // Attach CSRF token to every response for use by the SPA
+    const token = req.session?.csrfToken;
+    if (req.session && !token) {
+      const crypto = require("crypto");
+      req.session.csrfToken = crypto.randomBytes(32).toString("hex");
+    }
+    res.locals = res.locals || {};
+    res.locals.csrfToken = req.session?.csrfToken || "";
+    res.setHeader("X-CSRF-Token", req.session?.csrfToken || "");
+
+    // For API routes (state-changing methods), validate the token
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
+      const isApi = String(req.originalUrl || "").startsWith(PANEL_BASE + "/api/");
+      if (isApi) {
+        const headerToken = req.get("X-CSRF-Token") || req.body?._csrf;
+        if (!headerToken || headerToken !== req.session?.csrfToken) {
+          return res.status(403).json({ error: "CSRF token mismatch", csrfToken: req.session?.csrfToken });
+        }
+      }
+    }
+    next();
+  });
+
+  // Periodic session cleanup — remove expired sessions every hour
+  setInterval(async () => {
+    try {
+      const expired = Math.floor(Date.now() / 1000) - (7 * 24 * 60 * 60);
+      await dbRun(db, 'DELETE FROM sessions WHERE expired < ?', [expired]);
+    } catch (err) {
+      // Table may not exist yet or schema mismatch — non-critical
+      if (err?.code !== 'SQLITE_ERROR') {
+        console.error('[Session Cleanup] Error:', err?.message || err);
+      }
+    }
+  }, 60 * 60 * 1000);
 
   // Request tracing + structured HTTP logging (panel + APIs)
   app.use((req, res, next) => {
@@ -278,10 +319,15 @@ function createPanelApp({
   app.use(createGameplayRouter(routeCtx));
 
   if (hasSpaBuild && !useLegacyPages) {
-    app.get(PANEL_BASE, (_req, res) => res.sendFile(spaIndexPath));
+    // Serve SPA HTML with no-cache to prevent stale builds after deployments
+    app.get(PANEL_BASE, (_req, res) => {
+      res.set("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.sendFile(spaIndexPath);
+    });
     app.get(`${PANEL_BASE}/*`, (req, res, next) => {
       if (req.path.startsWith(`${PANEL_BASE}/api/`)) return next();
-      return res.sendFile(spaIndexPath);
+      res.set("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.sendFile(spaIndexPath);
     });
   }
 

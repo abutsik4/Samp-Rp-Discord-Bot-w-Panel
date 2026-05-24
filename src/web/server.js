@@ -70,7 +70,7 @@ function createWebServer({ discordClient, statsDb }) {
       name: "JepsenCloud Bot",
       kind: "discord",
       client: discordClient,
-      guild_id: "537187880842559499",
+      guild_id: process.env.GUILD_ID || "537187880842559499",
     },
   ];
 

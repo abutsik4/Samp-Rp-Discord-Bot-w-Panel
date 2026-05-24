@@ -638,6 +638,7 @@
             <span>Toggle Snow</span>
           </button>
           <form method="post" action="/panel/logout" style="margin:0">
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>">
             <button type="submit" class="sidebar-footer-link" style="color: var(--accent-rose);">
               <span>🚪</span>
               <span>Logout</span>
@@ -807,6 +808,7 @@
       </div>
       
       <form method="post" action="/panel/users/create" id="createUserForm">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <div class="modal-tab-panel active" data-panel="basic">
           <div class="form-group">
             <label>Username</label>
@@ -887,6 +889,7 @@
       <h2 class="modal-title">🔑 Reset User Password</h2>
       <p style="color: var(--text-muted); margin-bottom: 20px;">Set a new password for user: <strong id="resetUsername"></strong></p>
       <form method="post" action="/panel/users/reset-password">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <input type="hidden" name="username" id="resetUsernameInput" />
         <div class="form-group">
           <label>New Password</label>
@@ -908,6 +911,7 @@
       <h2 class="modal-title">⚙️ User Permissions</h2>
       <p style="color: var(--text-muted); margin-bottom: 20px;">Configuring permissions for: <strong id="permissionsUsername"></strong></p>
       <form method="post" action="/panel/users/update-permissions" id="permissionsForm">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <input type="hidden" name="username" id="permissionsUsernameInput" />
         
         <div class="permissions-grid" id="editPermissionsGrid">
@@ -1030,6 +1034,9 @@
   </script>
   
   <script>
+    // CSRF token for dynamic forms
+    const CSRF_TOKEN = "<%= csrfToken %>";
+
     // Initialize Locomotive Scroll
     const locoScroll = new LocomotiveScroll({
       el: document.querySelector('[data-scroll-container]'),
@@ -1204,6 +1211,11 @@
         input.name = 'username';
         input.value = username;
         form.appendChild(input);
+        const csrfInput = document.createElement('input');
+        csrfInput.type = 'hidden';
+        csrfInput.name = '_csrf';
+        csrfInput.value = CSRF_TOKEN;
+        form.appendChild(csrfInput);
         document.body.appendChild(form);
         form.submit();
       }
@@ -1222,8 +1234,13 @@
         inputRole.type = 'hidden';
         inputRole.name = 'role';
         inputRole.value = 'admin';
+        const csrfInputA = document.createElement('input');
+        csrfInputA.type = 'hidden';
+        csrfInputA.name = '_csrf';
+        csrfInputA.value = CSRF_TOKEN;
         form.appendChild(inputUser);
         form.appendChild(inputRole);
+        form.appendChild(csrfInputA);
         document.body.appendChild(form);
         form.submit();
       }
@@ -1242,8 +1259,13 @@
         inputRole.type = 'hidden';
         inputRole.name = 'role';
         inputRole.value = 'user';
+        const csrfInputU = document.createElement('input');
+        csrfInputU.type = 'hidden';
+        csrfInputU.name = '_csrf';
+        csrfInputU.value = CSRF_TOKEN;
         form.appendChild(inputUser);
         form.appendChild(inputRole);
+        form.appendChild(csrfInputU);
         document.body.appendChild(form);
         form.submit();
       }

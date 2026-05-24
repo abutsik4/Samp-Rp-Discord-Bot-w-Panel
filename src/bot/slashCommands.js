@@ -23,6 +23,7 @@ const { getSeasonalEventCommandBuilders } = require("../features/seasonal-events
 const { getGameFaqCommandBuilders } = require("../features/game-faq");
 const { getCosmeticsCommandBuilders } = require("../features/samp-cosmetics");
 const { getOnboardingCommandBuilders } = require("../features/samp-onboarding");
+const { getPrestigeCommandBuilders } = require("../features/samp-prestige");
 
 // -- DRY helper for top5/top10 ------------------------------------------------
 
@@ -150,6 +151,7 @@ function buildCommandsJson() {
     ...getGameFaqCommandBuilders(),
     ...getCosmeticsCommandBuilders(),
     ...getOnboardingCommandBuilders(),
+    ...getPrestigeCommandBuilders(),
 
     // Badges / achievements
     new SlashCommandBuilder()

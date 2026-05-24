@@ -1288,11 +1288,19 @@ async function getBlackMarketDealLimitState(db, userId, deal) {
 
   if (grant.inventoryItemId && grant.maxInventoryQty > 0) {
     const qty = await getInventoryQty(db, userId, grant.inventoryItemId);
-    if (qty >= grant.maxInventoryQty) {
+    // Mansion stash cap multiplier (lazy require to avoid circular import).
+    let effectiveMax = grant.maxInventoryQty;
+    try {
+      const { getUserBoostEffects } = require("./samp-cosmetics");
+      const effects = await getUserBoostEffects(db, userId).catch(() => null);
+      const mult = Number(effects?.stashCapMultiplier || 1);
+      if (mult > 1) effectiveMax = Math.floor(grant.maxInventoryQty * mult);
+    } catch (_) { /* cosmetics module optional */ }
+    if (qty >= effectiveMax) {
       return {
         blocked: true,
-        message: `Лимит на этот товар уже достигнут: **${qty}/${grant.maxInventoryQty}** в тайнике. Сначала используй запас.`,
-        details: { kind: "inventory", currentQty: qty, maxQty: grant.maxInventoryQty },
+        message: `Лимит на этот товар уже достигнут: **${qty}/${effectiveMax}** в тайнике. Сначала используй запас.`,
+        details: { kind: "inventory", currentQty: qty, maxQty: effectiveMax },
       };
     }
   }

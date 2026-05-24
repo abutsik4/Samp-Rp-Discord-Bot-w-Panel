@@ -26,6 +26,8 @@ const {
 const { drawLottery } = require("../features/samp-extended");
 const { launchGiveaway, scheduleGiveawayEnd } = require("../features/giveaway");
 const { runSampBackupCycle } = require("../features/samp-money-backups");
+const { runStockTick, runCrewSalaryCycle } = require("../features/samp-stocks-engine");
+const { STOCK_TICK_MINUTES } = require("../features/constants/prestige");
 
 const activeSchedulerTasks = new Set();
 
@@ -489,6 +491,31 @@ async function startSchedulers(ctx) {
     }
   }, 60 * 1000);
 
+  // ── SAMP Prestige: stock market ticks + crew salaries ──────────
+  setInterval(async () => {
+    try {
+      const events = await runExclusiveTask("samp-stock-tick", async () => runStockTick(db));
+      if (events && events.length > 0) {
+        console.log(`[Stocks] Tick produced ${events.length} news events:`,
+          events.map((e) => `${e.ticker} ${e.delta > 0 ? "+" : ""}${(e.delta * 100).toFixed(1)}%`).join(", "));
+      }
+    } catch (err) {
+      console.error("[Stocks] Tick failed:", err);
+    }
+  }, Math.max(5, Number(STOCK_TICK_MINUTES) || 15) * 60 * 1000);
+
+  // Crew salary collection — hourly check, picks up everyone whose paid_through < now.
+  setInterval(async () => {
+    try {
+      const result = await runExclusiveTask("samp-crew-salary", async () => runCrewSalaryCycle(db));
+      if (result && (result.charged > 0 || result.fired > 0)) {
+        console.log(`[Crew] Salary cycle: charged=${result.charged} fired=${result.fired}`);
+      }
+    } catch (err) {
+      console.error("[Crew] Salary cycle failed:", err);
+    }
+  }, 60 * 60 * 1000);
+
   // ── Register guild commands ─────────────────────────────────────
   for (const guild of client.guilds.cache.values()) {
     await registerGuildCommands(client, guild.id, TOKEN);
@@ -541,8 +568,8 @@ async function startSchedulers(ctx) {
   {
     const now = new Date();
     if (now.getMonth() === 3 && now.getDate() === 1 && now.getFullYear() === 2026) {
-      const GIVEAWAY_CHANNEL_ID = "541024157681319957";
-      const GIVEAWAY_GUILD_ID = "537187880842559499";
+      const GIVEAWAY_CHANNEL_ID = process.env.GIVEAWAY_CHANNEL_ID || "541024157681319957";
+      const GIVEAWAY_GUILD_ID = process.env.GUILD_ID || "537187880842559499";
       console.log("[Giveaway] April Fools 2026 — launching giveaway...");
       try {
         await launchGiveaway(client, GIVEAWAY_CHANNEL_ID, db);
