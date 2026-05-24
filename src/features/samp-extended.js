@@ -1944,8 +1944,8 @@ async function handleTuneMaintain(interaction, db) {
     for (const item of costBreakdown) {
       await dbRun(
         db,
-        `UPDATE samp_car_upgrades SET durability = 100 WHERE user_id = ? AND car_id = ? AND upgrade_id = ?`,
-        [userId, carId, item.part.id]
+        `UPDATE samp_car_upgrades SET durability = MIN(100, durability + ?) WHERE user_id = ? AND car_id = ? AND upgrade_id = ?`,
+        [Math.round(repairAmount), userId, carId, item.part.id]
       );
     }
   });
