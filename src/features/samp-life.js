@@ -1060,19 +1060,29 @@ async function checkCooldownWithoutConsuming(interaction, db, userId, action) {
 
 async function consumeCooldownAtomic(db, userId, action, readyAt = nowMs() + (COOLDOWNS_MS[action] || 60_000)) {
   return withTransaction(db, async () => {
+    const now = nowMs();
+    // a1: UPSERT via INSERT ON CONFLICT guarantees atomicity
+    try {
+      const result = await dbRun(
+        db,
+        `INSERT INTO samp_cooldowns(user_id, action, ready_at)
+         VALUES(?, ?, ?)
+         ON CONFLICT(user_id, action)
+         DO UPDATE SET ready_at = excluded.ready_at
+         WHERE ready_at <= ?`,
+        [String(userId), String(action), readyAt, now]
+      );
+      if (result?.changes > 0) return { ok: true, readyAt };
+    } catch (err) {
+      // unexpected
+    }
     const existing = await dbGet(
       db,
       "SELECT ready_at FROM samp_cooldowns WHERE user_id = ? AND action = ?",
       [String(userId), String(action)]
     );
-    const now = nowMs();
     const currentReadyAt = Number(existing?.ready_at || 0);
-    if (currentReadyAt > now) {
-      return { ok: false, remainingMs: currentReadyAt - now, readyAt: currentReadyAt };
-    }
-
-    await setCooldown(db, userId, action, readyAt);
-    return { ok: true, readyAt };
+    return { ok: false, remainingMs: Math.max(0, currentReadyAt - now), readyAt: currentReadyAt };
   });
 }
 
