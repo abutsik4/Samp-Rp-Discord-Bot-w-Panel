@@ -66,22 +66,25 @@ export default function Layout() {
         </div>
 
         <nav className="flex-1 px-3 py-4 space-y-1">
-          {nav.map(({ to, icon: Icon, label }) => (
-            <NavLink
-              key={to}
-              to={to}
-              className={({ isActive }) => cn(
-                "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors",
-                isActive
-                  ? "bg-accent-purple/10 text-accent-purple border border-accent-purple/20"
-                  : "text-text-secondary hover:text-text-primary hover:bg-bg-hover"
-              )}
-            >
-              <Icon className="w-4 h-4" />
-              <span>{label}</span>
-              {isActive && <ChevronRight className="w-3 h-3 ml-auto opacity-60" />}
-            </NavLink>
-          ))}
+          {nav.map(({ to, icon: Icon, label }) => {
+            const active = location.pathname === to || (to !== '/' && location.pathname.startsWith(to))
+            return (
+              <NavLink
+                key={to}
+                to={to}
+                className={cn(
+                  "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors",
+                  active
+                    ? "bg-accent-purple/10 text-accent-purple border border-accent-purple/20"
+                    : "text-text-secondary hover:text-text-primary hover:bg-bg-hover"
+                )}
+              >
+                <Icon className="w-4 h-4" />
+                <span>{label}</span>
+                {active && <ChevronRight className="w-3 h-3 ml-auto opacity-60" />}
+              </NavLink>
+            )
+          })}
         </nav>
 
         <div className="px-4 py-3 border-t border-border text-[11px] text-text-muted">

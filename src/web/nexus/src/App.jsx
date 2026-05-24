@@ -1,4 +1,4 @@
-import { useRoutes } from 'react-router-dom'
+import { useRoutes, Navigate } from 'react-router-dom'
 import Layout from './components/Layout.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import GangHQ from './pages/GangHQ.jsx'
@@ -17,9 +17,11 @@ const routes = [
       { path: 'economy', element: <LiveEconomy /> },
       { path: 'casino', element: <Casino /> },
       { path: 'crafting', element: <Crafting /> },
-      { path: 'settings', element: <Settings /> }
+      { path: 'settings', element: <Settings /> },
+      { path: '*', element: <Navigate to="/" /> }
     ]
-  }
+  },
+  { path: '*', element: <Navigate to="/" /> }
 ]
 
 export default function App() {
