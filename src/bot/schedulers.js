@@ -145,6 +145,24 @@ async function startSchedulers(ctx) {
   };
   scheduleEventCleanup();
 
+  // a6: samp_flex_log retention cleanup (daily at 2:05 AM)
+  const scheduleFlexLogCleanup = () => {
+    const now = new Date();
+    const t205 = new Date(now); t205.setHours(2, 5, 0, 0);
+    if (t205 <= now) t205.setDate(t205.getDate() + 1);
+    setTimeout(async () => {
+      try {
+        await dbRun(db, `DELETE FROM samp_flex_log WHERE ts < datetime('now', '-90 days')`);
+        console.log("[FlexLog] retention cleanup done");
+        setInterval(async () => {
+          await dbRun(db, `DELETE FROM samp_flex_log WHERE ts < datetime('now', '-90 days')`);
+          console.log("[FlexLog] retention cleanup done");
+        }, 86400000);
+      } catch (e) { console.error("[FlexLog] cleanup failed:", e); }
+    }, t205.getTime() - now.getTime());
+  };
+  scheduleFlexLogCleanup();
+
   // Self-healing reconciliation (every 15 minutes)
   setInterval(async () => {
     try {
