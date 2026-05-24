@@ -63,19 +63,16 @@ async function runStockTick(db) {
     }
   }
 
-  // Trim history per ticker
+  // Trim history per ticker (CTE + ROW_NUMBER — O(n) cleanup)
   await dbRun(
     db,
-    `DELETE FROM samp_stock_history
-      WHERE id IN (
-        SELECT h.id FROM samp_stock_history h
-        WHERE h.id NOT IN (
-          SELECT id FROM samp_stock_history s
-          WHERE s.ticker = h.ticker
-          ORDER BY s.ts DESC, s.id DESC
-          LIMIT ?
-        )
-      )`,
+    `WITH ranked AS (
+       SELECT id, ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY ts DESC, id DESC) AS rn
+       FROM samp_stock_history
+     )
+     DELETE FROM samp_stock_history WHERE id IN (
+       SELECT id FROM ranked WHERE rn > ?
+     )`,
     [STOCK_HISTORY_LIMIT]
   );
 
