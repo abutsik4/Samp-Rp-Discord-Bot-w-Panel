@@ -1678,6 +1678,14 @@ async function handleBizRun(interaction, db) {
   const territoryControlMap = await getTerritoryControlMap(db);
   const now = new Date();
   const state = getBusinessState(prop, property, now);
+  if (state.projectedCondition < 15) {
+    await interaction.reply({ content: `Бизнес **${prop.name}** в крит. состоянии (${Math.floor(state.projectedCondition)}%). Обслужи: /maintainbiz`, ephemeral: true });
+    return;
+  }
+  if (state.projectedSupplies < 15) {
+    await interaction.reply({ content: `Бизнес **${prop.name}** крит. мало запасов (${Math.floor(state.projectedSupplies)}%). Обслужи: /maintainbiz`, ephemeral: true });
+    return;
+  }
   const territory = getTerritoryBoost(prop, territoryControlMap, membership?.gang_id);
   const rewardBase = randInt(operation.reward[0], operation.reward[1]);
   const payout = Math.max(500, Math.floor(rewardBase * Math.max(0.65, state.efficiency) * Number(liveOps.business_run_multiplier || 1) * territory.multiplier));
