@@ -2330,6 +2330,14 @@ async function handleHeist(interaction, db) {
           for (const pid of participantIds) {
             await adjustMoney(db, pid, share);
             await addLedger(db, "heist", null, pid, share, { tier: tierKey, crew_size: participantIds.length });
+    // Phase C material drops
+    try {
+      const { rollMaterialDrops } = require("./constants/crafting");
+      const drops = rollMaterialDrops("heist");
+      for (const { materialId, qty } of drops) {
+        await dbRun(db, `INSERT INTO samp_crafting_inventory(user_id, material_id, qty) VALUES(?, ?, ?) ON CONFLICT(user_id, material_id) DO UPDATE SET qty = qty + excluded.qty, updated_at = datetime('now')`, [userId, materialId, qty]);
+      }
+    } catch (_e) {}
           }
         });
         const winEmbed = new EmbedBuilder().setTitle(`🎉 Успех: ${tier.name}`).setDescription(`Команда взяла **${fmtMoney(totalPayout)}**!\nКаждый получил: **${fmtMoney(share)}**\nСледующий заход через **${cooldownText}**.`).setColor(0x2ecc71);

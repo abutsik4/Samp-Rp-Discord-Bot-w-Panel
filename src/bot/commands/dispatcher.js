@@ -15,6 +15,7 @@ const { handleAwardsCommand } = require("../../features/weekly-awards");
 const { handleRadioVote, handleRadioTop, handleRadioInfo, handleRadioFans } = require("../../features/radio-vote");
 const { handleSampExtendedCommand, handleSampExtendedAutocomplete } = require("../../features/samp-extended");
 const { handleSampPrestigeCommand, PRESTIGE_COMMAND_NAMES } = require("../../features/samp-prestige");
+const { handlePhaseCCommand, PHASEC_COMMAND_NAMES, getPhaseCCommandBuilders } = require("../../features/samp-phasec");
 const { handleEventsCommand } = require("../../features/seasonal-events");
 const { handleGameFaqCommand } = require("../../features/game-faq");
 const {
@@ -59,7 +60,8 @@ const SAMP_LIFE_AUTOCOMPLETE_COMMANDS = ["buy", "weapon", "sellcar"];
 const SAMP_EXTENDED_AUTOCOMPLETE_COMMANDS = ["buybiz", "bizstats", "mbizstats", "maintainbiz", "bizrun", "tune", "tunecar", "switchcar", "buycosmetic", "gang", "gcapture", "gsupportbiz"];
 const SAMP_COSMETICS_AUTOCOMPLETE_COMMANDS = ["equip", "unequip"];
 const SAMP_PRESTIGE_COMMANDS = PRESTIGE_COMMAND_NAMES;
-const SAMP_GAME_COMMANDS = new Set([...SAMP_LIFE_COMMANDS, ...SAMP_EXTENDED_COMMANDS, ...SAMP_COSMETICS_COMMANDS, ...SAMP_ONBOARDING_COMMANDS, ...SAMP_PRESTIGE_COMMANDS]);
+const SAMP_PHASEC_COMMANDS = PHASEC_COMMAND_NAMES;
+const SAMP_GAME_COMMANDS = new Set([...SAMP_LIFE_COMMANDS, ...SAMP_EXTENDED_COMMANDS, ...SAMP_COSMETICS_COMMANDS, ...SAMP_ONBOARDING_COMMANDS, ...SAMP_PRESTIGE_COMMANDS, ...SAMP_PHASEC_COMMANDS]);
 
 function buildRestrictedChannelWarning(channelId) {
   return `❌ Команды SAMP Life доступны только в канале <#${channelId}>.`;
@@ -208,6 +210,10 @@ function registerCommandHandlers(ctx) {
     // SAMP Prestige (money sinks: flex, mansions, aircraft, stocks, crew)
     if (SAMP_PRESTIGE_COMMANDS.includes(commandName)) {
       await handleSampPrestigeCommand({ interaction, db });
+      return;
+    }
+    if (SAMP_PHASEC_COMMANDS.includes(commandName)) {
+      await handlePhaseCCommand({ interaction, db });
       return;
     }
 

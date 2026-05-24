@@ -1833,6 +1833,8 @@ async function handleWork(interaction, db) {
   await withTransaction(db, async () => {
     await adjustMoney(db, userId, earnings);
     const inserted = await addLedgerUnique(db, "work", null, userId, earnings, opKey, { job, base: baseEarnings, boost: boostDelta, aircraft_flavor: aircraftFlavor, aircraft_bonus: aircraftBonus });
+    // Phase C drops
+    try { require("./phasec-utils").awardMaterialDrops(db, userId, "work"); } catch (e) {}
     if (!inserted) throw new Error("DUPLICATE_OPERATION");
     // Apply cooldown multiplier from boosts.
     if (boosts && boosts.cooldownMultiplier < 1) {
@@ -1903,6 +1905,8 @@ async function handleTruck(interaction, db) {
       boost: boostDeltaT,
       incidentText: contract.incident.successText,
     });
+    // Phase C drops
+    try { require("./phasec-utils").awardMaterialDrops(db, userId, "truck"); } catch (e) {}
     if (!inserted) throw new Error("DUPLICATE_OPERATION");
     await recordTruckRun(db, userId, opKey, contract, {
       crashed: false,
@@ -2082,6 +2086,8 @@ async function handleRob(interaction, db) {
   await withTransaction(db, async () => {
     await adjustMoney(db, userId, loot);
     const inserted = await addLedgerUnique(db, "rob", null, userId, loot, makeInteractionOpKey(interaction, "rob"), {});
+    // Phase C drops
+    try { require("./phasec-utils").awardMaterialDrops(db, userId, "rob"); } catch (e) {}
     if (!inserted) throw new Error("DUPLICATE_OPERATION");
     if (boostsR && boostsR.cooldownMultiplier < 1) {
       const newReadyAt = nowMs() + Math.floor((COOLDOWNS_MS.rob || 900_000) * boostsR.cooldownMultiplier);
