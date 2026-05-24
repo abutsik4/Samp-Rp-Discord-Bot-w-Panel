@@ -2705,16 +2705,32 @@ async function handleGangCommand(interaction, db) {
     const members = await dbAll(db, "SELECT user_id, role FROM samp_gang_members WHERE gang_id = ?", [member.gang_id]);
     const support = await dbGet(db, "SELECT COUNT(*) as c FROM samp_properties WHERE gang_boosted_by = ? AND gang_boost_until > datetime('now')", [member.gang_id]);
     const territories = await dbGet(db, "SELECT COUNT(*) as c FROM samp_gang_territories WHERE gang_id = ?", [member.gang_id]);
+    const evo = await dbGet(db, "SELECT * FROM samp_gang_evolution WHERE gang_id = ?", [member.gang_id]);
+    const evoData = evo || { xp: 0, legacy_stars: 0 };
+    const levelInfo = getGangLevelByXp(Number(evoData.xp || 0));
+    const legacy = getLegacyBonus(Number(evoData.legacy_stars || 0));
+    const nextXpObj = GANG_LEVEL_THRESHOLDS.find((t) => t.xp > (evoData.xp || 0));
+    const nextXp = nextXpObj ? nextXpObj.xp : "MAX";
+    const xpPct = nextXp === "MAX" ? 100 : Math.round(((evoData.xp || 0) / nextXp) * 100);
+    const historyRows = await dbAll(db, "SELECT district_id, event, pressure, created_at FROM samp_gang_territory_history WHERE gang_id = ? ORDER BY created_at DESC LIMIT 5", [member.gang_id]);
+    const evMap = { claim: "🗺️ Захват", reinforce: "🛡️ Укрепление", attack: "⚔️ Атака", takeover: "🔥 Перехват", decay_neutral: "💀 Потеря" };
+    const historyLines = (historyRows || []).map((h) => {
+      const dname = TERRITORY_DISTRICTS[h.district_id]?.name || h.district_id;
+      return `${evMap[h.event] || h.event} ${dname} (${h.pressure}%)`;
+    }).join("\n") || "—";
     const memberList = (members || []).map(m => `• <@${m.user_id}> — ${m.role}`).join("\n");
     const embed = new EmbedBuilder()
       .setTitle(`[${gang.tag}] ${gang.name}`)
-      .setDescription("Сводка по казне, районам и составу банды.")
+      .setDescription(`**Lv${levelInfo.level}** — ${levelInfo.label} | ⭐ ${evoData.legacy_stars || 0} (${legacy.label})\nСводка по казне, районам и составу банды.`)
       .addFields(
         { name: "Лидер", value: `<@${gang.leader_id}>`, inline: true },
         { name: "Казна", value: fmtMoney(gang.treasury), inline: true },
         { name: "Поддержка бизнесов", value: `${support?.c || 0} актив.`, inline: true },
         { name: "Районы", value: `${territories?.c || 0} под контролем`, inline: true },
-        { name: `Участники (${members.length})`, value: memberList || "—" }
+        { name: "XP", value: `${evoData.xp || 0}${nextXp === "MAX" ? "" : ` / ${nextXp}`} (${xpPct}%)`, inline: true },
+        { name: "Perk", value: `${levelInfo.perk ? GANG_PERK_DESCRIPTIONS[levelInfo.perk] : "—"}`, inline: true },
+        { name: `Участники (${members.length})`, value: memberList || "—" },
+        { name: "История районов", value: historyLines || "—" }
       ).setColor(0x2ecc71).setTimestamp();
     const cosmetics = await getUserCosmetics(db, userId);
     applyUserCosmeticsToEmbed(embed, cosmetics, interaction.user.username, 0x2ecc71);
@@ -2723,12 +2739,13 @@ async function handleGangCommand(interaction, db) {
   } else if (sub === "top") {
     const gangs = await dbAll(
       db,
-      `SELECT g.*, COUNT(DISTINCT gm.user_id) as members, COUNT(DISTINCT t.district_id) as territories
+      `SELECT g.*, COUNT(DISTINCT gm.user_id) as members, COUNT(DISTINCT t.district_id) as territories, COALESCE(e.xp, 0) as xp
        FROM samp_gangs g
        LEFT JOIN samp_gang_members gm ON gm.gang_id = g.id
        LEFT JOIN samp_gang_territories t ON t.gang_id = g.id
+       LEFT JOIN samp_gang_evolution e ON e.gang_id = g.id
        GROUP BY g.id
-       ORDER BY g.treasury DESC, territories DESC, members DESC, g.id ASC
+       ORDER BY g.treasury DESC, xp DESC, territories DESC, members DESC, g.id ASC
        LIMIT 10`,
       []
     );
