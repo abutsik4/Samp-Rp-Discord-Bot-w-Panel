@@ -35,6 +35,7 @@ const { ensurePerksTables } = require("./features/perks");
 const { ensureXpMultipliersTable } = require("./features/xp-multipliers");
 const { ensureSampExtendedTables } = require("./features/samp-extended");
 const { ensurePrestigeTables } = require("./features/samp-prestige");
+const { ensureCraftingTables } = require("./features/samp-phasec");
 const { ensureSeasonalEventsTables } = require("./features/seasonal-events");
 const { ensureGiveawayTables } = require("./features/giveaway");
 
@@ -97,6 +98,7 @@ async function initFeatureTables(db, dbRun) {
   await ensureXpMultipliersTable(db);
   await ensureSampExtendedTables(db);
   await ensurePrestigeTables(db);
+  await ensureCraftingTables(db);
   await ensureSeasonalEventsTables(db);
   await ensureGiveawayTables(db);
   await dbRun(db, `CREATE TABLE IF NOT EXISTS bot_command_errors (

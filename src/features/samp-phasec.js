@@ -6,7 +6,7 @@
  */
 
 const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
-const { dbGet, dbAll } = require("../utils/db-helpers");
+const { dbRun, dbGet, dbAll } = require("../utils/db-helpers");
 const { withSerializedTransaction } = require("../utils/sqlite-transaction");
 const { touchSampUserSeenAt } = require("./samp-life");
 
@@ -404,7 +404,27 @@ async function handlePhaseCCommand({ interaction, db }) {
   try { await touchSampUserSeenAt(db, interaction.user?.id); } catch (_) {}
 }
 
+async function ensureCraftingTables(db) {
+  await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_crafting_inventory (
+    user_id TEXT NOT NULL,
+    material_id TEXT NOT NULL,
+    qty INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, material_id)
+  )`);
+  await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_crafting_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    recipe_id TEXT NOT NULL,
+    crafted_qty INTEGER NOT NULL DEFAULT 0,
+    success INTEGER NOT NULL DEFAULT 0,
+    meta_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`);
+}
+
 module.exports = {
+  ensureCraftingTables,
   getPhaseCCommandBuilders,
   handlePhaseCCommand,
   PHASEC_COMMAND_NAMES,
