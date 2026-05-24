@@ -1097,6 +1097,7 @@ async function handleAirJob(interaction, db) {
         { aircraft: aircraft.id, line }
       );
       if (!inserted) throw new Error("DUPLICATE_OPERATION");
+      try { const { awardMaterialDrops } = require("./phasec-utils"); await awardMaterialDrops(db, userId, "airjob"); } catch (_e) {}
     });
     const after = await getSampUser(db, userId);
     resultText =
