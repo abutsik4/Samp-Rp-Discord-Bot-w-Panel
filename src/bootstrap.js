@@ -99,6 +99,17 @@ async function initFeatureTables(db, dbRun) {
   await ensurePrestigeTables(db);
   await ensureSeasonalEventsTables(db);
   await ensureGiveawayTables(db);
+  await dbRun(db, `CREATE TABLE IF NOT EXISTS bot_command_errors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    command_name TEXT,
+    user_id TEXT,
+    guild_id TEXT,
+    error_message TEXT,
+    stack TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`);
+
+  console.log("[BOT] Feature tables initialized.");
 }
 
 /**

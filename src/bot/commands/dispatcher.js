@@ -195,26 +195,54 @@ function registerCommandHandlers(ctx) {
     if (
       SAMP_LIFE_COMMANDS.includes(commandName)
     ) {
-      await handleSampLifeCommand({ interaction, db });
-      return;
+      try {
+        await handleSampLifeCommand({ interaction, db });
+        return;
+      } catch (err) {
+        console.error(`[dispatch] ${commandName} error:`, err);
+        try { await dbRun(db, "INSERT INTO bot_command_errors(command_name, user_id, guild_id, error_message, stack) VALUES(?,?,?,?,?)", [commandName, interaction.user?.id, interaction.guild?.id, err?.message || "", err?.stack || ""]); } catch (_) {}
+        await interaction.reply({ content: "❌ An error occurred while processing your SAMP command.", ephemeral: true });
+        return;
+      }
     }
 
     // SAMP Extended economy commands
     if (
       SAMP_EXTENDED_COMMANDS.includes(commandName)
     ) {
-      await handleSampExtendedCommand({ interaction, db });
-      return;
+      try {
+        await handleSampExtendedCommand({ interaction, db });
+        return;
+      } catch (err) {
+        console.error(`[dispatch] ${commandName} error:`, err);
+        try { await dbRun(db, "INSERT INTO bot_command_errors(command_name, user_id, guild_id, error_message, stack) VALUES(?,?,?,?,?)", [commandName, interaction.user?.id, interaction.guild?.id, err?.message || "", err?.stack || ""]); } catch (_) {}
+        await interaction.reply({ content: "❌ An error occurred while processing your SAMP command.", ephemeral: true });
+        return;
+      }
     }
 
     // SAMP Prestige (money sinks: flex, mansions, aircraft, stocks, crew)
     if (SAMP_PRESTIGE_COMMANDS.includes(commandName)) {
-      await handleSampPrestigeCommand({ interaction, db });
-      return;
+      try {
+        await handleSampPrestigeCommand({ interaction, db });
+        return;
+      } catch (err) {
+        console.error(`[dispatch] ${commandName} error:`, err);
+        try { await dbRun(db, "INSERT INTO bot_command_errors(command_name, user_id, guild_id, error_message, stack) VALUES(?,?,?,?,?)", [commandName, interaction.user?.id, interaction.guild?.id, err?.message || "", err?.stack || ""]); } catch (_) {}
+        await interaction.reply({ content: "❌ An error occurred while processing your SAMP command.", ephemeral: true });
+        return;
+      }
     }
     if (SAMP_PHASEC_COMMANDS.includes(commandName)) {
-      await handlePhaseCCommand({ interaction, db });
-      return;
+      try {
+        await handlePhaseCCommand({ interaction, db });
+        return;
+      } catch (err) {
+        console.error(`[dispatch] ${commandName} error:`, err);
+        try { await dbRun(db, "INSERT INTO bot_command_errors(command_name, user_id, guild_id, error_message, stack) VALUES(?,?,?,?,?)", [commandName, interaction.user?.id, interaction.guild?.id, err?.message || "", err?.stack || ""]); } catch (_) {}
+        await interaction.reply({ content: "❌ An error occurred while processing your SAMP command.", ephemeral: true });
+        return;
+      }
     }
 
     // SAMP cosmetics shop + inventory

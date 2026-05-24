@@ -201,6 +201,16 @@ function createNexusRouter(ctx) {
     }
   });
 
+  router.get("/panel/api/errors/recent", requireAuth, apiLimiter, async (_req, res) => {
+    try {
+      const rows = await dbAll(db, "SELECT * FROM bot_command_errors ORDER BY id DESC LIMIT 50");
+      return res.json({ errors: rows || [] });
+    } catch (e) {
+      console.error("Nexus errors error:", e);
+      return res.status(500).json({ error: e?.message || "Failed" });
+    }
+  });
+
   return router;
 }
 
