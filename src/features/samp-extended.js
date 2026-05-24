@@ -887,9 +887,10 @@ function getTerritoryBoost(prop, territoryControlMap, gangId) {
 async function listGangTerritories(db) {
   const controls = await dbAll(
     db,
-    `SELECT t.district_id, t.gang_id, t.pressure, t.claimed_at, t.updated_at, g.name AS gang_name, g.tag AS gang_tag
+    `SELECT t.district_id, t.gang_id, t.pressure, t.claimed_at, t.updated_at, g.name AS gang_name, g.tag AS gang_tag, COALESCE(e.color, '#30363d') AS gang_color
      FROM samp_gang_territories t
-     LEFT JOIN samp_gangs g ON g.id = t.gang_id`,
+     LEFT JOIN samp_gangs g ON g.id = t.gang_id
+     LEFT JOIN samp_gang_evolution e ON e.gang_id = t.gang_id`,
     []
   );
   const memberships = await dbAll(db, "SELECT gang_id, user_id FROM samp_gang_members", []);
@@ -922,6 +923,7 @@ async function listGangTerritories(db) {
       gang_id: control?.gang_id || null,
       gang_name: control?.gang_name || null,
       gang_tag: control?.gang_tag || null,
+      gang_color: control?.gang_color || '#30363d',
       pressure: control?.pressure || 0,
       claimed_at: control?.claimed_at || null,
       updated_at: control?.updated_at || null,
@@ -2736,6 +2738,19 @@ async function handleGangCommand(interaction, db) {
     applyUserCosmeticsToEmbed(embed, cosmetics, interaction.user.username, 0x2ecc71);
     await interaction.reply({ embeds: [embed] });
 
+  } else if (sub === "setcolor") {
+    const userId = interaction.user.id;
+    const member = await dbGet(db, "SELECT gm.gang_id, gm.role, g.name, g.tag, g.treasury FROM samp_gang_members gm JOIN samp_gangs g ON g.id = gm.gang_id WHERE gm.user_id = ?", [userId]);
+    if (!member || member.role !== "leader") { await interaction.reply({ content: "Только лидер может менять цвет.", ephemeral: true }); return; }
+    const evo = await dbGet(db, "SELECT xp FROM samp_gang_evolution WHERE gang_id = ?", [member.gang_id]);
+    const levelInfo = getGangLevelByXp(Number(evo?.xp || 0));
+    if (levelInfo.level < 7) { await interaction.reply({ content: "Цвет доступен только банде уровня **Империя (7)**.", ephemeral: true }); return; }
+    const hexRaw = String(interaction.options.getString("hex", true)).trim();
+    const hex = hexRaw.startsWith("#") ? hexRaw : "#" + hexRaw;
+    if (!/^#[0-9A-Fa-f]{6}$/.test(hex)) { await interaction.reply({ content: "Неверный HEX. Пример: **#e3b341**", ephemeral: true }); return; }
+    await dbRun(db, "UPDATE samp_gang_evolution SET color = ? WHERE gang_id = ?", [hex, member.gang_id]);
+    await interaction.reply(`🎨 Цвет банды **[${member.tag}] ${member.name}** обновлён на **${hex}**.`);
+
   } else if (sub === "top") {
     const gangs = await dbAll(
       db,
@@ -3470,7 +3485,9 @@ function getSampExtendedCommandBuilders() {
         .addUserOption(o => o.setName("user").setDescription("Участник банды").setRequired(true))
         .addStringOption(o => o.setName("business").setDescription("ID бизнеса").setRequired(true).setAutocomplete(true)))
       .addSubcommand(s => s.setName("info").setDescription("Инфо о банде"))
-      .addSubcommand(s => s.setName("top").setDescription("Топ банд")),
+      .addSubcommand(s => s.setName("top").setDescription("Топ банд"))
+      .addSubcommand(s => s.setName("setcolor").setDescription("Задать цвет банды (ур. 7+)")
+        .addStringOption(o => o.setName("hex").setDescription("HEX цвет, например #e3b341").setRequired(true))),
 
     new SlashCommandBuilder().setName("gmap").setDescription("SAMP Life: карта районов и контролирующих банд"),
     new SlashCommandBuilder().setName("gcapture").setDescription("SAMP Life: атаковать или укрепить район")

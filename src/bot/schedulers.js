@@ -27,6 +27,7 @@ const { drawLottery } = require("../features/samp-extended");
 const { launchGiveaway, scheduleGiveawayEnd } = require("../features/giveaway");
 const { runSampBackupCycle } = require("../features/samp-money-backups");
 const { runStockTick, runCrewSalaryCycle } = require("../features/samp-stocks-engine");
+const { getGangLevelByXp } = require("../features/constants/gang-evolution");
 const { STOCK_TICK_MINUTES } = require("../features/constants/prestige");
 
 const activeSchedulerTasks = new Set();
@@ -569,6 +570,38 @@ async function startSchedulers(ctx) {
     }, decayMs);
   };
   scheduleGangTerritoryDecay();
+
+  // ── Protection Racket passive income ────────────────────────────────
+  const scheduleProtectionRacket = () => {
+    const intervalMs = 6 * 60 * 60 * 1000; // every 6 hours
+    setInterval(async () => {
+      try {
+        await runExclusiveTask("protection-racket", async () => {
+          const gangs = await dbAll(db, `SELECT g.id, g.name, g.tag, g.treasury, e.xp, COUNT(t.district_id) AS territory_count
+            FROM samp_gangs g
+            JOIN samp_gang_evolution e ON e.gang_id = g.id
+            LEFT JOIN samp_gang_territories t ON t.gang_id = g.id
+            GROUP BY g.id`);
+          let totalPayout = 0;
+          for (const gang of (gangs || [])) {
+            const levelInfo = getGangLevelByXp(Number(gang.xp || 0));
+            if (levelInfo.level < 4) continue;
+            const territories = Number(gang.territory_count || 0);
+            if (territories === 0) continue;
+            const basePerTerritory = 2_500;
+            const racketIncome = Math.round(territories * basePerTerritory * (1 + levelInfo.perMemberMoneyBonus));
+            await dbRun(db, "UPDATE samp_gangs SET treasury = treasury + ? WHERE id = ?", [racketIncome, gang.id]);
+            totalPayout += racketIncome;
+          }
+          if (totalPayout > 0) {
+            console.log(`[ProtectionRacket] paid out total ${totalPayout} across controlled territories.`);
+          }
+        });
+      } catch (err) { console.error("[ProtectionRacket] error:", err); }
+    }, intervalMs);
+  };
+  scheduleProtectionRacket();
+
 // ── Register guild commands ─────────────────────────────────────
   for (const guild of client.guilds.cache.values()) {
     await registerGuildCommands(client, guild.id, TOKEN);
