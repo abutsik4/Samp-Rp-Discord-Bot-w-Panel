@@ -1434,6 +1434,9 @@ async function ensureSampLifeTables(db) {
   await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_samp_ledger_from ON samp_ledger(from_user)`);
   await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_samp_ledger_to ON samp_ledger(to_user)`);
   await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_samp_ledger_ts ON samp_ledger(ts)`);
+  await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_samp_ledger_from_ts ON samp_ledger(from_user, ts)`);
+  await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_samp_ledger_to_ts ON samp_ledger(to_user, ts)`);
+  await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_samp_ledger_type_ts ON samp_ledger(type, ts)`);
 
   await dbRun(
     db,
