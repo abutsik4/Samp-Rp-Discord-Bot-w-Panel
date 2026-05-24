@@ -31,6 +31,7 @@ const { createChannelsRouter } = require("./routes/channels");
 const { createSampServersRouter } = require("./routes/samp-servers");
 const { createGameplayRouter } = require("./routes/gameplay");
 const { createNexusRouter } = require("./routes/nexus-api");
+const healthRoutes = require("./routes/health");
 
 function createPanelApp({
   client,
@@ -318,6 +319,7 @@ function createPanelApp({
   app.use(createChannelsRouter(routeCtx));
   app.use(createSampServersRouter(routeCtx));
   app.use(createGameplayRouter(routeCtx));
+  healthRoutes(app, db);
 
   app.get("/panel", (req, res) => res.redirect("/nexus/"));
   app.get("/panel/*", (req, res) => res.redirect("/nexus/"));
