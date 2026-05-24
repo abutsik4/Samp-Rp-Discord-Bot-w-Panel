@@ -1132,7 +1132,13 @@ async function addLedgerUnique(db, type, fromUser, toUser, amount, idempotencyKe
 
 async function adjustMoney(db, userId, delta) {
   const uid = String(userId);
-  await dbRun(db, `UPDATE samp_users SET money = money + ?, updated_at = datetime('now') WHERE user_id = ?`, [Number(delta), uid]);
+  const d = Number(delta);
+  if (d >= 0) {
+    await dbRun(db, `UPDATE samp_users SET money = money + ?, updated_at = datetime('now') WHERE user_id = ?`, [d, uid]);
+  } else {
+    // Clamp at zero to prevent negative balances
+    await dbRun(db, `UPDATE samp_users SET money = MAX(0, money + ?), updated_at = datetime('now') WHERE user_id = ?`, [d, uid]);
+  }
 }
 
 async function recordTruckRun(db, userId, opKey, contract, outcome = {}) {
