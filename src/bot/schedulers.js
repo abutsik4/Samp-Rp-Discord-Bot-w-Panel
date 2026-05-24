@@ -29,6 +29,7 @@ const { runSampBackupCycle } = require("../features/samp-money-backups");
 const { runStockTick, runCrewSalaryCycle } = require("../features/samp-stocks-engine");
 const { getGangLevelByXp } = require("../features/constants/gang-evolution");
 const { STOCK_TICK_MINUTES } = require("../features/constants/prestige");
+const { dbAll } = require("../utils/db-helpers");
 
 const activeSchedulerTasks = new Set();
 
@@ -54,7 +55,7 @@ async function runExclusiveTask(taskName, fn) {
  */
 async function startSchedulers(ctx) {
   const {
-    client, db, TOKEN, dbAll,
+    client, db, TOKEN,
 
     // Still from ctx (runtime-constructed or from helpers)
     startDailyHolidayPosts,
@@ -616,7 +617,7 @@ async function startSchedulers(ctx) {
 
   // ── SAMP status trackers ────────────────────────────────────────
   console.log("[SAMP] Initializing server status trackers...");
-  const sampTrackers = await dbAll("SELECT * FROM samp_trackers WHERE enabled = 1");
+  const sampTrackers = await dbAll(db, "SELECT * FROM samp_trackers WHERE enabled = 1");
   console.log(`[SAMP] Found ${sampTrackers.length} enabled trackers`);
 
   if (!client.sampTrackers) client.sampTrackers = new Map();
