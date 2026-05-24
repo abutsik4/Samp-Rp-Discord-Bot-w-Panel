@@ -319,6 +319,9 @@ function createPanelApp({
   app.use(createSampServersRouter(routeCtx));
   app.use(createGameplayRouter(routeCtx));
 
+  app.get("/panel", (req, res) => res.redirect("/nexus/"));
+  app.get("/panel/*", (req, res) => res.redirect("/nexus/"));
+
   if (hasSpaBuild && !useLegacyPages) {
     // Serve SPA HTML with no-cache to prevent stale builds after deployments
     app.get(PANEL_BASE, (_req, res) => {
