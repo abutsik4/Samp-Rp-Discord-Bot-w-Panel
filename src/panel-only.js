@@ -14,7 +14,7 @@ const { initSchema } = require("./db/schema");
 const { createDiscordClient } = require("./bot/discordClient");
 const { createPanelApp } = require("./web/panel-app");
 
-const PORT = Number(process.env.PANEL_PORT || 3001);
+const PORT = Number(process.env.PANEL_PORT || process.env.PORT || 3001);
 const TOKEN = process.env.DISCORD_TOKEN;
 const PANEL_DISABLE_DISCORD = process.env.PANEL_DISABLE_DISCORD === "1";
 const GUILD_ID = process.env.GUILD_ID || "537187880842559499";
