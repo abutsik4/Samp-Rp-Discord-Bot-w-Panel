@@ -534,7 +534,42 @@ async function startSchedulers(ctx) {
     }
   }, 60 * 60 * 1000);
 
-  // ── Register guild commands ─────────────────────────────────────
+  
+
+  // ── Gang Territory Decay (every 6 hours) ───────────────────────
+  const scheduleGangTerritoryDecay = () => {
+    const decayMs = 6 * 60 * 60 * 1000;
+    setInterval(async () => {
+      try {
+        await runExclusiveTask("gang-territory-decay", async () => {
+          const rows = await dbAll(db, "SELECT district_id, gang_id, pressure, updated_at FROM samp_gang_territories");
+          let decayed = 0, neutralized = 0;
+          for (const row of (rows || [])) {
+            const evo = await dbGet(db, "SELECT updated_at FROM samp_gang_evolution WHERE gang_id = ?", [row.gang_id]);
+            const lastActivity = evo?.updated_at ? new Date(evo.updated_at).getTime() : Date.now();
+            const hoursSinceActivity = (Date.now() - lastActivity) / 3600000;
+            const decayRate = hoursSinceActivity > 6 ? 3 : 1.5; // 3%/h if inactive 6h+, 1.5%/h otherwise
+            const hoursSinceUpdate = (Date.now() - new Date(row.updated_at).getTime()) / 3600000;
+            const loss = Math.round(decayRate * hoursSinceUpdate);
+            const next = Math.max(0, (row.pressure || 100) - loss);
+            if (next <= 0) {
+              await dbRun(db, "DELETE FROM samp_gang_territories WHERE district_id = ?", [row.district_id]);
+              await dbRun(db, "INSERT INTO samp_gang_territory_history(district_id, gang_id, event, pressure) VALUES(?,?,?,?)", [row.district_id, row.gang_id, "decay_neutral", 0]);
+              neutralized++;
+            } else {
+              await dbRun(db, "UPDATE samp_gang_territories SET pressure = ?, updated_at = datetime('now') WHERE district_id = ?", [next, row.district_id]);
+              decayed++;
+            }
+          }
+          if (decayed > 0 || neutralized > 0) {
+            console.log(`[GangDecay] processed ${decayed} territories, neutralized ${neutralized}`);
+          }
+        });
+      } catch (err) { console.error("[GangDecay] error:", err); }
+    }, decayMs);
+  };
+  scheduleGangTerritoryDecay();
+// ── Register guild commands ─────────────────────────────────────
   for (const guild of client.guilds.cache.values()) {
     await registerGuildCommands(client, guild.id, TOKEN);
   }

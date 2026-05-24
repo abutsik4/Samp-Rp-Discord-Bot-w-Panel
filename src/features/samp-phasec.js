@@ -38,8 +38,19 @@ async function getUserChips(db, uid) {
   return Number(r?.chips || 0);
 }
 async function adjustChips(db, uid, delta, type, meta = {}) {
-  await dbRun(db, "UPDATE samp_users SET chips = chips + ?, updated_at = datetime('now') WHERE user_id = ?", [Number(delta), String(uid)]);
-  await dbRun(db, "INSERT INTO samp_chip_ledger(user_id, type, amount, meta_json) VALUES(?, ?, ?, ?)", [String(uid), type, Number(delta), JSON.stringify(meta)]);
+  let finalDelta = Number(delta);
+  if (type === "casino_win") {
+    try {
+      const gm = await dbGet(db, "SELECT gang_id FROM samp_gang_members WHERE user_id = ?", [String(uid)]);
+      if (gm?.gang_id) {
+        const evo = await dbGet(db, "SELECT * FROM samp_gang_evolution WHERE gang_id = ?", [gm.gang_id]);
+        const lvl = getGangLevelByXp(Number(evo?.xp || 0));
+        if (lvl.level >= 5) finalDelta = Math.round(finalDelta * 1.005);
+      }
+    } catch (_e) {}
+  }
+  await dbRun(db, "UPDATE samp_users SET chips = chips + ?, updated_at = datetime('now') WHERE user_id = ?", [finalDelta, String(uid)]);
+  await dbRun(db, "INSERT INTO samp_chip_ledger(user_id, type, amount, meta_json) VALUES(?, ?, ?, ?)", [String(uid), type, finalDelta, JSON.stringify(meta)]);
 }
 
 // ─── Generic cooldown helpers (mirror samp-prestige) ───
@@ -237,7 +248,9 @@ async function handleBlackmarketPrestige(interaction, db) {
     const deal = BLACK_MARKET_PRESTIGE_ITEMS.find((x) => x.type === itType);
     if (!deal) { await interaction.reply({ content: "Не найдено.", ephemeral: true }); return; }
     const price = Math.round((deal.basePrice[0] + deal.basePrice[1]) / 2 + (Math.random() - 0.5) * (deal.basePrice[1] - deal.basePrice[0]));
-    if (Number(user.money) < price) { await interaction.reply({ content: `Нужно ${fmtMoney(price)}`, ephemeral: true }); return; }
+    let finalPrice = price;
+    try { const gm = await dbGet(db, "SELECT gang_id FROM samp_gang_members WHERE user_id = ?", [uid]); if (gm?.gang_id) { const evo = await dbGet(db, 'SELECT * FROM samp_gang_evolution WHERE gang_id = ?', [gm.gang_id]); const lvl = getGangLevelByXp(Number(evo?.xp || 0)); if (lvl.level >= 3) finalPrice = Math.round(price * 0.85); } } catch (_e) {}
+    if (Number(user.money) < finalPrice) { await interaction.reply({ content: `Нужно ${fmtMoney(finalPrice)}`, ephemeral: true }); return; }
     const grant = BLACK_MARKET_PRESTIGE_GRANTS[deal.type];
     if (grant && !grant.isInstant && grant.maxInventoryQty) {
       const cur = await dbGet(db, "SELECT qty FROM samp_inventory WHERE user_id = ? AND item_id = ?", [uid, grant.inventoryItemId]);

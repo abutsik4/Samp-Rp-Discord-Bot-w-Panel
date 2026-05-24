@@ -1,6 +1,6 @@
 "use strict";
 
-const { dbRun } = require("../utils/db-helpers");
+const { dbRun, dbGet } = require("../utils/db-helpers");
 const { MATERIALS } = require("./constants/crafting");
 
 /**
@@ -19,4 +19,17 @@ async function awardMaterialDrops(db, userId, actionName) {
   } catch (_e) {}
 }
 
-module.exports = { awardMaterialDrops };
+module.exports = { awardMaterialDrops, incrementGangXp };
+
+async function incrementGangXp(db, userId, amount) {
+  try {
+    const row = await dbGet(db, "SELECT gang_id FROM samp_gang_members WHERE user_id = ?", [String(userId)]);
+    if (!row || !row.gang_id) return;
+    await dbRun(db,
+      `INSERT INTO samp_gang_evolution(gang_id, xp, level, updated_at)
+       VALUES(?, ?, 1, datetime('now'))
+       ON CONFLICT(gang_id) DO UPDATE SET xp = xp + excluded.xp, updated_at = datetime('now')`,
+      [row.gang_id, amount]
+    );
+  } catch (_e) {}
+}

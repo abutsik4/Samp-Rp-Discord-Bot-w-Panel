@@ -2332,6 +2332,7 @@ async function handleHeist(interaction, db) {
             await adjustMoney(db, pid, share);
             await addLedger(db, "heist", null, pid, share, { tier: tierKey, crew_size: participantIds.length });
             try { const { awardMaterialDrops } = require("./phasec-utils"); await awardMaterialDrops(db, pid, "heist"); } catch (_e) {}
+            try { const { incrementGangXp } = require("./phasec-utils"); await incrementGangXp(db, pid, 80); } catch (_e) {}
           }
         });
         const winEmbed = new EmbedBuilder().setTitle(`🎉 Успех: ${tier.name}`).setDescription(`Команда взяла **${fmtMoney(totalPayout)}**!\nКаждый получил: **${fmtMoney(share)}**\nСледующий заход через **${cooldownText}**.`).setColor(0x2ecc71);
@@ -2556,6 +2557,7 @@ async function handleGangCommand(interaction, db) {
       );
     });
 
+    try { await incrementGangXp(db, userId, 10); } catch (_e) {}
     await interaction.reply(
       `🛡️ Банда **[${member.tag}] ${member.name}** поддержала бизнес **${prop.name}** у <@${target.id}>.\n` +
       `Из казны списано: **-${fmtMoney(cost)}**\n` +
@@ -2644,6 +2646,8 @@ async function handleGangCommand(interaction, db) {
            ON CONFLICT(district_id) DO UPDATE SET gang_id = excluded.gang_id, pressure = excluded.pressure, claimed_at = excluded.claimed_at, updated_at = excluded.updated_at`,
           [districtId, member.gang_id, TERRITORY_CAPTURE_PRESSURE]
         );
+        try { await incrementGangXp(db, userId, 40); } catch (_e) {}
+        try { await dbRun(db, 'INSERT INTO samp_gang_territory_history(district_id, gang_id, event, pressure) VALUES(?,?,?,?)', [districtId, member.gang_id, 'claim', TERRITORY_CAPTURE_PRESSURE]); } catch (_e) {}
         summary = `🗺️ Банда **[${member.tag}] ${member.name}** взяла район **${district.name}** под контроль.\nДавление: **${TERRITORY_CAPTURE_PRESSURE}%** | Бонус бизнесам района: **+${Math.round(district.businessBuff * 100)}%**`;
       } else if (isOwn) {
         const nextPressure = Math.min(100, Number(current.pressure || 0) + TERRITORY_REINFORCE_PRESSURE);
@@ -2652,6 +2656,8 @@ async function handleGangCommand(interaction, db) {
           `UPDATE samp_gang_territories SET pressure = ?, updated_at = datetime('now') WHERE district_id = ?`,
           [nextPressure, districtId]
         );
+        try { await incrementGangXp(db, userId, 20); } catch (_e) {}
+        try { await dbRun(db, 'INSERT INTO samp_gang_territory_history(district_id, gang_id, event, pressure) VALUES(?,?,?,?)', [districtId, member.gang_id, 'reinforce', nextPressure]); } catch (_e) {}
         summary = `🛡️ Банда **[${member.tag}] ${member.name}** укрепила район **${district.name}**.\nДавление: **${nextPressure}%** | Бонус бизнесам района: **+${Math.round(district.businessBuff * 100)}%**`;
       } else {
         const nextPressure = Number(current.pressure || 0) - TERRITORY_ATTACK_PRESSURE;
@@ -2663,6 +2669,8 @@ async function handleGangCommand(interaction, db) {
              WHERE district_id = ?`,
             [member.gang_id, TERRITORY_CAPTURE_PRESSURE, districtId]
           );
+          try { await incrementGangXp(db, userId, 80); } catch (_e) {}
+          try { await dbRun(db, 'INSERT INTO samp_gang_territory_history(district_id, gang_id, event, pressure) VALUES(?,?,?,?)', [districtId, member.gang_id, 'takeover', TERRITORY_CAPTURE_PRESSURE]); } catch (_e) {}
           summary = `🔥 Банда **[${member.tag}] ${member.name}** перехватила район **${district.name}**.\nНовый контроль: **${TERRITORY_CAPTURE_PRESSURE}%** | Бонус бизнесам района: **+${Math.round(district.businessBuff * 100)}%**`;
         } else {
           await dbRun(
@@ -2670,6 +2678,8 @@ async function handleGangCommand(interaction, db) {
             `UPDATE samp_gang_territories SET pressure = ?, updated_at = datetime('now') WHERE district_id = ?`,
             [nextPressure, districtId]
           );
+          try { await incrementGangXp(db, userId, 30); } catch (_e) {}
+          try { await dbRun(db, 'INSERT INTO samp_gang_territory_history(district_id, gang_id, event, pressure) VALUES(?,?,?,?)', [districtId, member.gang_id, 'attack', nextPressure]); } catch (_e) {}
           const defender = current?.gang_name && current?.gang_tag
             ? `**[${current.gang_tag}] ${current.gang_name}**`
             : "соперников";
