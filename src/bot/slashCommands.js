@@ -186,11 +186,14 @@ async function registerGuildCommands(client, guildId, token) {
   const commands = buildCommandsJson();
   const rest = new REST({ version: "10" }).setToken(token);
   try {
-    console.log("Registering slash commands for guild " + guildId + "...");
+    console.log("[Slash] Commands to register: " + commands.length);
+    console.log("[Slash] Clearing old commands for guild " + guildId + "...");
+    await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body: [] });
+    console.log("[Slash] Registering fresh commands for guild " + guildId + "...");
     await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body: commands });
-    console.log("Slash commands registered for guild " + guildId + ".");
+    console.log("[Slash] Commands registered for guild " + guildId + ".");
   } catch (error) {
-    console.error("Error registering slash commands for guild " + guildId + ":", error);
+    console.error("[Slash] Error registering commands for guild " + guildId + ":", error.message || error);
   }
 }
 

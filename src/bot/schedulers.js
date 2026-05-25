@@ -29,7 +29,7 @@ const { runSampBackupCycle } = require("../features/samp-money-backups");
 const { runStockTick, runCrewSalaryCycle } = require("../features/samp-stocks-engine");
 const { getGangLevelByXp } = require("../features/constants/gang-evolution");
 const { STOCK_TICK_MINUTES } = require("../features/constants/prestige");
-const { dbAll } = require("../utils/db-helpers");
+const { dbAll, dbGet } = require("../utils/db-helpers");
 
 const activeSchedulerTasks = new Set();
 
