@@ -143,6 +143,14 @@ function registerCommandHandlers(ctx) {
     if (!interaction.isChatInputCommand()) return;
 
     const { commandName } = interaction;
+    // ── Hidden command guard ──
+    const HIDDEN_COMMANDS = new Set(["userstats","top5","top10","backfill","sync-missing","demoembed","reactions","export","countdown","mystrikes","whitelist","automod","sampstatus","holiday","portfolio","radio","radio-top","radio-info","radio-fans"]);
+    if (HIDDEN_COMMANDS.has(commandName)) {
+      await interaction.reply({ content: "Эта команда временно отключена.", ephemeral: true });
+      return false;
+    }
+    // ── Log every command ──
+    await logCommandUsage(db, interaction.user.id, interaction.guild?.id, commandName, interaction.options && interaction.options.getSubcommand ? interaction.options.getSubcommand(false) : null);
 
     // Check if command is disabled
     const guildId = interaction.guild?.id;

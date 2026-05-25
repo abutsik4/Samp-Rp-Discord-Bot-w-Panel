@@ -167,7 +167,17 @@ function buildCommandsJson() {
 
     // SAMP Life: daily login bonus
     new SlashCommandBuilder().setName("daily").setDescription("SAMP Life: ежедневный бонус (зависит от стрика)"),
-  ].map((cmd) => cmd.toJSON());
+  ].filter((cmd) => {
+    const HIDDEN = new Set([
+      "userstats","top5","top10","backfill","sync-missing","demoembed",
+      "reactions","export","countdown","mystrikes",
+      "whitelist","automod","sampstatus",
+      "holiday",
+      "portfolio",
+      "radio","radio-top","radio-info","radio-fans",
+    ]);
+    return !HIDDEN.has(cmd.name);
+  }).map((cmd) => cmd.toJSON());
 }
 
 // -- Guild registration -------------------------------------------------------

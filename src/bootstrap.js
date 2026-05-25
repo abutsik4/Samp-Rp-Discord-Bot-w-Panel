@@ -98,6 +98,16 @@ async function initFeatureTables(db, dbRun) {
   await ensureXpMultipliersTable(db);
   await ensureSampExtendedTables(db);
   await ensurePrestigeTables(db);
+    await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_command_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      guild_id TEXT,
+      command_name TEXT NOT NULL,
+      subcommand_name TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+    await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_cmdlog_cmd ON samp_command_logs(command_name, created_at)`);
+    await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_cmdlog_user ON samp_command_logs(user_id, created_at)`);
   await ensureCraftingTables(db);
   await ensureSeasonalEventsTables(db);
   await ensureGiveawayTables(db);
