@@ -108,6 +108,12 @@ async function initFeatureTables(db, dbRun) {
     )`);
     await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_cmdlog_cmd ON samp_command_logs(command_name, created_at)`);
     await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_cmdlog_user ON samp_command_logs(user_id, created_at)`);
+  await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_login_streak (
+    user_id TEXT PRIMARY KEY,
+    current_streak INTEGER NOT NULL DEFAULT 0,
+    last_login TEXT NOT NULL DEFAULT (datetime('now'))
+  )`);
+
   await ensureCraftingTables(db);
   await ensureSeasonalEventsTables(db);
   await ensureGiveawayTables(db);

@@ -1831,6 +1831,10 @@ async function handleWork(interaction, db) {
 
   const opKey = makeInteractionOpKey(interaction, "work");
   await withTransaction(db, async () => {
+    // Re-verify cooldown in tx to prevent race-condition double-payouts
+    const txCd = await getCooldown(db, userId, "work");
+    if (txCd > nowMs()) throw new Error("COOLDOWN_ACTIVE");
+    await setCooldown(db, userId, "work", nowMs() + (COOLDOWNS_MS.work || 60_000));
     await adjustMoney(db, userId, earnings);
     const inserted = await addLedgerUnique(db, "work", null, userId, earnings, opKey, { job, base: baseEarnings, boost: boostDelta, aircraft_flavor: aircraftFlavor, aircraft_bonus: aircraftBonus });
     // Phase C drops
@@ -2031,6 +2035,9 @@ async function handleRob(interaction, db) {
 
     let stolenAmount = actualLoot;
     await withTransaction(db, async () => {
+      const txCd = await getCooldown(db, userId, "rob");
+      if (txCd > nowMs()) throw new Error("COOLDOWN_ACTIVE");
+      await setCooldown(db, userId, "rob", robPairReadyAt);
       const freshVictim = await getUserRow(db, target.id);
       const realLoot = Math.min(actualLoot, Number(freshVictim?.money || 0));
       if (realLoot <= 0) throw new Error("INSUFFICIENT");
@@ -3249,16 +3256,24 @@ async function handleDaily(interaction, db) {
   // Defer reply early to avoid interaction token expiry during DB work
   await interaction.deferReply();
 
-  // Get streak from user_streaks table (if guild context available)
+  // Proper login streak (not message streak)
   let currentStreak = 0;
-  if (guildId) {
-    const streakRow = await dbGet(
-      db,
-      `SELECT current_streak FROM user_streaks WHERE guild_id = ? AND user_id = ?`,
-      [guildId, userId]
-    );
-    if (streakRow) currentStreak = streakRow.current_streak || 0;
+  const streakRow = await dbGet(db, "SELECT current_streak, last_login FROM samp_login_streak WHERE user_id = ?", [userId]);
+  if (streakRow) {
+    const lastDate = new Date(streakRow.last_login).setHours(0,0,0,0);
+    const today = new Date().setHours(0,0,0,0);
+    const oneDay = 24 * 60 * 60 * 1000;
+    if (today - lastDate === oneDay) {
+      currentStreak = (streakRow.current_streak || 0) + 1;
+    } else if (today - lastDate < oneDay) {
+      currentStreak = streakRow.current_streak || 0; // same day
+    } else {
+      currentStreak = 1; // missed — reset
+    }
+  } else {
+    currentStreak = 1;
   }
+  await dbRun(db, "INSERT INTO samp_login_streak(user_id, current_streak) VALUES(?, ?) ON CONFLICT(user_id) DO UPDATE SET current_streak = excluded.current_streak, last_login = datetime('now')", [userId, currentStreak]);
 
   // Find bonus tier
   const tier = DAILY_BONUS_TIERS.find((t) => currentStreak >= t.minStreak) || { bonus: 500, label: "новичок" };
