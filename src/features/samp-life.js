@@ -179,6 +179,10 @@ const COOLDOWNS_MS = {
   rob: 15 * 60_000,
   race: 5 * 60_000,
   duel: 5 * 60_000,
+  // Casino: 30-second cooldown per game type to prevent spam
+  slots: 30_000,
+  blackjack: 30_000,
+  roulette: 30_000,
 };
 
 const CHALLENGE_PAIR_COOLDOWNS_MS = {
@@ -1616,6 +1620,23 @@ function getSampLifeCommandBuilders() {
         { name: "🟢 Зелёное (x14)", value: "green" }
       ))
       .addIntegerOption((o) => o.setName("bet").setDescription("Ставка").setRequired(true).setMinValue(100).setMaxValue(500000)),
+
+    new SlashCommandBuilder()
+      .setName("insure")
+      .setDescription("SAMP Life: страхование автомобиля (защита от ограблений)")
+      .addSubcommand((sub) =>
+        sub
+          .setName("buy")
+          .setDescription("Купить страховку на машину (7 дней, 5% от стоимости авто)")
+          .addStringOption((o) => o.setName("car_id").setDescription("ID машины (из /balance)").setRequired(true))
+      )
+      .addSubcommand((sub) =>
+        sub
+          .setName("renew")
+          .setDescription("Продлить страховку на машину (+7 дней)")
+          .addStringOption((o) => o.setName("car_id").setDescription("ID машины (из /balance)").setRequired(true))
+      )
+      .addSubcommand((sub) => sub.setName("check").setDescription("Проверить активные страховки")),
   ];
 }
 
@@ -1994,27 +2015,38 @@ async function handleRob(interaction, db) {
     if (caught) {
       const jailMs = 5 * 60_000;
       const rawFine = randInt(1000, 4000);
-      // Laundering: reduce fine by 40%
+      // Laundering item: move check+consume INSIDE the transaction so it's atomic
+      const opKeyCaught = makeInteractionOpKey(interaction, "rob_pvp_caught");
       let launderingDiscount = 0;
+      let launderingUsed = false;
       try {
-        const { getInventoryQty, consumeInventoryItem } = require("./samp-extended");
+        const { getInventoryQty } = require("./samp-extended");
         const launderQty = await getInventoryQty(db, userId, "bm_laundering");
-        if (launderQty > 0) { launderingDiscount = 0.40; await consumeInventoryItem(db, userId, "bm_laundering", 1); }
+        if (launderQty > 0) launderingDiscount = 0.40;
       } catch (_) {}
       const discountedFine = Math.floor(rawFine * (1 - launderingDiscount));
       const latest = await getUserRow(db, userId);
       const fine = Math.min(discountedFine, Number(latest?.money || 0));
       await withTransaction(db, async () => {
+        // Consume laundering item atomically
+        if (launderingDiscount > 0) {
+          try {
+            const { consumeInventoryItem } = require("./samp-extended");
+            await consumeInventoryItem(db, userId, "bm_laundering", 1);
+            launderingUsed = true;
+          } catch (_) { /* item may have been used between check and tx */ }
+        }
         if (fine > 0) await adjustMoney(db, userId, -fine);
         await dbRun(db, `UPDATE samp_users SET jail_until = ? WHERE user_id = ?`, [nowMs() + jailMs, String(userId)]);
         await setChallengePairCooldown(db, userId, target.id, "rob", robPairReadyAt);
-        const inserted = await addLedgerUnique(db, "rob_pvp_caught", userId, target.id, fine, makeInteractionOpKey(interaction, "rob_pvp_caught"), { jail_ms: jailMs });
+        const inserted = await addLedgerUnique(db, "rob_pvp_caught", userId, target.id, fine, opKeyCaught,
+          { jail_ms: jailMs, laundering_discount: launderingUsed ? 0.40 : 0 });
         if (!inserted) throw new Error("DUPLICATE_OPERATION");
       });
 
       const after = await getUserRow(db, userId);
       await interaction.editReply(
-        `🚔 Тебя приняли при ограблении <@${target.id}>. Тюрьма: **5 минут**. Штраф: **-${fmtMoney(fine)}**.${launderingDiscount > 0 ? " 🧾 Отмывание: скидка 40%!" : ""}\n` +
+        `🚔 Тебя приняли при ограблении <@${target.id}>. Тюрьма: **5 минут**. Штраф: **-${fmtMoney(fine)}**.${launderingUsed ? " 🧾 Отмывание: скидка 40%!" : ""}\n` +
           `Баланс: **${fmtMoney(after.money)}**`
       );
       return;
@@ -2029,6 +2061,17 @@ async function handleRob(interaction, db) {
     const victimBoosts = await getUserBoostEffects(db, target.id).catch(() => null);
     const mansionMitigation = Math.max(0, Math.min(0.5, Number(victimBoosts?.robLossMitigation || 0)));
     if (mansionMitigation > 0) loot = Math.max(1, Math.floor(loot * (1 - mansionMitigation)));
+    // Insurance: if victim has active car insurance, reduce loot by 50%
+    let insuranceMitigation = 0;
+    try {
+      const insRow = await dbGet(
+        db,
+        `SELECT 1 FROM samp_vehicle_insurance WHERE user_id = ? AND expires_at > ? LIMIT 1`,
+        [String(target.id), Date.now()]
+      );
+      if (insRow) insuranceMitigation = 0.5;
+    } catch (_) {}
+    if (insuranceMitigation > 0) loot = Math.max(1, Math.floor(loot * (1 - insuranceMitigation)));
     const actualLoot = Math.min(loot, Number(victim.money));
 
     if (actualLoot <= 0) { await interaction.editReply("У жертвы нет виртов — обчищать нечего."); return; }
@@ -2044,7 +2087,8 @@ async function handleRob(interaction, db) {
       await adjustMoney(db, target.id, -realLoot);
       await adjustMoney(db, userId, realLoot);
       await setChallengePairCooldown(db, userId, target.id, "rob", robPairReadyAt);
-      const inserted = await addLedgerUnique(db, "rob_pvp", userId, target.id, realLoot, makeInteractionOpKey(interaction, "rob_pvp"), {});
+      const inserted = await addLedgerUnique(db, "rob_pvp", userId, target.id, realLoot, makeInteractionOpKey(interaction, "rob_pvp"),
+        { insurance_mitigation: insuranceMitigation });
       if (!inserted) throw new Error("DUPLICATE_OPERATION");
       stolenAmount = realLoot;
     });
@@ -2052,7 +2096,8 @@ async function handleRob(interaction, db) {
     const after = await getUserRow(db, userId);
     const psNote = bgLootMitigation > 0 ? ` _(охрана подранила добычу: −${Math.round(bgLootMitigation * 100)}%)_` : "";
     const mansionNote = mansionMitigation > 0 ? ` _(резиденция жертвы охраняется: −${Math.round(mansionMitigation * 100)}%)_` : "";
-    await interaction.editReply(`🕶️ Ты обчистил <@${target.id}> на **${fmtMoney(stolenAmount)}**!${psNote}${mansionNote} Баланс: **${fmtMoney(after.money)}**`);
+    const insNote = insuranceMitigation > 0 ? ` _(страховка жертвы: −50%)_` : "";
+    await interaction.editReply(`🕶️ Ты обчистил <@${target.id}> на **${fmtMoney(stolenAmount)}**!${psNote}${mansionNote}${insNote} Баланс: **${fmtMoney(after.money)}**`);
     return;
   }
 
@@ -2162,6 +2207,7 @@ async function handleBuy(interaction, db) {
     }
 
     const opKey = makeInteractionOpKey(interaction, "buy_car");
+    let buyCarErr = null;
     await withTransaction(db, async () => {
       const fresh = await getOrCreateUser(db, userId);
       if (Number(fresh.money) < car.price) throw new Error("INSUFFICIENT");
@@ -2169,13 +2215,32 @@ async function handleBuy(interaction, db) {
       const alreadyOwned = await dbGet(db, "SELECT 1 FROM samp_garage WHERE user_id = ? AND car_id = ?", [String(userId), id]);
       if (alreadyOwned) throw new Error("ALREADY_OWNED");
 
+      // Enforce garage slot limit
+      const garageCount = await dbGet(db, "SELECT COUNT(*) AS cnt FROM samp_garage WHERE user_id = ?", [String(userId)]);
+      const slotRow = await dbGet(db, "SELECT garage_slots FROM samp_users WHERE user_id = ?", [String(userId)]);
+      const maxSlots = Number(slotRow?.garage_slots || 3);
+      if (Number(garageCount?.cnt || 0) >= maxSlots) throw new Error("GARAGE_FULL");
+
       const inserted = await addLedgerUnique(db, "buy_car", userId, null, car.price, opKey, { car_id: id });
       if (!inserted) throw new Error("DUPLICATE_OPERATION");
 
       await adjustMoney(db, userId, -car.price);
       await dbRun(db, `INSERT INTO samp_garage(user_id, car_id) VALUES(?, ?)`, [String(userId), id]);
       await dbRun(db, `UPDATE samp_users SET car_id = ?, updated_at = datetime('now') WHERE user_id = ?`, [id, String(userId)]);
-    });
+    }).catch((e) => { buyCarErr = e.message; });
+
+    if (buyCarErr === "INSUFFICIENT") {
+      await interaction.reply({ content: `💸 Нужно **${fmtMoney(car.price)}**, у тебя не хватает виртов.`, ephemeral: true }); return;
+    }
+    if (buyCarErr === "ALREADY_OWNED") {
+      await interaction.reply({ content: `🚗 Ты уже владеешь **${car.name}**.`, ephemeral: true }); return;
+    }
+    if (buyCarErr === "GARAGE_FULL") {
+      await interaction.reply({ content: `🚗 Гараж заполнен! Расширь его через \`/garage expand\` или продай одну из машин.`, ephemeral: true }); return;
+    }
+    if (buyCarErr) {
+      await interaction.reply({ content: "Не удалось купить машину. Попробуй ещё раз.", ephemeral: true }); return;
+    }
 
     const after = await getUserRow(db, userId);
     const questNoteBuyCar = await maybeCompleteOnboarding(db, userId, "buy_car");
@@ -3014,7 +3079,23 @@ async function handleDuel(interaction, db) {
     const bountyText = bountyResult?.collected
       ? `\n💀 Награда за голову: **${fmtMoney(bountyResult.amount)}**${bountyResult.bonusAmount > 0 ? ` (включая **+${fmtMoney(bountyResult.bonusAmount)}** бонус Золотого Desert Eagle)` : ""}`
       : "";
-    await interaction.editReply(text + `\n\n💀 Победил <@${opponent.id}>. Ты потерял **${fmtMoney(settlement.settledAmount)}**.${buildReducedSettlementNote(bet, settlement.settledAmount, userId)}${bountyText}`);
+    // Hospital fee on duel loss
+    let hospitalFeeText = "";
+    try {
+      const levelRow = await dbGet(db, "SELECT level FROM user_levels WHERE guild_id = ? AND user_id = ?", [interaction.guild?.id, userId]);
+      const userLevel = Number(levelRow?.level || 1);
+      const rawFee = Math.min(userLevel * 1000, 15_000);
+      const userAfterDuel = await getUserRow(db, userId);
+      const hospitalFee = Math.min(rawFee, Math.max(0, Number(userAfterDuel?.money || 0) - 100));
+      if (hospitalFee > 0) {
+        await withTransaction(db, async () => {
+          await adjustMoney(db, userId, -hospitalFee);
+          await addLedger(db, "hospital_fee", userId, null, hospitalFee, { reason: "duel_loss" });
+        });
+        hospitalFeeText = `\n🏥 Счёт в больнице: **-${fmtMoney(hospitalFee)}**`;
+      }
+    } catch (_) {}
+    await interaction.editReply(text + `\n\n💀 Победил <@${opponent.id}>. Ты потерял **${fmtMoney(settlement.settledAmount)}**.${buildReducedSettlementNote(bet, settlement.settledAmount, userId)}${bountyText}${hospitalFeeText}`);
   } catch (_) {
     await interaction.editReply(text + `\n\n💀 Победил <@${opponent.id}>. Ты потерял **${fmtMoney(settlement.settledAmount)}**.${buildReducedSettlementNote(bet, settlement.settledAmount, userId)}`);
   }
@@ -3059,6 +3140,12 @@ async function handleSellCar(interaction, db) {
   await interaction.deferReply();
 
   const offerId = await withTransaction(db, async () => {
+    // Invalidate any existing open offers for the same car+seller before creating a new one
+    await dbRun(
+      db,
+      `DELETE FROM samp_car_offers WHERE seller_user_id = ? AND car_id = ? AND status = 'open'`,
+      [String(sellerId), carId]
+    );
     const res = await dbRun(
       db,
       `INSERT INTO samp_car_offers(seller_user_id, buyer_user_id, car_id, price, status)
@@ -3122,6 +3209,12 @@ async function handleBuyCar(interaction, db) {
       const sellerOwned = await dbGet(db, "SELECT 1 FROM samp_garage WHERE user_id = ? AND car_id = ?", [String(offer.seller_user_id), String(offer.car_id)]);
       if (!sellerOwned) throw new Error("SELLER_NO_CAR");
 
+      // Enforce buyer's garage slot limit
+      const garageCount = await dbGet(db, "SELECT COUNT(*) AS cnt FROM samp_garage WHERE user_id = ?", [String(buyerId)]);
+      const freshBuyerSlots = await dbGet(db, "SELECT garage_slots FROM samp_users WHERE user_id = ?", [String(buyerId)]);
+      const maxSlots = Number(freshBuyerSlots?.garage_slots || 3);
+      if (Number(garageCount?.cnt || 0) >= maxSlots) throw new Error("GARAGE_FULL");
+
       const freshBuyer = await getOrCreateUser(db, buyerId);
       if (Number(freshBuyer.money) < Number(offer.price)) throw new Error("INSUFFICIENT");
 
@@ -3154,6 +3247,10 @@ async function handleBuyCar(interaction, db) {
     }
     if (String(e.message) === "SELLER_NO_CAR") {
       await interaction.editReply({ content: "Продавец уже не владеет этой тачкой." });
+      return;
+    }
+    if (String(e.message) === "GARAGE_FULL") {
+      await interaction.editReply({ content: "🚗 Гараж заполнен! Расширь его через `/garage expand` или продай одну из машин." });
       return;
     }
     await interaction.editReply({ content: "Не удалось купить тачку (оффер мог закрыться)." });
@@ -3315,6 +3412,10 @@ async function handlePay(interaction, db) {
 
   const amt = clampInt(amount, 1, 10_000_000);
   if (!amt) { await interaction.reply({ content: "Некорректная сумма.", ephemeral: true }); return; }
+  if (amount > 10_000_000) {
+    await interaction.reply({ content: `❌ Максимальная сумма перевода: **10,000,000 $**. Введённая сумма была обрезана.`, ephemeral: true });
+    return;
+  }
 
   await getOrCreateUser(db, target.id);
 
@@ -3382,12 +3483,19 @@ async function handleBlackjack(interaction, db) {
   const user = await getOrCreateUser(db, userId);
   if (!(await ensureNotJailed(interaction, user))) return;
 
+  // 30-second cooldown guard
+  if (!(await checkCooldownWithoutConsuming(interaction, db, userId, "blackjack"))) return;
+
+  // 30-second cooldown guard
+  if (!(await checkCooldownWithoutConsuming(interaction, db, userId, "blackjack"))) return;
+
   const bet = clampInt(betRaw, 500, 500000);
   if (!bet || Number(user.money) < bet) {
     await interaction.reply({ content: "Не хватает виртов.", ephemeral: true }); return;
   }
 
   await interaction.deferReply();
+  if (!(await checkAndConsumeCooldown(interaction, db, userId, "blackjack"))) return;
 
   const cards = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"];
   const cardVal = (c) => c === "A" ? 11 : ["J","Q","K"].includes(c) ? 10 : parseInt(c);
@@ -3422,7 +3530,11 @@ async function handleBlackjack(interaction, db) {
   await withTransaction(db, async () => {
     const fresh = await getUserRow(db, userId);
     if (Number(fresh?.money || 0) < bet) throw new Error("INSUFFICIENT");
-    const inserted = await addLedgerUnique(db, "blackjack", userId, null, Math.abs(net), opKey, { player, dealer, result, bet });
+    const bjType = net > 0 ? "blackjack_win" : net < 0 ? "blackjack_loss" : "blackjack_push";
+    const bjFrom = net > 0 ? null : (net < 0 ? userId : null);
+    const bjTo   = net > 0 ? userId : null;
+    const inserted = await addLedgerUnique(db, bjType, bjFrom, bjTo, Math.abs(net || bet), opKey,
+      { player, dealer, result, bet, net });
     if (!inserted) throw new Error("DUPLICATE_OPERATION");
     await adjustMoney(db, userId, net);
   });
@@ -3447,12 +3559,16 @@ async function handleRoulette(interaction, db) {
   const user = await getOrCreateUser(db, userId);
   if (!(await ensureNotJailed(interaction, user))) return;
 
+  // 30-second cooldown guard
+  if (!(await checkCooldownWithoutConsuming(interaction, db, userId, "roulette"))) return;
+
   const bet = clampInt(betRaw, 100, 500000);
   if (!bet || Number(user.money) < bet) {
     await interaction.reply({ content: "Не хватает виртов.", ephemeral: true }); return;
   }
 
   await interaction.deferReply();
+  if (!(await checkAndConsumeCooldown(interaction, db, userId, "roulette"))) return;
 
   const number = randInt(0, 36);
   const isGreen = number === 0;
@@ -3472,7 +3588,11 @@ async function handleRoulette(interaction, db) {
   await withTransaction(db, async () => {
     const fresh = await getUserRow(db, userId);
     if (Number(fresh?.money || 0) < bet) throw new Error("INSUFFICIENT");
-    const inserted = await addLedgerUnique(db, "roulette", userId, null, Math.abs(net), opKey, { color, resultColor, number, bet });
+    const ledgerType = net > 0 ? "roulette_win" : "roulette_loss";
+    const ledgerFrom = net > 0 ? null : userId;
+    const ledgerTo   = net > 0 ? userId : null;
+    const inserted = await addLedgerUnique(db, ledgerType, ledgerFrom, ledgerTo, Math.abs(net || bet), opKey,
+      { color, resultColor, number, bet, net });
     if (!inserted) throw new Error("DUPLICATE_OPERATION");
     await adjustMoney(db, userId, net);
   });
@@ -3484,6 +3604,119 @@ async function handleRoulette(interaction, db) {
     `Шарик: ${colorEmoji[resultColor]} **${number}** (${colorName[resultColor]})\n` +
     `Твоя ставка: ${colorEmoji[color]} ${colorName[color]}\n\n` +
     `${won ? `🎉 Выигрыш: **+${fmtMoney(net)}**` : net === 0 ? "🤝 Возврат ставки" : `💨 Проигрыш: **-${fmtMoney(bet)}**`}\n` +
+    `Баланс: **${fmtMoney(after.money)}**`
+  );
+}
+
+async function handleInsure(interaction, db) {
+  const userId = interaction.user.id;
+  const sub = interaction.options.getSubcommand(true);
+
+  if (sub === "check") {
+    const rows = await dbAll(
+      db,
+      `SELECT i.car_id, i.expires_at, i.paid_amount, c.make, c.model
+       FROM samp_vehicle_insurance i
+       LEFT JOIN samp_cars c ON c.id = i.car_id AND c.user_id = ?
+       WHERE i.user_id = ?`,
+      [String(userId), String(userId)]
+    );
+    if (!rows.length) {
+      await interaction.reply({ content: "У тебя нет активных страховок.", ephemeral: true });
+      return;
+    }
+    const now = Date.now();
+    const lines = rows.map((r) => {
+      const carName = r.make && r.model ? `${r.make} ${r.model}` : `Машина #${r.car_id}`;
+      const remaining = r.expires_at - now;
+      const active = remaining > 0;
+      const days = active ? Math.ceil(remaining / 86_400_000) : 0;
+      return active
+        ? `✅ **${carName}** — действует **${days}** д. (заплачено: ${fmtMoney(r.paid_amount)})`
+        : `❌ **${carName}** — просрочена`;
+    });
+    await interaction.reply({ content: `🛡️ **Твои страховки:**\n${lines.join("\n")}`, ephemeral: true });
+    return;
+  }
+
+  // buy or renew — both require a car_id
+  const carIdStr = interaction.options.getString("car_id", true).trim();
+  const carId = parseInt(carIdStr, 10);
+  if (!Number.isFinite(carId)) {
+    await interaction.reply({ content: "Неверный ID машины.", ephemeral: true }); return;
+  }
+
+  const user = await getOrCreateUser(db, userId);
+  if (!(await ensureNotJailed(interaction, user))) return;
+
+  // Verify the car belongs to this user
+  const carRow = await dbGet(
+    db,
+    `SELECT id, make, model, base_price FROM samp_cars WHERE id = ? AND user_id = ?`,
+    [carId, String(userId)]
+  );
+  if (!carRow) {
+    await interaction.reply({ content: "Такая машина не найдена или не принадлежит тебе.", ephemeral: true }); return;
+  }
+
+  // Check existing insurance
+  const existing = await dbGet(
+    db,
+    `SELECT expires_at, paid_amount FROM samp_vehicle_insurance WHERE user_id = ? AND car_id = ?`,
+    [String(userId), carId]
+  );
+
+  if (sub === "buy" && existing && existing.expires_at > Date.now()) {
+    const daysLeft = Math.ceil((existing.expires_at - Date.now()) / 86_400_000);
+    await interaction.reply({
+      content: `⚠️ У тебя уже есть активная страховка на **${carRow.make} ${carRow.model}** (осталось ${daysLeft} д.). Используй \`/insure renew\`, чтобы продлить.`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const basePrice = Number(carRow.base_price || 0);
+  // Cost: 5% of car base price for 7 days
+  const cost = Math.max(5_000, Math.round(basePrice * 0.05));
+  const durationDays = 7;
+  const durationMs = durationDays * 24 * 60 * 60 * 1_000;
+
+  if (Number(user.money) < cost) {
+    await interaction.reply({
+      content: `💸 Страховка на **${carRow.make} ${carRow.model}** на ${durationDays} дней стоит **${fmtMoney(cost)}**. У тебя недостаточно виртов.`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const action = sub === "buy" ? "Куплена" : "Продлена";
+  const opKey = makeInteractionOpKey(interaction, "insure");
+  await withTransaction(db, async () => {
+    const fresh = await getUserRow(db, userId);
+    if (Number(fresh?.money || 0) < cost) throw new Error("INSUFFICIENT");
+    await adjustMoney(db, userId, -cost);
+    const newExpiry = (existing && sub === "renew" && existing.expires_at > Date.now()
+      ? existing.expires_at
+      : Date.now()) + durationMs;
+    await dbRun(
+      db,
+      `INSERT INTO samp_vehicle_insurance(user_id, car_id, expires_at, paid_amount)
+       VALUES(?, ?, ?, ?)
+       ON CONFLICT(user_id, car_id) DO UPDATE SET expires_at = excluded.expires_at, paid_amount = excluded.paid_amount`,
+      [String(userId), carId, newExpiry, cost]
+    );
+    await addLedgerUnique(db, "insurance_buy", userId, null, cost, opKey,
+      { car_id: carId, duration_days: durationDays, action: sub });
+  });
+
+  const after = await getUserRow(db, userId);
+  const expireDate = new Date(Date.now() + (sub === "renew" && existing?.expires_at > Date.now()
+    ? existing.expires_at - Date.now() + durationMs
+    : durationMs));
+  await interaction.reply(
+    `🛡️ ${action} страховка на **${carRow.make} ${carRow.model}** на ${durationDays} дней!\n` +
+    `💸 Стоимость: **-${fmtMoney(cost)}**\n` +
+    `📅 Действует до: **${expireDate.toLocaleDateString("ru-RU")}**\n` +
     `Баланс: **${fmtMoney(after.money)}**`
   );
 }
@@ -3515,6 +3748,7 @@ async function handleSampLifeCommand({ interaction, db }) {
     else if (name === "slots") result = await handleSlots(interaction, db);
     else if (name === "blackjack") result = await handleBlackjack(interaction, db);
     else if (name === "roulette") result = await handleRoulette(interaction, db);
+    else if (name === "insure") result = await handleInsure(interaction, db);
     else handled = false;
 
     if (!handled) {

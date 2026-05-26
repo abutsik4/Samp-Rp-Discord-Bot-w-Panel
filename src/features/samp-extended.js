@@ -514,6 +514,43 @@ async function ensureSampExtendedTables(db) {
   )`);
 
   await dbRun(db, `DELETE FROM samp_cooldowns WHERE action = ?`, [HEIST_ACTIVE_ACTION]);
+
+  // Gang wars tables
+  await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_gang_wars (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    challenger_gang_id INTEGER NOT NULL,
+    defender_gang_id INTEGER NOT NULL,
+    bet INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    starts_at TEXT,
+    winner_gang_id INTEGER,
+    resolved_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (challenger_gang_id) REFERENCES samp_gangs(id),
+    FOREIGN KEY (defender_gang_id) REFERENCES samp_gangs(id)
+  )`);
+
+  await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_gang_war_bets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    war_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    gang_id INTEGER NOT NULL,
+    amount INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (war_id) REFERENCES samp_gang_wars(id) ON DELETE CASCADE
+  )`);
+
+  // Migrate samp_gang_wars: add winner_gang_id and resolved_at if missing
+  try {
+    const warCols = await dbAll(db, "PRAGMA table_info(samp_gang_wars)", []);
+    const warColNames = (warCols || []).map(c => c.name);
+    if (!warColNames.includes("winner_gang_id")) {
+      await dbRun(db, "ALTER TABLE samp_gang_wars ADD COLUMN winner_gang_id INTEGER");
+    }
+    if (!warColNames.includes("resolved_at")) {
+      await dbRun(db, "ALTER TABLE samp_gang_wars ADD COLUMN resolved_at TEXT");
+    }
+  } catch (_) {}
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -976,9 +1013,8 @@ function getBusinessIncomeBreakdown(prop, state, liveOps = DEFAULT_SAMP_LIVE_OPS
 
 function getBusinessMaintenanceCost(prop, state) {
   const conditionGap = Math.max(0, 100 - state.projectedCondition);
-  const suppliesGap = Math.max(0, 100 - state.projectedSupplies);
-  if (conditionGap === 0 && suppliesGap === 0) return 0;
-  return Math.max(500, Math.round((prop.maintainBase || 5_000) * ((conditionGap + suppliesGap) / 100)));
+  if (conditionGap === 0) return 0;
+  return Math.max(500, Math.round((prop.maintainBase || 5_000) * (conditionGap / 100)));
 }
 
 function getBusinessOperation(bizId) {
@@ -1563,11 +1599,11 @@ async function handleCollectIncome(interaction, db) {
         `UPDATE samp_properties
          SET last_collected = datetime('now'),
              condition = ?,
-             supplies = ?,
+             supplies = 100,
              last_state_tick = datetime('now'),
              total_collected = COALESCE(total_collected, 0) + ?
          WHERE user_id = ? AND property_id = ?`,
-        [item.projectedCondition, item.projectedSupplies, item.net, userId, item.propertyId]
+        [item.projectedCondition, item.net, userId, item.propertyId]
       );
     }
 
@@ -1581,11 +1617,12 @@ async function handleCollectIncome(interaction, db) {
   const moreLine = summaryLines.length > 6 ? `\n…и ещё ${summaryLines.length - 6}` : "";
   const eventLine = liveOps.active_event_name ? `\nИвент: **${liveOps.active_event_name}**` : "";
   await interaction.editReply(
-    `💰 Доход с бизнесов собран.\n${lines}${moreLine}\n\n` +
+    `💰 Доход с бизнесов собран. Запасы пополнены.\n${lines}${moreLine}\n\n` +
     `Валовая выручка: **${fmtMoney(totalGross)}**\n` +
     `Расходы и обслуживание: **-${fmtMoney(totalUpkeep)}**\n` +
     `Начислено: **+${fmtMoney(totalNet)}**\n` +
-    `Баланс: **${fmtMoney(after.money)}**${eventLine}`
+    `Баланс: **${fmtMoney(after.money)}**${eventLine}\n` +
+    `📦 Запасы всех бизнесов восстановлены до 100%.`
   );
 }
 
@@ -1634,7 +1671,6 @@ async function handleMaintainBiz(interaction, db) {
         db,
         `UPDATE samp_properties
          SET condition = 100,
-             supplies = 100,
              last_maintained = datetime('now'),
              last_state_tick = datetime('now')
          WHERE user_id = ? AND property_id = ?`,
@@ -1647,9 +1683,10 @@ async function handleMaintainBiz(interaction, db) {
   const restored = updates.slice(0, 6).map((item) => item.prop.name).join(", ");
   const more = updates.length > 6 ? ` и ещё ${updates.length - 6}` : "";
   await interaction.reply(
-    `🧰 Обслуживание завершено: **${restored}${more}**\n` +
+    `🧰 Ремонт завершён: **${restored}${more}**\n` +
     `Потрачено: **-${fmtMoney(totalCost)}**\n` +
-    `Все выбранные бизнесы восстановлены до **100% состояния** и **100% запасов**.\n` +
+    `🏗️ Состояние восстановлено до **100%**.\n` +
+    `📦 Запасы пополняются через **/collectincome**.\n` +
     `Баланс: **${fmtMoney(after.money)}**`
   );
 }
@@ -1685,7 +1722,7 @@ async function handleBizRun(interaction, db) {
     return;
   }
   if (state.projectedSupplies < 15) {
-    await interaction.reply({ content: `Бизнес **${prop.name}** крит. мало запасов (${Math.floor(state.projectedSupplies)}%). Обслужи: /maintainbiz`, ephemeral: true });
+    await interaction.reply({ content: `Бизнес **${prop.name}** крит. мало запасов (${Math.floor(state.projectedSupplies)}%). Пополни: /collectincome`, ephemeral: true });
     return;
   }
   const territory = getTerritoryBoost(prop, territoryControlMap, membership?.gang_id);
@@ -1945,10 +1982,12 @@ async function handleTuneMaintain(interaction, db) {
     if (!inserted) throw new Error("DUPLICATE_OPERATION");
     await adjustMoney(db, userId, -totalCost);
     for (const item of costBreakdown) {
+      // repairAmount: restore durability proportional to how degraded the part was
+      const repairAmount = Math.round((100 - item.durability));
       await dbRun(
         db,
         `UPDATE samp_car_upgrades SET durability = MIN(100, durability + ?) WHERE user_id = ? AND car_id = ? AND upgrade_id = ?`,
-        [Math.round(repairAmount), userId, carId, item.part.id]
+        [repairAmount, userId, carId, item.part.id]
       );
     }
   });
@@ -2127,6 +2166,59 @@ async function handleSwitchCar(interaction, db) {
 
 async function handleGarage(interaction, db) {
   const userId = interaction.user.id;
+  const sub = interaction.options.getSubcommand(false) || "view";
+
+  if (sub === "expand") {
+    const EXPAND_COSTS = { 4: 75_000, 5: 150_000, 6: 300_000 };
+    const MAX_SLOTS = 6;
+
+    const user = await getSampUser(db, userId);
+    if (!user) { await interaction.reply({ content: "Сначала зарегистрируйся (/reg).", ephemeral: true }); return; }
+    const currentSlots = Number(user.garage_slots || 3);
+    const nextSlots = currentSlots + 1;
+
+    if (currentSlots >= MAX_SLOTS) {
+      await interaction.reply({
+        content: `🚗 Твой гараж уже максимально расширен (**${MAX_SLOTS} слотов**). Больше расширить нельзя.`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const cost = EXPAND_COSTS[nextSlots];
+    if (!cost) {
+      await interaction.reply({ content: "Ошибка конфигурации слотов.", ephemeral: true }); return;
+    }
+
+    if (Number(user.money) < cost) {
+      await interaction.reply({
+        content: `💸 Расширение до **${nextSlots} слотов** стоит **${fmtMoney(cost)}**. У тебя недостаточно виртов.`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const opKey = makeInteractionOpKey(interaction, "garage_expand");
+    await withTx(db, async () => {
+      const fresh = await getSampUser(db, userId);
+      if (Number(fresh?.money || 0) < cost) throw new Error("INSUFFICIENT");
+      if (Number(fresh?.garage_slots || 3) >= MAX_SLOTS) throw new Error("ALREADY_MAX");
+      await adjustMoney(db, userId, -cost);
+      await dbRun(db, `UPDATE samp_users SET garage_slots = ? WHERE user_id = ?`, [nextSlots, String(userId)]);
+      await addLedgerUnique(db, "garage_expand", userId, null, cost, opKey,
+        { new_slots: nextSlots });
+    });
+
+    const after = await getSampUser(db, userId);
+    await interaction.reply(
+      `🏗️ Гараж расширен до **${nextSlots} слотов**!\n` +
+      `💸 Стоимость: **-${fmtMoney(cost)}**\n` +
+      `Баланс: **${fmtMoney(after.money)}**`
+    );
+    return;
+  }
+
+  // sub === "view"
   const payload = await buildGarageReplyPayload(db, userId, interaction.user.username);
   if (!payload) { await interaction.reply({ content: "Твой гараж пуст.", ephemeral: true }); return; }
 
@@ -2321,8 +2413,29 @@ async function handleHeist(interaction, db) {
             await dbRun(db, `UPDATE samp_users SET jail_until = ? WHERE user_id = ?`, [nowMs() + tier.jailMs, pid]);
           }
         });
+        // Hospital fee for each participant
+        const hospitalFeeLines = [];
+        for (const pid of participantIds) {
+          try {
+            const levelRow = await dbGet(db, "SELECT level FROM user_levels WHERE guild_id = ? AND user_id = ?", [interaction.guild?.id, pid]);
+            const userLevel = Number(levelRow?.level || 1);
+            const rawFee = Math.min(userLevel * 1000, 15_000);
+            const freshU = await getSampUser(db, pid);
+            const fee = Math.min(rawFee, Math.max(0, Number(freshU?.money || 0) - 100));
+            if (fee > 0) {
+              await withTx(db, async () => {
+                await adjustMoney(db, pid, -fee);
+                await addLedger(db, "hospital_fee", pid, null, fee, { reason: "heist_fail" });
+              });
+              hospitalFeeLines.push(`<@${pid}>: -${fmtMoney(fee)}`);
+            }
+          } catch (_) {}
+        }
+        const hospitalFeeText = hospitalFeeLines.length > 0
+          ? `\n🏥 **Счёт в больнице:** ${hospitalFeeLines.join(", ")}`
+          : "";
         const jailMin = Math.ceil(tier.jailMs / 60_000);
-        const failEmbed = new EmbedBuilder().setTitle(`🚔 Провал: ${tier.name}`).setDescription(`Полиция перехватила команду!\nВсе участники в тюрьме на **${jailMin} мин**.\nСледующая попытка через **${cooldownText}**.`).setColor(0xe74c3c);
+        const failEmbed = new EmbedBuilder().setTitle(`🚔 Провал: ${tier.name}`).setDescription(`Полиция перехватила команду!\nВсе участники в тюрьме на **${jailMin} мин**.\nСледующая попытка через **${cooldownText}**.${hospitalFeeText}`).setColor(0xe74c3c);
         await btnInt.update({ embeds: [failEmbed], components: [] });
       } else {
         const totalPayout = randInt(tier.payout[0], tier.payout[1]);
@@ -2810,15 +2923,6 @@ async function handleGangCommand(interaction, db) {
       if (Number(war.challenger_gang_id) !== Number(betGang.id) && Number(war.defender_gang_id) !== Number(betGang.id)) {
         await interaction.reply({ content: "Эта банда не участвует в текущей войне.", ephemeral: true }); return;
       }
-      await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_gang_war_bets (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        war_id INTEGER NOT NULL,
-        user_id TEXT NOT NULL,
-        gang_id INTEGER NOT NULL,
-        amount INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        FOREIGN KEY (war_id) REFERENCES samp_gang_wars(id) ON DELETE CASCADE
-      )`);
       const opKey = makeInteractionOpKey(interaction, "gang_war_bet");
       await withTx(db, async () => {
         const inserted = await addLedgerUnique(db, "gang_war_bet", userId, null, amount, opKey, { war_id: war.id, gang_id: betGang.id });
@@ -2845,8 +2949,90 @@ async function handleGangCommand(interaction, db) {
       }
       const embed = new EmbedBuilder().setTitle("⚔️ Войны банд").setDescription(lines.join("\n\n")).setColor(0xe74c3c).setTimestamp();
       await interaction.reply({ embeds: [embed] });
+    } else if (warSub === "resolve") {
+      const userId = interaction.user.id;
+      const OWNER_ID = process.env.OWNER_ID;
+      const member = await dbGet(db, "SELECT gm.gang_id, gm.role, g.name, g.tag FROM samp_gang_members gm JOIN samp_gangs g ON g.id = gm.gang_id WHERE gm.user_id = ?", [userId]);
+      const isOwner = String(userId) === String(OWNER_ID);
+      if (!isOwner && (!member || member.role !== "leader")) {
+        await interaction.reply({ content: "Только лидер банды или владелец бота может подвести итоги войны.", ephemeral: true }); return;
+      }
+
+      const warIdRaw = interaction.options.getString("war_id");
+      const winnerTagRaw = interaction.options.getString("winner_tag");
+      if (!winnerTagRaw) { await interaction.reply({ content: "Укажи `winner_tag:` — тег победившей банды.", ephemeral: true }); return; }
+      const winnerTag = winnerTagRaw.trim().toUpperCase();
+      const winnerGang = await dbGet(db, "SELECT * FROM samp_gangs WHERE tag = ?", [winnerTag]);
+      if (!winnerGang) { await interaction.reply({ content: `Банда с тегом **${winnerTag}** не найдена.`, ephemeral: true }); return; }
+
+      // Find the war: if war_id provided use that, otherwise find by gang membership
+      let war;
+      if (warIdRaw) {
+        war = await dbGet(db, "SELECT * FROM samp_gang_wars WHERE id = ? AND status IN ('pending','active')", [parseInt(warIdRaw, 10)]);
+      } else {
+        war = await dbGet(db, "SELECT * FROM samp_gang_wars WHERE (challenger_gang_id = ? OR defender_gang_id = ?) AND status IN ('pending','active') ORDER BY id DESC LIMIT 1", [winnerGang.id, winnerGang.id]);
+      }
+      if (!war) { await interaction.reply({ content: "Активная война не найдена.", ephemeral: true }); return; }
+      // Verify winner is a participant
+      if (Number(war.challenger_gang_id) !== Number(winnerGang.id) && Number(war.defender_gang_id) !== Number(winnerGang.id)) {
+        await interaction.reply({ content: "Эта банда не участвует в найденной войне.", ephemeral: true }); return;
+      }
+      // Non-owner must be leader of one of the participating gangs
+      if (!isOwner && member) {
+        const isParticipant = Number(war.challenger_gang_id) === Number(member.gang_id) || Number(war.defender_gang_id) === Number(member.gang_id);
+        if (!isParticipant) { await interaction.reply({ content: "Ты не являешься лидером банды в этой войне.", ephemeral: true }); return; }
+      }
+
+      await interaction.deferReply();
+
+      // Gather bets for the winning gang
+      const allBets = await dbAll(db, "SELECT * FROM samp_gang_war_bets WHERE war_id = ?", [war.id]);
+      const winnerBets = (allBets || []).filter(b => Number(b.gang_id) === Number(winnerGang.id));
+      const totalBetPool = (allBets || []).reduce((s, b) => s + Number(b.amount), 0);
+      const totalWarPot = Number(war.bet || 0);
+      const grandPot = totalBetPool + totalWarPot;
+      const payoutPool = Math.floor(grandPot * 0.90); // 10% house burn
+      const burnAmount = grandPot - payoutPool;
+      const totalWinnerBets = winnerBets.reduce((s, b) => s + Number(b.amount), 0);
+
+      const payouts = [];
+      for (const b of winnerBets) {
+        const share = totalWinnerBets > 0
+          ? Math.floor(payoutPool * (Number(b.amount) / totalWinnerBets))
+          : 0;
+        if (share > 0) {
+          payouts.push({ userId: b.user_id, share });
+        }
+      }
+
+      // If nobody bet on winner, distribute pot to the winner gang treasury
+      const opKey = makeInteractionOpKey(interaction, "gang_war_resolve");
+      await withTx(db, async () => {
+        await dbRun(db, "UPDATE samp_gang_wars SET status = 'resolved', winner_gang_id = ?, resolved_at = datetime('now') WHERE id = ?", [winnerGang.id, war.id]);
+        if (payouts.length > 0) {
+          for (const p of payouts) {
+            await adjustMoney(db, p.userId, p.share);
+            await addLedger(db, "gang_war_win", null, p.userId, p.share, { war_id: war.id, winner_gang_id: winnerGang.id });
+          }
+        } else {
+          // No bettors on winner — add to winner gang treasury
+          await dbRun(db, "UPDATE samp_gangs SET treasury = treasury + ? WHERE id = ?", [payoutPool, winnerGang.id]);
+        }
+      });
+
+      const loser = await dbGet(db, "SELECT name, tag FROM samp_gangs WHERE id = ?",
+        [Number(war.challenger_gang_id) === Number(winnerGang.id) ? war.defender_gang_id : war.challenger_gang_id]);
+      const payoutLines = payouts.slice(0, 10).map(p => `<@${p.userId}> +${fmtMoney(p.share)}`);
+      await interaction.editReply(
+        `⚔️ **Война завершена!**\n` +
+        `🏆 Победила: **[${winnerGang.tag}] ${winnerGang.name}**\n` +
+        `💀 Проиграла: **[${loser?.tag}] ${loser?.name}**\n\n` +
+        `💰 Приз. фонд: **${fmtMoney(grandPot)}** (сгорело: ${fmtMoney(burnAmount)})\n` +
+        (payoutLines.length > 0 ? `🎲 Выплаты ставок:\n${payoutLines.join("\n")}` : `💵 Выплата в казну банды **[${winnerGang.tag}]**.`)
+      );
+
     } else {
-      await interaction.reply({ content: "Действие: `challenge`, `accept`, `status`, `bet`.", ephemeral: true });
+      await interaction.reply({ content: "Действие: `challenge`, `accept`, `status`, `bet`, `resolve`.", ephemeral: true });
     }
 
   } else if (sub === "top") {
@@ -3444,7 +3630,23 @@ async function handleSecretHeist(interaction, db) {
       await dbRun(db, `UPDATE samp_users SET jail_until = ? WHERE user_id = ?`, [nowMs() + heist.jailMs, String(userId)]);
       await setCooldownReadyAt(db, userId, "secret_heist", nowMs() + cooldownMs);
     });
-    await interaction.editReply(`🗺️ **${heist.name}**\n\n🚔 Ловушка! Охрана бункера схватила тебя. Тюрьма: **${Math.ceil(heist.jailMs / 60_000)} мин**.\nКарта уничтожена.`);
+    // Hospital fee on heist failure + jail
+    let hospitalFeeText = "";
+    try {
+      const levelRow = await dbGet(db, "SELECT level FROM user_levels WHERE guild_id = ? AND user_id = ?", [interaction.guild?.id, userId]);
+      const userLevel = Number(levelRow?.level || 1);
+      const rawFee = Math.min(userLevel * 1000, 15_000);
+      const freshUser = await getSampUser(db, userId);
+      const hospitalFee = Math.min(rawFee, Math.max(0, Number(freshUser?.money || 0) - 100));
+      if (hospitalFee > 0) {
+        await withTx(db, async () => {
+          await adjustMoney(db, userId, -hospitalFee);
+          await addLedger(db, "hospital_fee", userId, null, hospitalFee, { reason: "heist_fail" });
+        });
+        hospitalFeeText = `\n🏥 Счёт в больнице: **-${fmtMoney(hospitalFee)}**`;
+      }
+    } catch (_) {}
+    await interaction.editReply(`🗺️ **${heist.name}**\n\n🚔 Ловушка! Охрана бункера схватила тебя. Тюрьма: **${Math.ceil(heist.jailMs / 60_000)} мин**.\nКарта уничтожена.${hospitalFeeText}`);
   } else {
     const payout = randInt(heist.payout[0], heist.payout[1]);
     await withTx(db, async () => {
@@ -3548,7 +3750,13 @@ function getSampExtendedCommandBuilders() {
       .addStringOption(o => o.setName("upgrade").setDescription("ID тюнинга").setRequired(true).setAutocomplete(true)),
     new SlashCommandBuilder().setName("switchcar").setDescription("SAMP Life: сменить активную тачку")
       .addStringOption(o => o.setName("car").setDescription("ID тачки из гаража").setRequired(true).setAutocomplete(true)),
-    new SlashCommandBuilder().setName("garage").setDescription("SAMP Life: твой гараж (тачки + тюнинг)"),
+    new SlashCommandBuilder()
+      .setName("garage")
+      .setDescription("SAMP Life: твой гараж (тачки + тюнинг)")
+      .addSubcommand((sub) => sub.setName("view").setDescription("Посмотреть свой гараж"))
+      .addSubcommand((sub) =>
+        sub.setName("expand").setDescription("Расширить гараж (доп. слот для машин)")
+      ),
 
     new SlashCommandBuilder().setName("bounty").setDescription("SAMP Life: назначить награду")
       .addUserOption(o => o.setName("user").setDescription("Цель").setRequired(true))
@@ -3591,10 +3799,13 @@ function getSampExtendedCommandBuilders() {
           { name: "Объявить войну", value: "challenge" },
           { name: "Принять вызов", value: "accept" },
           { name: "Статус", value: "status" },
-          { name: "Поставить ставку", value: "bet" }
+          { name: "Поставить ставку", value: "bet" },
+          { name: "Подвести итоги", value: "resolve" }
         ))
         .addStringOption(o => o.setName("target").setDescription("Тег банды (для challenge / bet)").setRequired(false))
-        .addIntegerOption(o => o.setName("amount").setDescription("Сумма ставки (для bet)").setRequired(false).setMinValue(1000))),
+        .addIntegerOption(o => o.setName("amount").setDescription("Сумма ставки (для bet)").setRequired(false).setMinValue(1000))
+        .addStringOption(o => o.setName("winner_tag").setDescription("Тег победившей банды (для resolve)").setRequired(false))
+        .addStringOption(o => o.setName("war_id").setDescription("ID войны (для resolve, необязательно)").setRequired(false))),
 
     new SlashCommandBuilder().setName("gmap").setDescription("SAMP Life: карта районов и контролирующих банд"),
     new SlashCommandBuilder().setName("gcapture").setDescription("SAMP Life: атаковать или укрепить район")

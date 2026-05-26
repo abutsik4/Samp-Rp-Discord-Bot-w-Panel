@@ -20,7 +20,7 @@ The platform combines:
 - Verification and reconciliation of message counting accuracy
 - Moderation controls: rate limits, strike handling, banned words
 - AI engagement controls and automation utilities
-- SA-MP gameplay systems: economy, PvP, businesses, gangs, territories
+- SA-MP gameplay systems: economy, PvP, businesses, gangs, territories, prestige, casino, crafting, and blackmarket
 - Persistent panel user management with role-based access
 - Operational diagnostics and troubleshooting routes
 
@@ -31,7 +31,7 @@ The platform combines:
 - Express-based API layer
 - React panel application
 - SQLite datastore
-- 45+ database tables across bot, panel, and gameplay subsystems
+- 85+ database tables across bot, panel, and gameplay subsystems
 
 ## Quick Start
 
@@ -89,16 +89,18 @@ Delivered an end-to-end community operations platform by owning backend, fronten
 
 ```text
 src/
-  bot/           # Discord runtime, command dispatch, event handling
-  features/      # Gameplay, analytics, moderation, AI, and support modules
-  web/           # Express app and API routes
-  db/            # Schema and initialization
-  utils/         # Shared helpers and logging
-panel-ui/        # React admin panel source
-public/panel/    # Built frontend assets
-scripts/         # Operations and maintenance scripts
-data/            # Runtime data and SQLite files
-logs/            # Runtime logs
+  bot/              # Discord runtime, command dispatch, event handling
+  features/         # Gameplay, analytics, moderation, AI, and support modules
+  features/constants/  # Gameplay configuration constants (crafting, prestige, etc.)
+  web/              # Express app and API routes
+  db/               # Schema and initialization
+  utils/            # Shared helpers and logging
+  views/            # EJS templates for server-rendered panel pages
+panel-ui/           # React admin panel source
+public/panel/       # Built frontend assets
+scripts/            # Operations and maintenance scripts (32+)
+data/               # Runtime data and SQLite files
+logs/               # Runtime logs
 ```
 
 ## Admin Panel

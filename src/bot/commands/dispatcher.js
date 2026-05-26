@@ -1,4 +1,5 @@
 const { EmbedBuilder } = require("discord.js");
+const { logCommandUsage, getCommandStats } = require("../../utils/command-logger");
 
 // Direct imports – no pass-through from index.js
 const { handleHolidayCommand } = require("../../features/holidays");
@@ -37,7 +38,7 @@ const SAMP_LIFE_COMMANDS = [
   "dealership", "weaponshop", "buy", "race", "duel",
   "sellcar", "buycar", "weapon",
   "bail", "richest", "daily",
-  "pay", "slots", "blackjack", "roulette",
+  "pay", "slots", "blackjack", "roulette", "insure",
 ];
 const SAMP_COSMETICS_COMMANDS = ["shop", "mycollection", "equip", "unequip"];
 const SAMP_ONBOARDING_COMMANDS = ["quest"];
@@ -147,10 +148,25 @@ function registerCommandHandlers(ctx) {
     const HIDDEN_COMMANDS = new Set(["userstats","top5","top10","backfill","sync-missing","demoembed","reactions","export","countdown","mystrikes","whitelist","automod","sampstatus","holiday","portfolio","radio","radio-top","radio-info","radio-fans"]);
     if (HIDDEN_COMMANDS.has(commandName)) {
       await interaction.reply({ content: "Эта команда временно отключена.", ephemeral: true });
-      return false;
+      return;
     }
-    // ── Log every command ──
-    await logCommandUsage(db, interaction.user.id, interaction.guild?.id, commandName, interaction.options && interaction.options.getSubcommand ? interaction.options.getSubcommand(false) : null);
+
+    // ── Timing + structured command logging ──
+    const _cmdStart = Date.now();
+    let _cmdSuccess = true;
+    let _cmdError = null;
+    const _subcommand = (() => {
+      try { return interaction.options.getSubcommand(false); } catch (_) { return null; }
+    })();
+
+    // Log usage (fire-and-forget; won't throw)
+    logCommandUsage(db, {
+      commandName,
+      userId: interaction.user.id,
+      guildId: interaction.guild?.id ?? null,
+      channelId: interaction.channelId ?? null,
+      subcommand: _subcommand,
+    });
 
     // Check if command is disabled
     const guildId = interaction.guild?.id;
@@ -209,6 +225,7 @@ function registerCommandHandlers(ctx) {
       } catch (err) {
         console.error(`[dispatch] ${commandName} error:`, err);
         try { await dbRun(db, "INSERT INTO bot_command_errors(command_name, user_id, guild_id, error_message, stack) VALUES(?,?,?,?,?)", [commandName, interaction.user?.id, interaction.guild?.id, err?.message || "", err?.stack || ""]); } catch (_) {}
+        logCommandUsage(db, { commandName, userId: interaction.user.id, guildId: interaction.guild?.id, channelId: interaction.channelId, subcommand: _subcommand, success: false, durationMs: Date.now() - _cmdStart, errorMessage: err?.message });
         await interaction.reply({ content: "❌ An error occurred while processing your SAMP command.", ephemeral: true });
         return;
       }
@@ -224,6 +241,7 @@ function registerCommandHandlers(ctx) {
       } catch (err) {
         console.error(`[dispatch] ${commandName} error:`, err);
         try { await dbRun(db, "INSERT INTO bot_command_errors(command_name, user_id, guild_id, error_message, stack) VALUES(?,?,?,?,?)", [commandName, interaction.user?.id, interaction.guild?.id, err?.message || "", err?.stack || ""]); } catch (_) {}
+        logCommandUsage(db, { commandName, userId: interaction.user.id, guildId: interaction.guild?.id, channelId: interaction.channelId, subcommand: _subcommand, success: false, durationMs: Date.now() - _cmdStart, errorMessage: err?.message });
         await interaction.reply({ content: "❌ An error occurred while processing your SAMP command.", ephemeral: true });
         return;
       }
@@ -237,6 +255,7 @@ function registerCommandHandlers(ctx) {
       } catch (err) {
         console.error(`[dispatch] ${commandName} error:`, err);
         try { await dbRun(db, "INSERT INTO bot_command_errors(command_name, user_id, guild_id, error_message, stack) VALUES(?,?,?,?,?)", [commandName, interaction.user?.id, interaction.guild?.id, err?.message || "", err?.stack || ""]); } catch (_) {}
+        logCommandUsage(db, { commandName, userId: interaction.user.id, guildId: interaction.guild?.id, channelId: interaction.channelId, subcommand: _subcommand, success: false, durationMs: Date.now() - _cmdStart, errorMessage: err?.message });
         await interaction.reply({ content: "❌ An error occurred while processing your SAMP command.", ephemeral: true });
         return;
       }
@@ -248,6 +267,7 @@ function registerCommandHandlers(ctx) {
       } catch (err) {
         console.error(`[dispatch] ${commandName} error:`, err);
         try { await dbRun(db, "INSERT INTO bot_command_errors(command_name, user_id, guild_id, error_message, stack) VALUES(?,?,?,?,?)", [commandName, interaction.user?.id, interaction.guild?.id, err?.message || "", err?.stack || ""]); } catch (_) {}
+        logCommandUsage(db, { commandName, userId: interaction.user.id, guildId: interaction.guild?.id, channelId: interaction.channelId, subcommand: _subcommand, success: false, durationMs: Date.now() - _cmdStart, errorMessage: err?.message });
         await interaction.reply({ content: "❌ An error occurred while processing your SAMP command.", ephemeral: true });
         return;
       }
@@ -1184,6 +1204,45 @@ function registerCommandHandlers(ctx) {
       }
 
       await interaction.reply({ embeds: [embed] });
+    } else if (commandName === "commandstats") {
+      // ── Admin command: command usage analytics ──
+      const isOwner = interaction.user.id === OWNER_ID;
+      const isGuildOwner = interaction.guild && interaction.user.id === interaction.guild.ownerId;
+      if (!isOwner && !isGuildOwner) {
+        return interaction.reply({ content: "❌ Только владелец бота или сервера может просматривать статистику.", ephemeral: true });
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+
+      const days = interaction.options.getInteger("days") || 7;
+      // Guild owners see only their guild; bot owner can see all guilds
+      const statsGuildId = isOwner ? (interaction.options.getBoolean("all_guilds") ? null : interaction.guild?.id) : interaction.guild?.id;
+
+      const stats = await getCommandStats(db, { days, guildId: statsGuildId });
+
+      const usageLines = stats.topByUsage.slice(0, 15).map((r, i) => {
+        const bar = r.total > 0 ? "▓".repeat(Math.min(10, Math.round((r.total / (stats.topByUsage[0]?.total || 1)) * 10))) : "";
+        const avgMs = r.avg_ms != null ? ` ~${r.avg_ms}ms` : "";
+        return `\`${String(i + 1).padStart(2)}.\` **${r.command_name}** — ${r.total} (${r.failures} err${avgMs}) ${bar}`;
+      }).join("\n") || "Нет данных";
+
+      const failLines = stats.topByFailRate.slice(0, 8).map((r) =>
+        `• **${r.command_name}** — ${r.fail_pct}% ошибок (${r.failures}/${r.total})`
+      ).join("\n") || "Нет ошибок";
+
+      const guildLabel = statsGuildId ? `сервер \`${statsGuildId}\`` : "все серверы";
+      const embed = new EmbedBuilder()
+        .setTitle(`📊 Статистика команд — последние ${days} дн.`)
+        .setDescription(`Охват: ${guildLabel} · Сегодня: **${stats.todayTotal}** · За неделю: **${stats.weekTotal}** · За окно: **${stats.totalInWindow}**`)
+        .addFields(
+          { name: `🏆 Топ по использованию (из ${stats.totalInWindow})`, value: usageLines, inline: false },
+          { name: "⚠️ Топ по проценту ошибок", value: failLines, inline: false },
+        )
+        .setColor(0x6366f1)
+        .setFooter({ text: `Данные за последние ${days} дней` })
+        .setTimestamp();
+
+      return interaction.editReply({ embeds: [embed] });
     }
   });
 }

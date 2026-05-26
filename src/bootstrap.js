@@ -98,25 +98,74 @@ async function initFeatureTables(db, dbRun) {
   await ensureXpMultipliersTable(db);
   await ensureSampExtendedTables(db);
   await ensurePrestigeTables(db);
-    await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_command_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id TEXT NOT NULL,
-      guild_id TEXT,
-      command_name TEXT NOT NULL,
-      subcommand_name TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    )`);
-    await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_cmdlog_cmd ON samp_command_logs(command_name, created_at)`);
-    await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_cmdlog_user ON samp_command_logs(user_id, created_at)`);
+
+  // ── samp_command_logs ───────────────────────────────────────────────────
+  await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_command_logs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       TEXT    NOT NULL,
+    guild_id      TEXT,
+    channel_id    TEXT,
+    command_name  TEXT    NOT NULL,
+    subcommand_name TEXT,
+    command_type  TEXT    NOT NULL DEFAULT 'slash',
+    success       INTEGER NOT NULL DEFAULT 1,
+    duration_ms   INTEGER,
+    error_message TEXT,
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+  )`);
+  await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_cmdlog_cmd   ON samp_command_logs(command_name, created_at)`);
+  await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_cmdlog_user  ON samp_command_logs(user_id,       created_at)`);
+  await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_cmdlog_guild ON samp_command_logs(guild_id,      created_at)`);
+
+  // Safe migrations — add columns that may not exist on older DB files
+  const cmdLogCols = (await dbRun(db, `PRAGMA table_info(samp_command_logs)`).catch(() => null)
+    .then ? await new Promise((res) => db.all(`PRAGMA table_info(samp_command_logs)`, [], (e, r) => res(r || [])))
+    : []);
+  const existingCmdLogCols = new Set((cmdLogCols || []).map((c) => c.name));
+  const cmdLogNewCols = [
+    ["channel_id",     "TEXT"],
+    ["command_type",   "TEXT    NOT NULL DEFAULT 'slash'"],
+    ["success",        "INTEGER NOT NULL DEFAULT 1"],
+    ["duration_ms",    "INTEGER"],
+    ["error_message",  "TEXT"],
+  ];
+  for (const [col, def] of cmdLogNewCols) {
+    if (!existingCmdLogCols.has(col)) {
+      await dbRun(db, `ALTER TABLE samp_command_logs ADD COLUMN ${col} ${def}`).catch(() => {});
+    }
+  }
+
+  // ── samp_login_streak ───────────────────────────────────────────────────
   await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_login_streak (
-    user_id TEXT PRIMARY KEY,
+    user_id        TEXT PRIMARY KEY,
     current_streak INTEGER NOT NULL DEFAULT 0,
-    last_login TEXT NOT NULL DEFAULT (datetime('now'))
+    last_login     TEXT    NOT NULL DEFAULT (datetime('now'))
   )`);
 
   await ensureCraftingTables(db);
   await ensureSeasonalEventsTables(db);
   await ensureGiveawayTables(db);
+
+  // ── samp_vehicle_insurance (new money sink) ────────────────────────────
+  await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_vehicle_insurance (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT    NOT NULL,
+    car_id      TEXT    NOT NULL,
+    expires_at  INTEGER NOT NULL,
+    paid_amount INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(user_id, car_id)
+  )`);
+  await dbRun(db, `CREATE INDEX IF NOT EXISTS idx_insurance_user ON samp_vehicle_insurance(user_id)`);
+
+  // ── samp_users: garage_slots column migration ──────────────────────────
+  const garageColCheck = await new Promise((res) =>
+    db.all(`PRAGMA table_info(samp_users)`, [], (e, r) => res(r || []))
+  );
+  if (!garageColCheck.some((c) => c.name === "garage_slots")) {
+    await dbRun(db, `ALTER TABLE samp_users ADD COLUMN garage_slots INTEGER NOT NULL DEFAULT 3`).catch(() => {});
+  }
+
   await dbRun(db, `CREATE TABLE IF NOT EXISTS bot_command_errors (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     command_name TEXT,

@@ -167,6 +167,18 @@ function buildCommandsJson() {
 
     // SAMP Life: daily login bonus
     new SlashCommandBuilder().setName("daily").setDescription("SAMP Life: ежедневный бонус (зависит от стрика)"),
+
+    // Admin: command usage statistics
+    new SlashCommandBuilder()
+      .setName("commandstats")
+      .setDescription("Статистика использования команд (только владелец сервера/бота)")
+      .addIntegerOption((o) =>
+        o.setName("days").setDescription("Период в днях (по умолчанию: 7)").setRequired(false)
+          .setMinValue(1).setMaxValue(90)
+      )
+      .addBooleanOption((o) =>
+        o.setName("all_guilds").setDescription("(Только владелец бота) Показать данные по всем серверам").setRequired(false)
+      ),
   ].filter((cmd) => {
     const HIDDEN = new Set([
       "userstats","top5","top10","backfill","sync-missing","demoembed",

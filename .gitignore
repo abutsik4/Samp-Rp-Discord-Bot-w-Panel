@@ -5,6 +5,7 @@ data/*.db-shm
 data/discord-login-backoff.json
 data/discord-login-last-attempt.json
 data/telegram-notify-state.json
+data/markov-model.json
 tmp/
 -
 *.db
@@ -27,6 +28,20 @@ package-lock.json
 .cache/
 .local/
 ~
+
+# Backup files
+*.bak
+*.bak.*
+*.bak*/
+
+# One-time migration/patch scripts
+apply_phase_*.py
+fix_*.py
+patch_*.py
+phase_*.py
+phase_c_deploy/
+clean_deploy.py
+reset_admin_pw.py
 
 # Landing page - DO NOT modify unless specifically requested by the user
 index.html
