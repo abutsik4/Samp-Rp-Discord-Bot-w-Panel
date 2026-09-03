@@ -34,6 +34,14 @@ package-lock.json
 *.bak.*
 *.bak*/
 
+# Timestamped backups: these carry live secrets and player data, and the *.bak
+# rules above miss them because the suffix comes after the extension.
+.env.*
+*.backup-*
+*.bak-*
+src.backup-*/
+ecosystem.config.js.bak-*
+
 # One-time migration/patch scripts
 apply_phase_*.py
 fix_*.py

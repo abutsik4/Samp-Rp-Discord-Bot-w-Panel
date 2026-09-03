@@ -16,7 +16,6 @@ const { createAuthRouter } = require("./routes/auth");
 const { createMessagesRouter } = require("./routes/messages");
 const { createStatsRouter } = require("./routes/stats");
 const { createAnalyticsRouter } = require("./routes/analytics");
-const { createBotPagesRouter } = require("./routes/bot-pages");
 const { createCommandsRouter } = require("./routes/commands");
 const { createAccuracyRouter } = require("./routes/accuracy");
 const { createHolidaysRouter } = require("./routes/holidays");
@@ -55,7 +54,6 @@ function createPanelApp({
   listCommandCategoryChannels,
   setCommandCategoryChannel,
   clearCommandCategoryChannel,
-  PANEL_LEGACY_PAGES,
 } = {}) {
   if (!client) throw new Error("createPanelApp: client is required");
   if (!db) throw new Error("createPanelApp: db is required");
@@ -105,18 +103,6 @@ function createPanelApp({
 
   const publicDir = path.join(__dirname, "..", "..", "public");
   app.use(express.static(publicDir, { index: false }));
-
-  const spaDir = path.join(publicDir, "panel");
-  const spaIndexPath = path.join(spaDir, "index.html");
-  const hasSpaBuild = fs.existsSync(spaIndexPath);
-  const useLegacyPages =
-    PANEL_LEGACY_PAGES === true ||
-    process.env.PANEL_LEGACY_PAGES === "1" ||
-    !hasSpaBuild;
-
-  if (hasSpaBuild) {
-    app.use(PANEL_BASE, express.static(spaDir, { index: false }));
-  }
 
   const webPublicDir = path.join(__dirname, "public");
   app.use("/public", express.static(webPublicDir, { index: false }));
@@ -295,7 +281,6 @@ function createPanelApp({
     listCommandCategoryChannels,
     setCommandCategoryChannel,
     clearCommandCategoryChannel,
-    useLegacyPages,
   };
 
   app.use(createDebugRouter(routeCtx));
@@ -303,9 +288,6 @@ function createPanelApp({
   app.use(createMessagesRouter(routeCtx));
   app.use(createStatsRouter(routeCtx));
   app.use(createAnalyticsRouter(routeCtx));
-  if (useLegacyPages) {
-    app.use(createBotPagesRouter(routeCtx));
-  }
   app.use(createCommandsRouter(routeCtx));
   app.use(createAccuracyRouter(routeCtx));
   app.use(createHolidaysRouter(routeCtx));
@@ -321,28 +303,22 @@ function createPanelApp({
   app.use(createGameplayRouter(routeCtx));
   healthRoutes(app, db);
 
-  app.get("/panel", (req, res) => res.redirect("/nexus/"));
-  app.get("/panel/*", (req, res) => res.redirect("/nexus/"));
-
-  if (hasSpaBuild && !useLegacyPages) {
-    // Serve SPA HTML with no-cache to prevent stale builds after deployments
-    app.get(PANEL_BASE, (_req, res) => {
-      res.set("Cache-Control", "no-cache, no-store, must-revalidate");
-      res.sendFile(spaIndexPath);
-    });
-  
-  // Nexus SPA static serve
-  const nexusDir = path.join(__dirname, "..", "..", "public", "panel");
+  // Nexus SPA static serve (replaces legacy panel-ui)
+  const nexusDir = path.join(__dirname, "nexus", "dist");
   app.use("/nexus", express.static(nexusDir, { index: false }));
-  app.get("/nexus/*", (_req, res) => {
+  app.get("/nexus", (_req, res) => {
+    res.set("Cache-Control", "no-cache, no-store, must-revalidate");
     res.sendFile(path.join(nexusDir, "index.html"));
   });
-    app.get(`${PANEL_BASE}/*`, (req, res, next) => {
-      if (req.path.startsWith(`${PANEL_BASE}/api/`)) return next();
-      res.set("Cache-Control", "no-cache, no-store, must-revalidate");
-      res.sendFile(spaIndexPath);
-    });
-  }
+  app.get("/nexus/*", (_req, res) => {
+    res.set("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.sendFile(path.join(nexusDir, "index.html"));
+  });
+
+  // Back-compat: redirect legacy /panel page URLs to nexus. API routes
+  // mounted above already handle /panel/api/* before this matches.
+  app.get("/panel", (_req, res) => res.redirect("/nexus/"));
+  app.get(/^\/panel(?!\/api(?:\/|$)).*/, (_req, res) => res.redirect("/nexus/"));
 
   app.use((err, req, res, next) => {
     try {

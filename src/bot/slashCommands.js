@@ -24,6 +24,64 @@ const { getGameFaqCommandBuilders } = require("../features/game-faq");
 const { getCosmeticsCommandBuilders } = require("../features/samp-cosmetics");
 const { getOnboardingCommandBuilders } = require("../features/samp-onboarding");
 const { getPrestigeCommandBuilders } = require("../features/samp-prestige");
+const { getVipCommandBuilders } = require("../features/samp-vip");
+const { getUpgradeCommandBuilders } = require("../features/samp-property-upgrades");
+const { getCrateCommandBuilders } = require("../features/samp-crates");
+const { getStaffRoleRequestCommandBuilder } = require("../features/staff-role-requests");
+const { getChatBridgeCommandBuilders } = require("../features/chat-bridge");
+const { getPlayCommandBuilder } = require("../features/play-hub");
+
+// -- Registration filters -----------------------------------------------------
+
+/**
+ * Commands that exist in code but are deliberately not registered — legacy or
+ * owner-only tooling reachable by other means.
+ */
+const HIDDEN_COMMANDS = new Set([
+  "userstats", "top5", "top10", "backfill", "sync-missing",
+  "reactions", "export", "mystrikes",
+  "whitelist", "automod", "sampstatus",
+  "holiday",
+  "portfolio",
+  "radio", "radio-top", "radio-info", "radio-fans",
+]);
+
+/**
+ * Phase 2 hard cut (see PHASE2_PLAN.md).
+ *
+ * These commands are no longer registered with Discord — every one of them is
+ * reachable from a `/play <категория>` panel instead. The handlers are
+ * untouched; play-hub.js calls them through a shimmed interaction.
+ *
+ * What deliberately stays top-level:
+ *   - habit commands typed dozens of times a session (/work /balance /daily)
+ *   - anything aimed at another player, because Discord modals cannot pick a
+ *     user (/pay /duel /race /rob /bounty /sellcar)
+ *   - the onboarding path (/reg /quest /progress)
+ *   - /gang, which already has its own coherent subcommand tree
+ */
+const FOLDED_INTO_PLAY = new Set([
+  // работа
+  "truck", "jobs", "dojob", "collectincome", "bizrun", "airjob",
+  // транспорт
+  "dealership", "buy", "buycar", "switchcar", "garage", "tune", "repair", "insure",
+  // бизнес
+  "businesses", "bizstats", "mbizstats", "buybiz", "maintainbiz",
+  "realestate", "buymansion", "buyaircraft", "mansion-collect", "estate",
+  "stocks", "buystock", "sellstock", "hire", "fire", "crew", "upgrade",
+  // криминал
+  "heist", "secretheist", "blackmarket", "hottip", "disguise",
+  "usejailpass", "userepairkit", "wiretap", "sabotage", "gangbmorder",
+  "bountylist",
+  // казино
+  "slots", "blackjack", "roulette", "lottery",
+  // банда (the /gang tree stays; these were duplicate aliases of it)
+  "gmap", "gcapture", "gsupportbiz", "gangtop",
+  // магазин
+  "shopcosmetics", "buycosmetic", "shop", "mycollection", "equip", "unequip",
+  "weapon", "weaponshop", "crate", "vip",
+  "prestige", "burnmoney", "champagne", "donatechat", "flexboard",
+]);
 
 // -- DRY helper for top5/top10 ------------------------------------------------
 
@@ -67,10 +125,6 @@ function buildCommandsJson() {
       .setName("synccommands")
       .setDescription("Перерегистрировать слеш-команды для сервера (только владелец)."),
 
-    new SlashCommandBuilder()
-      .setName("demoembed")
-      .setDescription("Демо: отправить и отредактировать embed (для тестов)."),
-
     new SlashCommandBuilder().setName("weekly").setDescription("Еженедельный рейтинг (обнуляется каждый понедельник)."),
     new SlashCommandBuilder()
       .setName("streak")
@@ -86,7 +140,6 @@ function buildCommandsJson() {
       ),
 
     new SlashCommandBuilder().setName("export").setDescription("Экспорт статистики в CSV (только владелец)."),
-    new SlashCommandBuilder().setName("countdown").setDescription("Обратный отсчёт до Нового Года!"),
     new SlashCommandBuilder().setName("mystrikes").setDescription("Просмотреть ваши текущие нарушения и страйки"),
 
     // Channel whitelist
@@ -132,7 +185,12 @@ function buildCommandsJson() {
         .addStringOption((o) => o.setName("ip").setDescription("IP-адрес сервера").setRequired(true))
         .addChannelOption((o) => o.setName("channel").setDescription("Голосовой канал для статуса").setRequired(true))
         .addIntegerOption((o) => o.setName("port").setDescription("Порт сервера (по умолчанию: 7777)"))
-        .addStringOption((o) => o.setName("emoji").setDescription("Эмодзи (по умолчанию: \xF0\x9F\x8E\xAE)")))
+        .addStringOption((o) => o.setName("emoji").setDescription("Эмодзи (по умолчанию: 🎮)"))
+        .addStringOption((o) => o.setName("online_text").setDescription("Кастомный текст в канале при онлайне (напр., 50/1000)"))
+        .addStringOption((o) => o.setName("offline_text").setDescription("Кастомный текст в канале при оффлайне (по умолчанию: ОФФЛАЙН)"))
+        .addIntegerOption((o) => o.setName("poll_interval_sec").setDescription("Интервал опроса в секундах (10-3600, по умолчанию: 120)"))
+        .addIntegerOption((o) => o.setName("rename_cooldown_sec").setDescription("Мин. интервал переименований канала в секундах (60-1800, по умолчанию: 120)"))
+        .addStringOption((o) => o.setName("name_format").setDescription("Шаблон имени канала. Доступно: {emoji} {name} {players} {max} {online} {status}")))
       .addSubcommand((s) => s.setName("remove").setDescription("Удалить отслеживаемый сервер")
         .addStringOption((o) => o.setName("server_id").setDescription("Идентификатор сервера").setRequired(true)))
       .addSubcommand((s) => s.setName("list").setDescription("Показать все отслеживаемые серверы"))
@@ -152,6 +210,14 @@ function buildCommandsJson() {
     ...getCosmeticsCommandBuilders(),
     ...getOnboardingCommandBuilders(),
     ...getPrestigeCommandBuilders(),
+    ...getVipCommandBuilders(),
+    ...getUpgradeCommandBuilders(),
+    ...getCrateCommandBuilders(),
+    ...getChatBridgeCommandBuilders(),
+    getStaffRoleRequestCommandBuilder(),
+
+    // The game hub — replaces ~60 individual game commands (PHASE2_PLAN.md).
+    getPlayCommandBuilder(),
 
     // Badges / achievements
     new SlashCommandBuilder()
@@ -179,34 +245,46 @@ function buildCommandsJson() {
       .addBooleanOption((o) =>
         o.setName("all_guilds").setDescription("(Только владелец бота) Показать данные по всем серверам").setRequired(false)
       ),
-  ].filter((cmd) => {
-    const HIDDEN = new Set([
-      "userstats","top5","top10","backfill","sync-missing","demoembed",
-      "reactions","export","countdown","mystrikes",
-      "whitelist","automod","sampstatus",
-      "holiday",
-      "portfolio",
-      "radio","radio-top","radio-info","radio-fans",
-    ]);
-    return !HIDDEN.has(cmd.name);
-  }).map((cmd) => cmd.toJSON());
+  ].filter((cmd) => !HIDDEN_COMMANDS.has(cmd.name) && !FOLDED_INTO_PLAY.has(cmd.name))
+    .map((cmd) => cmd.toJSON());
 }
 
 // -- Guild registration -------------------------------------------------------
 
-async function registerGuildCommands(client, guildId, token) {
+async function registerGuildCommands(client, guildId, token, { maxAttempts = 3 } = {}) {
   const commands = buildCommandsJson();
   const rest = new REST({ version: "10" }).setToken(token);
-  try {
-    console.log("[Slash] Commands to register: " + commands.length);
-    console.log("[Slash] Clearing old commands for guild " + guildId + "...");
-    await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body: [] });
-    console.log("[Slash] Registering fresh commands for guild " + guildId + "...");
-    await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body: commands });
-    console.log("[Slash] Commands registered for guild " + guildId + ".");
-  } catch (error) {
-    console.error("[Slash] Error registering commands for guild " + guildId + ":", error.message || error);
+
+  console.log("[Slash] Commands to register: " + commands.length);
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      console.log(`[Slash] Registering commands for guild ${guildId} (attempt ${attempt}/${maxAttempts})...`);
+      await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body: commands });
+      console.log("[Slash] Commands registered for guild " + guildId + ".");
+      return true;
+    } catch (error) {
+      const status = error?.status ?? error?.rawError?.status;
+      const retryAfterSeconds = Number(error?.rawError?.retry_after || 0);
+      const details = error?.rawError?.errors || error?.errors;
+
+      console.error("[Slash] Error registering commands for guild " + guildId + ":", error.message || error);
+      if (details) {
+        console.error("[Slash] Registration error details:", JSON.stringify(details, null, 2));
+      }
+
+      if (status === 429 && retryAfterSeconds > 0 && attempt < maxAttempts) {
+        const waitMs = Math.ceil(retryAfterSeconds * 1000) + 1000;
+        console.warn(`[Slash] Rate limited for guild ${guildId}. Retrying in ${Math.ceil(waitMs / 1000)}s...`);
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        continue;
+      }
+
+      return false;
+    }
   }
+
+  return false;
 }
 
 module.exports = { buildCommandsJson, registerGuildCommands };

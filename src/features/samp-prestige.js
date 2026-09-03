@@ -436,10 +436,49 @@ async function consumeBodyguardIntercept(db, victimId) {
 
 function getPrestigeCommandBuilders() {
   return [
-    // ─── Social flex ───
+    // ─── /prestige umbrella (new 2026-05-27) ───
+    // Single command that consolidates burn/champagne/donate/flexboard/portfolio.
+    // The legacy top-level commands below remain for ~30 days as «устарело» aliases.
+    new SlashCommandBuilder()
+      .setName("prestige")
+      .setDescription("SAMP Life: понт, флекс и инвестиции — всё в одной команде")
+      .addSubcommand((s) => s.setName("burn")
+        .setDescription("Сжечь вирты публично — чистый понт")
+        .addIntegerOption((o) =>
+          o.setName("amount")
+            .setDescription(`Сумма (от ${FLEX_BURN_MIN.toLocaleString("ru-RU")} до ${FLEX_BURN_MAX.toLocaleString("ru-RU")} $)`)
+            .setRequired(true)
+            .setMinValue(FLEX_BURN_MIN)
+            .setMaxValue(FLEX_BURN_MAX)
+        ))
+      .addSubcommand((s) => s.setName("champagne")
+        .setDescription("Заказать шампанское на весь клуб")
+        .addIntegerOption((o) =>
+          o.setName("amount")
+            .setDescription(`Сумма (от ${FLEX_CHAMPAGNE_MIN.toLocaleString("ru-RU")} $)`)
+            .setRequired(true)
+            .setMinValue(FLEX_CHAMPAGNE_MIN)
+            .setMaxValue(FLEX_CHAMPAGNE_MAX)
+        ))
+      .addSubcommand((s) => s.setName("donate")
+        .setDescription("Раздать вирты случайным активным игрокам в чате")
+        .addIntegerOption((o) =>
+          o.setName("amount")
+            .setDescription(`Сумма (от ${FLEX_DONATE_MIN.toLocaleString("ru-RU")} $)`)
+            .setRequired(true)
+            .setMinValue(FLEX_DONATE_MIN)
+            .setMaxValue(FLEX_DONATE_MAX)
+        ))
+      .addSubcommand((s) => s.setName("flexboard")
+        .setDescription("Рейтинг главных понтярщиков"))
+      .addSubcommand((s) => s.setName("portfolio")
+        .setDescription("Твой инвестиционный портфель")
+        .addUserOption((o) => o.setName("user").setDescription("Чей портфель смотрим").setRequired(false))),
+
+    // ─── Social flex (deprecated aliases — keep until 2026-06-27) ───
     new SlashCommandBuilder()
       .setName("burnmoney")
-      .setDescription("SAMP Life: сжечь вирты публично — чистый понт")
+      .setDescription("[устарело: /play магазин] SAMP Life: сжечь вирты публично")
       .addIntegerOption((o) =>
         o.setName("amount")
           .setDescription(`Сумма (от ${FLEX_BURN_MIN.toLocaleString("ru-RU")} до ${FLEX_BURN_MAX.toLocaleString("ru-RU")} $)`)
@@ -450,7 +489,7 @@ function getPrestigeCommandBuilders() {
 
     new SlashCommandBuilder()
       .setName("champagne")
-      .setDescription("SAMP Life: заказать шампанское на весь клуб")
+      .setDescription("[устарело: /play магазин] SAMP Life: заказать шампанское")
       .addIntegerOption((o) =>
         o.setName("amount")
           .setDescription(`Сумма (от ${FLEX_CHAMPAGNE_MIN.toLocaleString("ru-RU")} $)`)
@@ -461,7 +500,7 @@ function getPrestigeCommandBuilders() {
 
     new SlashCommandBuilder()
       .setName("donatechat")
-      .setDescription("SAMP Life: раздать вирты случайным активным игрокам в чате")
+      .setDescription("[устарело: /play магазин] SAMP Life: раздать вирты в чате")
       .addIntegerOption((o) =>
         o.setName("amount")
           .setDescription(`Сумма (от ${FLEX_DONATE_MIN.toLocaleString("ru-RU")} $)`)
@@ -472,7 +511,7 @@ function getPrestigeCommandBuilders() {
 
     new SlashCommandBuilder()
       .setName("flexboard")
-      .setDescription("SAMP Life: рейтинг главных понтярщиков (по сожжённым/пожертвованным виртам)"),
+      .setDescription("[устарело: /play магазин] SAMP Life: рейтинг понтярщиков"),
 
     // ─── Real estate ───
     new SlashCommandBuilder()
@@ -597,6 +636,7 @@ function getPrestigeCommandBuilders() {
 }
 
 const PRESTIGE_COMMAND_NAMES = [
+  "prestige",
   "burnmoney", "champagne", "donatechat", "flexboard",
   "realestate", "buymansion", "buyaircraft", "airjob", "mansion-collect", "estate",
   "stocks", "buystock", "sellstock", "portfolio",
@@ -798,7 +838,7 @@ async function handleFlexboard(interaction, db) {
       LIMIT 10`
   );
   if (!rows || rows.length === 0) {
-    await interaction.reply({ content: "❌ Никто ещё не понтанул. Стань первым: /burnmoney, /champagne или /donatechat.", ephemeral: true });
+    await interaction.reply({ content: "❌ Никто ещё не понтанул. Стань первым: `/play магазин` → «Сжечь деньги», «Шампанское» или «Раздать чату».", ephemeral: true });
     return;
   }
   const lines = rows.map((r, i) => {
@@ -838,18 +878,41 @@ async function handleRealEstate(interaction, _db) {
     .map((a) => {
       const j = a.job;
       const jobLine = j
-        ? `\n   /airjob: **${j.payMin.toLocaleString("ru-RU")}–${j.payMax.toLocaleString("ru-RU")} $** каждые **${Math.round(j.cooldownMs / 60_000)} мин**` +
+        ? `\n   Авиарейс (/play работа): **${j.payMin.toLocaleString("ru-RU")}–${j.payMax.toLocaleString("ru-RU")} $** каждые **${Math.round(j.cooldownMs / 60_000)} мин**` +
           (j.jailChance ? ` • ${Math.round(j.jailChance * 100)}% риск тюрьмы` : (j.incidentChance ? ` • ${Math.round(j.incidentChance * 100)}% риск ИНЦИДЕНТА` : ""))
         : "";
       return `${a.emoji} **${a.name}** — Цена: **${fmtMoney(a.price)}** • Понт: **${a.flexScore}**\n   ${a.description}${jobLine}`;
     });
 
+  // Discord caps an embed field value at 1024 characters. The mansion and
+  // aircraft catalogues both exceed that, which made this command throw and
+  // reply with a generic error instead of the catalogue. Split each list
+  // across as many fields as it needs.
+  const FIELD_LIMIT = 1024;
+  const chunkIntoFields = (name, entries) => {
+    const fields = [];
+    let buffer = "";
+    for (const entry of entries) {
+      const candidate = buffer ? `${buffer}\n\n${entry}` : entry;
+      if (candidate.length > FIELD_LIMIT && buffer) {
+        fields.push({ name: fields.length === 0 ? name : `${name} (продолжение)`, value: buffer, inline: false });
+        buffer = entry;
+      } else {
+        buffer = candidate;
+      }
+    }
+    if (buffer) {
+      fields.push({ name: fields.length === 0 ? name : `${name} (продолжение)`, value: buffer.slice(0, FIELD_LIMIT), inline: false });
+    }
+    return fields;
+  };
+
   const embed = new EmbedBuilder()
     .setTitle("🏖️ Каталог недвижимости и техники")
-    .setDescription("Особняки дают суточную аренду (`/mansion-collect`) и пассивные бонусы к /work и защите от /rob.\nТехника открывает `/airjob` — воздушные рейсы со своим кулдауном у каждого борта.")
+    .setDescription("Особняки дают суточную аренду (`/play бизнес` → «Собрать с особняка») и пассивные бонусы к /work и защите от /rob.\nТехника открывает авиарейсы (`/play работа` → «Авиарейс») со своим кулдауном у каждого борта.")
     .addFields(
-      { name: "🏠 Особняки", value: lines.join("\n\n"), inline: false },
-      { name: "✈️ Воздух", value: aircraftLines.join("\n\n"), inline: false },
+      ...chunkIntoFields("🏠 Особняки", lines),
+      ...chunkIntoFields("✈️ Воздух", aircraftLines),
     )
     .setColor(0x9b59b6)
     .setTimestamp(new Date());
@@ -882,7 +945,7 @@ async function handleBuyMansion(interaction, db) {
   }
 
   await withTx(db, async () => {
-    // Re-check inside tx — prevents double-charge on concurrent /buymansion clicks.
+    // Re-check inside tx — prevents double-charge on concurrent /play бизнес clicks.
     const existingRow = await dbGet(db, "SELECT mansion_id FROM samp_mansions WHERE user_id = ?", [String(userId)]);
     if (existingRow && existingRow.mansion_id === mansion.id) throw new Error("ALREADY_OWNED");
     const fresh = await getSampUser(db, userId);
@@ -936,7 +999,7 @@ async function handleBuyAircraft(interaction, db) {
   }
 
   await withTx(db, async () => {
-    // Re-check inside tx — prevents double-charge on concurrent /buyaircraft clicks.
+    // Re-check inside tx — prevents double-charge on concurrent /play бизнес clicks.
     const existing = await dbGet(
       db,
       "SELECT aircraft_id FROM samp_aircraft WHERE user_id = ? AND aircraft_id = ?",
@@ -1003,7 +1066,7 @@ async function handleAirJob(interaction, db) {
   );
   if (!ownsRow) {
     await interaction.reply({
-      content: `❌ У тебя нет **${aircraft.name}** в ангаре. Купи через /buyaircraft.`,
+      content: `❌ У тебя нет **${aircraft.name}** в ангаре. Купи через \`/play бизнес\` → «Купить самолёт».`,
       ephemeral: true,
     });
     return;
@@ -1083,6 +1146,15 @@ async function handleAirJob(interaction, db) {
       `Баланс: **${fmtMoney(after?.money || 0)}**.`;
   } else {
     const pay = randInt(job.payMin, job.payMax);
+    // 2026-05-27: apply aircraft upgrade multiplier to successful payouts.
+    let aircraftLevel = 0;
+    let aircraftMul = 1;
+    try {
+      const upgrades = require("./samp-property-upgrades");
+      aircraftLevel = await upgrades.getAircraftLevel(db, userId, aircraft.id);
+      aircraftMul = upgrades.aircraftPayMultiplier(aircraftLevel);
+    } catch (_) {}
+    const payAdjusted = Math.round(pay * aircraftMul);
     const line = pick(job.jobLines || ["выполнил рейс"]);
     await withTx(db, async () => {
       const stillOwns = await dbGet(
@@ -1091,10 +1163,10 @@ async function handleAirJob(interaction, db) {
         [String(userId), String(aircraft.id)]
       );
       if (!stillOwns) throw new Error("ALREADY_OWNED");
-      await adjustMoney(db, userId, pay);
+      await adjustMoney(db, userId, payAdjusted);
       const inserted = await addLedgerUnique(
-        db, "airjob", null, userId, pay, opKey,
-        { aircraft: aircraft.id, line }
+        db, "airjob", null, userId, payAdjusted, opKey,
+        { aircraft: aircraft.id, line, upgrade_level: aircraftLevel }
       );
       if (!inserted) throw new Error("DUPLICATE_OPERATION");
       try { const { awardMaterialDrops } = require("./phasec-utils"); await awardMaterialDrops(db, userId, "airjob"); } catch (_e) {}
@@ -1102,7 +1174,7 @@ async function handleAirJob(interaction, db) {
     const after = await getSampUser(db, userId);
     resultText =
       `${aircraft.emoji} ${line}.\n` +
-      `Заработал: **+${fmtMoney(pay)}**.\n` +
+      `Заработал: **+${fmtMoney(payAdjusted)}**.\n` +
       `Баланс: **${fmtMoney(after?.money || 0)}**.`;
   }
 
@@ -1123,7 +1195,7 @@ async function handleMansionCollect(interaction, db) {
   const mansion = await getUserMansion(db, userId);
   if (!mansion) {
     await interaction.reply({
-      content: "❌ У тебя нет особняка. Сначала купи через /buymansion.",
+      content: "❌ У тебя нет особняка. Сначала купи через `/play бизнес` → «Купить особняк».",
       ephemeral: true,
     });
     return;
@@ -1136,18 +1208,27 @@ async function handleMansionCollect(interaction, db) {
   if (!(await checkAndSetActionCooldown(interaction, db, userId, "mansion_rent", MANSION_RENT_COOLDOWN_MS))) return;
 
   const opKey = makeInteractionOpKey(interaction, "mansion_rent");
-  const rent = Number(mansion.dailyRent);
+  // 2026-05-27: apply mansion upgrade multiplier (computed before tx, validated in tx).
+  let mansionLevel = 0;
+  let mansionMul = 1;
+  try {
+    const upgrades = require("./samp-property-upgrades");
+    mansionLevel = await upgrades.getMansionLevel(db, userId);
+    mansionMul = upgrades.mansionRentMultiplier(mansionLevel);
+  } catch (_) {}
+  const rent = Math.round(Number(mansion.dailyRent) * mansionMul);
   await withTx(db, async () => {
     // Re-fetch mansion inside tx in case user replaced it.
     const row = await dbGet(db, "SELECT mansion_id FROM samp_mansions WHERE user_id = ?", [String(userId)]);
     const m = row ? MANSIONS[row.mansion_id] : null;
     if (!m) throw new Error("ALREADY_OWNED"); // generic "no mansion now" — message reused
-    const rentNow = Number(m.dailyRent || 0);
-    if (rentNow <= 0) throw new Error("INSUFFICIENT");
+    const baseRent = Number(m.dailyRent || 0);
+    if (baseRent <= 0) throw new Error("INSUFFICIENT");
+    const rentNow = Math.round(baseRent * mansionMul);
     await adjustMoney(db, userId, rentNow);
     const inserted = await addLedgerUnique(
       db, "mansion_rent", null, userId, rentNow, opKey,
-      { mansion_id: m.id }
+      { mansion_id: m.id, upgrade_level: mansionLevel }
     );
     if (!inserted) throw new Error("DUPLICATE_OPERATION");
   });
@@ -1169,7 +1250,7 @@ async function handleEstate(interaction, db) {
     name: "🏠 Резиденция",
     value: mansion
       ? `${mansion.emoji} **${mansion.name}** _(${mansion.district})_` +
-        (mansion.dailyRent ? `\n💵 Аренда: **${fmtMoney(mansion.dailyRent)}**/сутки — собирается через **/mansion-collect**` : "")
+        (mansion.dailyRent ? `\n💵 Аренда: **${fmtMoney(mansion.dailyRent)}**/сутки — собирается через **/play бизнес** → «Собрать с особняка»` : "")
       : "—",
     inline: false,
   });
@@ -1178,7 +1259,7 @@ async function handleEstate(interaction, db) {
     value: aircraft.length > 0
       ? aircraft.map((a) => {
           const j = a.job;
-          const jobLine = j ? ` _(/airjob: ${j.payMin.toLocaleString("ru-RU")}–${j.payMax.toLocaleString("ru-RU")} $ / ${Math.round(j.cooldownMs / 60_000)} мин)_` : "";
+          const jobLine = j ? ` _(авиарейс: ${j.payMin.toLocaleString("ru-RU")}–${j.payMax.toLocaleString("ru-RU")} $ / ${Math.round(j.cooldownMs / 60_000)} мин)_` : "";
           return `${a.emoji} **${a.name}**${jobLine}`;
         }).join("\n")
       : "—",
@@ -1350,7 +1431,7 @@ async function handlePortfolio(interaction, db) {
   const target = interaction.options.getUser("user") || interaction.user;
   const portfolio = await getUserPortfolio(db, target.id);
   if (portfolio.length === 0) {
-    await interaction.reply({ content: `📭 У <@${target.id}> нет акций. Купить: /buystock`, ephemeral: true });
+    await interaction.reply({ content: `📭 У <@${target.id}> нет акций. Купить: \`/play бизнес\` → «Купить акции»`, ephemeral: true });
     return;
   }
   const prices = await getAllStockPrices(db);
@@ -1410,7 +1491,7 @@ async function handleHire(interaction, db) {
   const paidThrough = nowMs() + CREW_SALARY_PERIOD_DAYS * 24 * 60 * 60 * 1000;
 
   await withTx(db, async () => {
-    // Re-check inside tx — prevents double-charge on concurrent /hire clicks.
+    // Re-check inside tx — prevents double-charge on concurrent /play бизнес clicks.
     const existing = await dbGet(
       db,
       "SELECT paid_through FROM samp_crew WHERE user_id = ? AND role_id = ?",
@@ -1462,7 +1543,7 @@ async function handleCrew(interaction, db) {
   const userId = interaction.user.id;
   const crew = await getUserCrew(db, userId);
   if (crew.length === 0) {
-    await interaction.reply({ content: "📭 У тебя нет персонала. Нанять: /hire", ephemeral: true });
+    await interaction.reply({ content: "📭 У тебя нет персонала. Нанять: `/play бизнес` → «Нанять»", ephemeral: true });
     return;
   }
   const lines = crew.map((m) => {
@@ -1486,7 +1567,22 @@ async function handleCrew(interaction, db) {
 // ═══════════════════════════════════════════════════════════════
 
 async function handleSampPrestigeCommand({ interaction, db }) {
-  const name = interaction.commandName;
+  let name = interaction.commandName;
+  // Route /prestige <sub> -> legacy handlers. Discord exposes the subcommand
+  // value via interaction.options.getSubcommand(); the option-name accessors
+  // (e.g. getInteger("amount")) still resolve across subcommands so the
+  // existing handlers keep working without further changes.
+  if (name === "prestige") {
+    const sub = interaction.options.getSubcommand(false);
+    const SUB_TO_LEGACY = {
+      burn: "burnmoney",
+      champagne: "champagne",
+      donate: "donatechat",
+      flexboard: "flexboard",
+      portfolio: "portfolio",
+    };
+    name = SUB_TO_LEGACY[sub] || sub;
+  }
   try {
     if (name === "burnmoney") await handleBurnMoney(interaction, db);
     else if (name === "champagne") await handleChampagne(interaction, db);

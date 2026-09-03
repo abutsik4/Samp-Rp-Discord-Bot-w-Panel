@@ -16,6 +16,9 @@ const { handleAwardsCommand } = require("../../features/weekly-awards");
 const { handleRadioVote, handleRadioTop, handleRadioInfo, handleRadioFans } = require("../../features/radio-vote");
 const { handleSampExtendedCommand, handleSampExtendedAutocomplete } = require("../../features/samp-extended");
 const { handleSampPrestigeCommand, PRESTIGE_COMMAND_NAMES } = require("../../features/samp-prestige");
+const { handleSampVipCommand, VIP_COMMAND_NAMES } = require("../../features/samp-vip");
+const { handleSampUpgradeCommand, UPGRADE_COMMAND_NAMES } = require("../../features/samp-property-upgrades");
+const { handleSampCrateCommand, CRATE_COMMAND_NAMES } = require("../../features/samp-crates");
 const { handlePhaseCCommand, PHASEC_COMMAND_NAMES, getPhaseCCommandBuilders } = require("../../features/samp-phasec");
 const { handleEventsCommand } = require("../../features/seasonal-events");
 const { handleGameFaqCommand } = require("../../features/game-faq");
@@ -31,6 +34,17 @@ const { getUserBadges, getBadgeDefinitions } = require("../../features/badges");
 const { SAMPStatusTracker } = require("../../features/samp-status");
 const { getLeaderboard } = require("../../features/leaderboard-cache");
 const { handleGiveawayButton } = require("../../features/giveaway");
+const { handleSelfRoleButton } = require("../../features/self-roles");
+const { handleStreetEventButton } = require("../../features/street-events");
+const { handleProgressCommand } = require("../../features/chat-bridge");
+const { handlePlayCommand, handlePlayComponent } = require("../../features/play-hub");
+const {
+  handleRequestStaffRoleCommand,
+  handleRequestModalSubmit,
+  handleRejectionModalSubmit,
+  handleEditReasonModalSubmit,
+  handleRequestButton,
+} = require("../../features/staff-role-requests");
 
 const SAMP_GAME_COMMAND_CATEGORY = "samp_game";
 const SAMP_LIFE_COMMANDS = [
@@ -45,7 +59,7 @@ const SAMP_ONBOARDING_COMMANDS = ["quest"];
 const SAMP_EXTENDED_COMMANDS = [
   "businesses", "bizstats", "mbizstats", "buybiz", "collectincome",
   "maintainbiz", "bizrun",
-  "tune", "tunecar", "switchcar", "garage",
+  "tune", "switchcar", "garage",
   "bounty", "bountylist",
   "heist",
   "jobs", "dojob",
@@ -58,11 +72,14 @@ const SAMP_EXTENDED_COMMANDS = [
   "wiretap", "sabotage", "gangbmorder",
 ];
 const SAMP_LIFE_AUTOCOMPLETE_COMMANDS = ["buy", "weapon", "sellcar"];
-const SAMP_EXTENDED_AUTOCOMPLETE_COMMANDS = ["buybiz", "bizstats", "mbizstats", "maintainbiz", "bizrun", "tune", "tunecar", "switchcar", "buycosmetic", "gang", "gcapture", "gsupportbiz"];
+const SAMP_EXTENDED_AUTOCOMPLETE_COMMANDS = ["buybiz", "bizstats", "mbizstats", "maintainbiz", "bizrun", "tune", "switchcar", "buycosmetic", "gang", "gcapture", "gsupportbiz"];
 const SAMP_COSMETICS_AUTOCOMPLETE_COMMANDS = ["equip", "unequip"];
 const SAMP_PRESTIGE_COMMANDS = PRESTIGE_COMMAND_NAMES;
+const SAMP_VIP_COMMANDS = VIP_COMMAND_NAMES;
+const SAMP_UPGRADE_COMMANDS = UPGRADE_COMMAND_NAMES;
+const SAMP_CRATE_COMMANDS = CRATE_COMMAND_NAMES;
 const SAMP_PHASEC_COMMANDS = PHASEC_COMMAND_NAMES;
-const SAMP_GAME_COMMANDS = new Set([...SAMP_LIFE_COMMANDS, ...SAMP_EXTENDED_COMMANDS, ...SAMP_COSMETICS_COMMANDS, ...SAMP_ONBOARDING_COMMANDS, ...SAMP_PRESTIGE_COMMANDS, ...SAMP_PHASEC_COMMANDS]);
+const SAMP_GAME_COMMANDS = new Set([...SAMP_LIFE_COMMANDS, ...SAMP_EXTENDED_COMMANDS, ...SAMP_COSMETICS_COMMANDS, ...SAMP_ONBOARDING_COMMANDS, ...SAMP_PRESTIGE_COMMANDS, ...SAMP_VIP_COMMANDS, ...SAMP_UPGRADE_COMMANDS, ...SAMP_CRATE_COMMANDS, ...SAMP_PHASEC_COMMANDS]);
 
 function buildRestrictedChannelWarning(channelId) {
   return `❌ Команды SAMP Life доступны только в канале <#${channelId}>.`;
@@ -85,15 +102,59 @@ function registerCommandHandlers(ctx) {
 
   client.on("interactionCreate", async (interaction) => {
     console.log(`[dispatch] interaction received: type=${interaction.type} customId=${interaction.customId || "-"}`);
+    // Staff role request modals (request / reject / edit-reason)
+    if (interaction.isModalSubmit && interaction.isModalSubmit() && interaction.customId && String(interaction.customId).startsWith("srr:")) {
+      try {
+        const ctx = { client, db };
+        if (await handleRequestModalSubmit(interaction, ctx)) return;
+        if (await handleRejectionModalSubmit(interaction, ctx)) return;
+        if (await handleEditReasonModalSubmit(interaction, ctx)) return;
+      } catch (e) {
+        console.error("[staff-role-requests] modal error", e);
+      }
+    }
+    // /play hub components — buttons, string selects, user selects and modals
+    // all share the `play:` customId prefix, so one call covers every step.
+    // Routed first: the prefix is unambiguous and cannot belong to anything else.
+    try {
+      if (await handlePlayComponent(interaction, db)) return;
+    } catch (e) {
+      console.error("[play-hub] component error", e);
+    }
+
     // Handle giveaway button clicks
+    console.log(`[dispatch] D1 isButton=${interaction.isButton()}`);
     if (interaction.isButton()) {
       try {
         const handled = await handleGiveawayButton(interaction);
+        console.log(`[dispatch] giveaway handled=${handled}`);
         if (handled) return;
       } catch (e) {
         console.error("[giveaway] button error", e);
       }
+      // Self-role toggle buttons (customId prefix: selfrole:<roleId>)
+      try {
+        const handled = await handleSelfRoleButton(interaction);
+        if (handled) return;
+      } catch (e) {
+        console.error("[self-roles] button error", e);
+      }
+      // Staff-role request buttons (customId prefix: srr:)
+      try {
+        const handled = await handleRequestButton(interaction, { client, db });
+        if (handled) return;
+      } catch (e) {
+        console.error("[staff-role-requests] button error", e);
+      }
+      // Street event claim buttons (customId prefix: street:<eventId>)
+      try {
+        const handled = await handleStreetEventButton(interaction, db);
+        if (handled) return;
+      } catch (e) {
+        console.error("[street-events] button error", e);
+      }
     }
+    console.log(`[dispatch] D2 after button check`);
 
     // Handle cosmetics shop category select menu
     if (interaction.isStringSelectMenu && interaction.isStringSelectMenu()) {
@@ -103,6 +164,7 @@ function registerCommandHandlers(ctx) {
         console.error("[samp-cosmetics] select menu error", e);
       }
     }
+    console.log(`[dispatch] D3 after selectmenu check`);
 
     // Handle autocomplete for SAMP Life commands
     if (interaction.isAutocomplete()) {
@@ -141,9 +203,13 @@ function registerCommandHandlers(ctx) {
       return;
     }
 
-    if (!interaction.isChatInputCommand()) return;
+    if (!interaction.isChatInputCommand()) {
+      console.log(`[dispatch] NOT isChatInputCommand, type=${interaction.type}, skipping`);
+      return;
+    }
 
     const { commandName } = interaction;
+    console.log(`[dispatch] routing command: ${commandName}`);
     // ── Hidden command guard ──
     const HIDDEN_COMMANDS = new Set(["userstats","top5","top10","backfill","sync-missing","demoembed","reactions","export","countdown","mystrikes","whitelist","automod","sampstatus","holiday","portfolio","radio","radio-top","radio-info","radio-fans"]);
     if (HIDDEN_COMMANDS.has(commandName)) {
@@ -260,6 +326,45 @@ function registerCommandHandlers(ctx) {
         return;
       }
     }
+    // SAMP VIP subscriptions (recurring money sink)
+    if (SAMP_VIP_COMMANDS.includes(commandName)) {
+      try {
+        await handleSampVipCommand({ interaction, db });
+        return;
+      } catch (err) {
+        console.error(`[dispatch] ${commandName} error:`, err);
+        try { await dbRun(db, "INSERT INTO bot_command_errors(command_name, user_id, guild_id, error_message, stack) VALUES(?,?,?,?,?)", [commandName, interaction.user?.id, interaction.guild?.id, err?.message || "", err?.stack || ""]); } catch (_) {}
+        logCommandUsage(db, { commandName, userId: interaction.user.id, guildId: interaction.guild?.id, channelId: interaction.channelId, subcommand: _subcommand, success: false, durationMs: Date.now() - _cmdStart, errorMessage: err?.message });
+        if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: "❌ An error occurred while processing your SAMP command.", ephemeral: true });
+        return;
+      }
+    }
+    // SAMP property upgrades (one-time/scaling money sink)
+    if (SAMP_UPGRADE_COMMANDS.includes(commandName)) {
+      try {
+        await handleSampUpgradeCommand({ interaction, db });
+        return;
+      } catch (err) {
+        console.error(`[dispatch] ${commandName} error:`, err);
+        try { await dbRun(db, "INSERT INTO bot_command_errors(command_name, user_id, guild_id, error_message, stack) VALUES(?,?,?,?,?)", [commandName, interaction.user?.id, interaction.guild?.id, err?.message || "", err?.stack || ""]); } catch (_) {}
+        logCommandUsage(db, { commandName, userId: interaction.user.id, guildId: interaction.guild?.id, channelId: interaction.channelId, subcommand: _subcommand, success: false, durationMs: Date.now() - _cmdStart, errorMessage: err?.message });
+        if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: "❌ An error occurred while processing your SAMP command.", ephemeral: true });
+        return;
+      }
+    }
+    // SAMP black-market crates (gamble money sink)
+    if (SAMP_CRATE_COMMANDS.includes(commandName)) {
+      try {
+        await handleSampCrateCommand({ interaction, db });
+        return;
+      } catch (err) {
+        console.error(`[dispatch] ${commandName} error:`, err);
+        try { await dbRun(db, "INSERT INTO bot_command_errors(command_name, user_id, guild_id, error_message, stack) VALUES(?,?,?,?,?)", [commandName, interaction.user?.id, interaction.guild?.id, err?.message || "", err?.stack || ""]); } catch (_) {}
+        logCommandUsage(db, { commandName, userId: interaction.user.id, guildId: interaction.guild?.id, channelId: interaction.channelId, subcommand: _subcommand, success: false, durationMs: Date.now() - _cmdStart, errorMessage: err?.message });
+        if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: "❌ An error occurred while processing your SAMP command.", ephemeral: true });
+        return;
+      }
+    }
     if (SAMP_PHASEC_COMMANDS.includes(commandName)) {
       try {
         await handlePhaseCCommand({ interaction, db });
@@ -273,6 +378,20 @@ function registerCommandHandlers(ctx) {
       }
     }
 
+    // Staff role request flow
+    if (commandName === "request-staff-role") {
+      try {
+        await handleRequestStaffRoleCommand(interaction, { client, db });
+        return;
+      } catch (err) {
+        console.error(`[dispatch] ${commandName} error:`, err);
+        try { await dbRun(db, "INSERT INTO bot_command_errors(command_name, user_id, guild_id, error_message, stack) VALUES(?,?,?,?,?)", [commandName, interaction.user?.id, interaction.guild?.id, err?.message || "", err?.stack || ""]); } catch (_) {}
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({ content: "Ошибка при обработке заявки. Попробуйте позже.", ephemeral: true });
+        }
+        return;
+      }
+    }
     // SAMP cosmetics shop + inventory
     if (commandName === "shop") {
       await handleShopCommand(interaction, db);
@@ -292,6 +411,18 @@ function registerCommandHandlers(ctx) {
     }
     if (commandName === "quest") {
       await handleQuestCommand(interaction, db);
+      return;
+    }
+
+    // Chat progress + samp-rp.su forum award tracker
+    if (commandName === "progress") {
+      await handleProgressCommand(interaction, db);
+      return;
+    }
+
+    // The game hub (Phase 2) — renders the panel for a Russian category.
+    if (commandName === "play") {
+      await handlePlayCommand(interaction, db);
       return;
     }
 
@@ -777,10 +908,23 @@ function registerCommandHandlers(ctx) {
           return interaction.editReply(`❌ Сервер с ID \`${serverId}\` уже существует. Используйте другой ID.`);
         }
 
+        // Optional settings from slash command
+        const customOnlineText = interaction.options.getString("online_text") || null;
+        const customOfflineText = interaction.options.getString("offline_text") || null;
+        const pollIntervalSec = interaction.options.getInteger("poll_interval_sec");
+        const renameCooldownSec = interaction.options.getInteger("rename_cooldown_sec");
+        const nameFormat = interaction.options.getString("name_format") || null;
+
         await dbRun(
-          `INSERT INTO samp_trackers (guild_id, server_id, server_name, server_ip, server_port, channel_id, emoji, enabled) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
-          [interaction.guild.id, serverId, serverName, serverIp, serverPort, ch.id, emoji]
+          `INSERT INTO samp_trackers (guild_id, server_id, server_name, server_ip, server_port, channel_id, emoji, enabled, custom_online_text, custom_offline_text, poll_interval_ms, rename_cooldown_ms, name_format)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+          [
+            interaction.guild.id, serverId, serverName, serverIp, serverPort, ch.id, emoji,
+            customOnlineText, customOfflineText,
+            pollIntervalSec ? pollIntervalSec * 1000 : null,
+            renameCooldownSec ? renameCooldownSec * 1000 : null,
+            nameFormat,
+          ]
         );
 
         const tracker = new SAMPStatusTracker(client, {
@@ -789,6 +933,11 @@ function registerCommandHandlers(ctx) {
           channelId: ch.id,
           serverName,
           emoji,
+          custom_online_text: customOnlineText,
+          custom_offline_text: customOfflineText,
+          poll_interval_ms: pollIntervalSec ? pollIntervalSec * 1000 : undefined,
+          rename_cooldown_ms: renameCooldownSec ? renameCooldownSec * 1000 : undefined,
+          name_format: nameFormat,
         });
 
         await tracker.start();
@@ -896,6 +1045,11 @@ function registerCommandHandlers(ctx) {
               channelId: server.channel_id,
               serverName: server.server_name,
               emoji: server.emoji,
+              custom_online_text: server.custom_online_text,
+              custom_offline_text: server.custom_offline_text,
+              poll_interval_ms: server.poll_interval_ms,
+              rename_cooldown_ms: server.rename_cooldown_ms,
+              name_format: server.name_format,
             });
 
             await t.start();
@@ -914,28 +1068,6 @@ function registerCommandHandlers(ctx) {
 
         return interaction.editReply(`✅ Запущено трекеров: ${started}/${servers.length}`);
       }
-    } else if (commandName === "demoembed") {
-      const initialEmbed = new EmbedBuilder()
-        .setTitle("Пример Embed от Samp-Rp")
-        .setDescription("Это первоначальное сообщение. Через 10000 миллисекунд оно изменится.")
-        .setColor(0x2ecc71)
-        .setTimestamp();
-
-      const editedEmbed = new EmbedBuilder()
-        .setTitle("Обновлённый Embed Samp-Rp")
-        .setDescription("Сообщение было отредактировано через 10000 миллисекунд.")
-        .setColor(0xe74c3c)
-        .setTimestamp();
-
-      await interaction.reply({ embeds: [initialEmbed], fetchReply: true });
-
-      setTimeout(async () => {
-        try {
-          await interaction.editReply({ embeds: [editedEmbed] });
-        } catch (err) {
-          console.error("Error editing embed:", err);
-        }
-      }, 10000);
     } else if (commandName === "synccommands") {
       if (interaction.user.id !== OWNER_ID) {
         return interaction.reply({ content: "Эта команда доступна только владельцу бота.", flags: 64 });
@@ -1068,36 +1200,6 @@ function registerCommandHandlers(ctx) {
         console.error("export error:", err);
         await interaction.editReply({ content: "Ошибка при экспорте данных." });
       }
-    } else if (commandName === "countdown") {
-      const now = new Date();
-      const nextYear =
-        now.getMonth() === 11 && now.getDate() === 31 && now.getHours() >= 21
-          ? now.getFullYear() + 1
-          : now.getMonth() === 0 && now.getDate() === 1
-            ? now.getFullYear()
-            : now.getFullYear() + 1;
-      const newYear = new Date(`${nextYear}-01-01T00:00:00+03:00`);
-
-      const diff = newYear.getTime() - now.getTime();
-
-      if (diff <= 0) {
-        return interaction.reply({ content: "С Новым Годом! 🎉", flags: 64 });
-      }
-
-      const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-      const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-
-      const embed = new EmbedBuilder()
-        .setTitle(`🎆 Обратный отсчёт до Нового Года ${nextYear}!`)
-        .setDescription(
-          `**${days}** ${ruPlural(days, "день", "дня", "дней")}, **${hours}** ${ruPlural(hours, "час", "часа", "часов")}, **${minutes}** ${ruPlural(minutes, "минута", "минуты", "минут")}, **${seconds}** ${ruPlural(seconds, "секунда", "секунды", "секунд")}`
-        )
-        .setColor(0xfbbf24)
-        .setTimestamp();
-
-      await interaction.reply({ embeds: [embed] });
     } else if (commandName === "mystrikes") {
       const userId = interaction.user.id;
 

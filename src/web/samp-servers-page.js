@@ -47,6 +47,10 @@ function generateSampServersPage(bot, PANEL_BASE) {
     .empty-state-icon{font-size:64px;margin-bottom:16px;opacity:.5}
     
     .channel-select{width:100%;padding:10px;border-radius:6px;border:1px solid var(--border);background:var(--input-bg);color:var(--text);margin-bottom:12px}
+    .settings-modal{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center}
+    .settings-modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(2px)}
+    .settings-modal-content{position:relative;width:min(560px,92vw);max-height:90vh;overflow:auto;z-index:1}
+    .settings-modal-content code{background:var(--input-bg);padding:2px 6px;border-radius:4px;font-size:12px}
   `;
 
   const body = `
@@ -133,6 +137,41 @@ function generateSampServersPage(bot, PANEL_BASE) {
             </div>
           </div>
 
+          <div id="settingsModal" class="settings-modal" style="display:none">
+            <div class="settings-modal-backdrop" onclick="closeSettingsModal()"></div>
+            <div class="settings-modal-content content-card">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+                <div class="card-title" style="margin:0">⚙️ Server Settings: <span id="settingsModalTitle"></span></div>
+                <button class="btn" onclick="closeSettingsModal()">✕ Close</button>
+              </div>
+              <div class="form-group">
+                <label>Online Text (optional, replaces player count)</label>
+                <input type="text" id="settingOnlineText" placeholder="Leave empty to use player count, e.g. 50/1000" maxlength="64">
+              </div>
+              <div class="form-group">
+                <label>Offline Text (default: ОФФЛАЙН)</label>
+                <input type="text" id="settingOfflineText" placeholder="ОФФЛАЙН" maxlength="64">
+              </div>
+              <div class="form-group">
+                <label>Poll Interval (seconds, 10-3600, default 120)</label>
+                <input type="number" id="settingPollSec" min="10" max="3600" step="1" placeholder="120">
+              </div>
+              <div class="form-group">
+                <label>Rename Cooldown (seconds, 60-1800, default 120)</label>
+                <input type="number" id="settingCooldownSec" min="60" max="1800" step="1" placeholder="120">
+              </div>
+              <div class="form-group">
+                <label>Name Format Template (optional, e.g. <code>{emoji} {name} [{players}/{max}]</code>)</label>
+                <input type="text" id="settingNameFormat" placeholder="{emoji} {name} [{players}/{max}]" maxlength="200">
+                <small style="color:var(--text-muted)">Tokens: <code>{emoji}</code> <code>{name}</code> <code>{players}</code> <code>{max}</code> <code>{online}</code> <code>{status}</code></small>
+              </div>
+              <div style="display:flex;gap:8px;margin-top:16px">
+                <button class="btn btn-primary" id="settingsSaveBtn" onclick="saveServerSettings()">✓ Save</button>
+                <button class="btn" onclick="closeSettingsModal()">Cancel</button>
+              </div>
+            </div>
+          </div>
+
           <div class="content-card" data-scroll data-scroll-class="is-inview" style="margin-top:20px">
             <div class="card-title">ℹ️ About SA-MP Status</div>
             <div class="alert alert-info">
@@ -202,6 +241,7 @@ function generateSampServersPage(bot, PANEL_BASE) {
           + (s.enabled
               ? '<button class="btn" onclick="stopServer(\\'' + s.server_id + '\\')">⏸️ Stop</button>'
               : '<button class="btn" onclick="startServer(\\'' + s.server_id + '\\')">▶️ Start</button>')
+          + '<button class="btn" onclick="openSettingsModal(\\'' + s.server_id + '\\')">⚙️ Settings</button>'
           + '<button class="btn btn-danger" onclick="deleteServer(\\'' + s.server_id + '\\')">🗑️ Delete</button>'
           + '</div>'
           + '</div>';
@@ -345,7 +385,49 @@ function generateSampServersPage(bot, PANEL_BASE) {
       loadChannels().then(() => loadServers());
     });
   </script>
-  `;
+    let _settingsServerId = null;
+
+    function openSettingsModal(serverId) {
+      const s = servers.find(x => x.server_id === serverId);
+      if (!s) return showAlert('Server not found', 'error');
+      _settingsServerId = serverId;
+      document.getElementById('settingsModalTitle').textContent = s.server_name || serverId;
+      document.getElementById('settingOnlineText').value = s.custom_online_text || '';
+      document.getElementById('settingOfflineText').value = s.custom_offline_text || '';
+      document.getElementById('settingPollSec').value = s.poll_interval_ms ? Math.round(s.poll_interval_ms / 1000) : '';
+      document.getElementById('settingCooldownSec').value = s.rename_cooldown_ms ? Math.round(s.rename_cooldown_ms / 1000) : '';
+      document.getElementById('settingNameFormat').value = s.name_format || '';
+      document.getElementById('settingsModal').style.display = 'flex';
+    }
+
+    function closeSettingsModal() {
+      document.getElementById('settingsModal').style.display = 'none';
+      _settingsServerId = null;
+    }
+
+    async function saveServerSettings() {
+      if (!_settingsServerId) return showAlert('No server selected', 'error');
+      const pollVal = document.getElementById('settingPollSec').value;
+      const cdVal = document.getElementById('settingCooldownSec').value;
+      const body = {
+        custom_online_text: document.getElementById('settingOnlineText').value,
+        custom_offline_text: document.getElementById('settingOfflineText').value,
+        poll_interval_ms: pollVal ? Math.max(10000, Math.min(3600000, Math.round(Number(pollVal) * 1000))) : null,
+        rename_cooldown_ms: cdVal ? Math.max(60000, Math.min(1800000, Math.round(Number(cdVal) * 1000))) : null,
+        name_format: document.getElementById('settingNameFormat').value,
+      };
+      try {
+        await api(apiBase + '/api/' + botKey + '/samp-servers/' + encodeURIComponent(_settingsServerId) + '/settings', {
+          method: 'PUT',
+          body: JSON.stringify(body)
+        });
+        showAlert('Settings saved', 'success');
+        closeSettingsModal();
+        loadServers();
+      } catch (e) { showAlert(e.message || 'Save failed', 'error'); }
+    }
+
+`;
 
   return generate({
     head,

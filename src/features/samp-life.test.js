@@ -163,6 +163,15 @@ test("ensureSampLifeTables creates tables", async () => {
   const row = await dbGet(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='samp_users'");
   assert.equal(row.name, "samp_users");
 
+  const mansionTable = await dbGet(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='samp_mansions'");
+  const aircraftTable = await dbGet(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='samp_aircraft'");
+  const crewTable = await dbGet(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='samp_crew'");
+  const crewInterceptsTable = await dbGet(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='samp_crew_intercepts'");
+  assert.equal(mansionTable.name, "samp_mansions");
+  assert.equal(aircraftTable.name, "samp_aircraft");
+  assert.equal(crewTable.name, "samp_crew");
+  assert.equal(crewInterceptsTable.name, "samp_crew_intercepts");
+
   db.close();
 });
 

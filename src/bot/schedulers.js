@@ -30,8 +30,26 @@ const { runStockTick, runCrewSalaryCycle } = require("../features/samp-stocks-en
 const { getGangLevelByXp } = require("../features/constants/gang-evolution");
 const { STOCK_TICK_MINUTES } = require("../features/constants/prestige");
 const { dbAll, dbGet, dbRun } = require("../utils/db-helpers");
+const {
+  ensureStreetEventTables,
+  dropStreetEvent,
+  sweepExpiredStreetEvents,
+} = require("../features/street-events");
+const { announceToMainChat, announceThrottled, claimAnnounceSlot } = require("../features/announce");
+
+// Street event pacing — the drop function already gates on active hours and
+// one-open-at-a-time; these cap the daily total.
+const STREET_EVENT_MIN_GAP_MS = Number(process.env.STREET_EVENT_MIN_GAP_MIN || 90) * 60 * 1000;
+const STREET_EVENT_MAX_PER_DAY = Number(process.env.STREET_EVENT_MAX_PER_DAY || 4);
+
+// Stock market chat feed. Tuned for a small community: only large moves, at
+// most a couple of posts a day, hours apart. Overridable without a deploy.
+const STOCK_ANNOUNCE_THRESHOLD = Number(process.env.STOCK_ANNOUNCE_THRESHOLD || 0.18);
+const STOCK_ANNOUNCE_MIN_GAP_MS = Number(process.env.STOCK_ANNOUNCE_MIN_GAP_MIN || 240) * 60 * 1000;
+const STOCK_ANNOUNCE_MAX_PER_DAY = Number(process.env.STOCK_ANNOUNCE_MAX_PER_DAY || 2);
 
 const activeSchedulerTasks = new Set();
+const STARTUP_SLASH_SYNC_ENABLED = (process.env.DISABLE_STARTUP_SLASH_SYNC || "0") !== "1";
 
 async function runExclusiveTask(taskName, fn) {
   if (activeSchedulerTasks.has(taskName)) {
@@ -413,6 +431,19 @@ async function startSchedulers(ctx) {
                 await markWeeklyAwardRunStage(db, guild.id, weekStart, "lottery_drawn_at");
                 if (lotteryResult?.winner) {
                   console.log(`[WeeklyAwards] Lottery drawn: winner=${lotteryResult.winner}, winnings=${lotteryResult.winnings}`);
+                  // Phase 1.2: the draw used to happen entirely in the log.
+                  await announceToMainChat(client, db, {
+                    embeds: [
+                      new EmbedBuilder()
+                        .setTitle("🎰 Розыгрыш лотереи")
+                        .setDescription(
+                          `Победитель — <@${lotteryResult.winner}>!\n`
+                          + `Выигрыш: **${Number(lotteryResult.winnings || 0).toLocaleString("ru-RU")} $**`
+                        )
+                        .setColor(0xf1c40f)
+                        .setTimestamp(),
+                    ],
+                  }, { guildId: guild.id });
                 } else {
                   console.log("[WeeklyAwards] Lottery already drawn or no tickets this week");
                 }
@@ -518,6 +549,33 @@ async function startSchedulers(ctx) {
       if (events && events.length > 0) {
         console.log(`[Stocks] Tick produced ${events.length} news events:`,
           events.map((e) => `${e.ticker} ${e.delta > 0 ? "+" : ""}${(e.delta * 100).toFixed(1)}%`).join(", "));
+
+        // Only genuinely dramatic moves reach chat, and even those are rate
+        // limited. The ticker fires ~29 news events a day; announcing each
+        // dramatic one produced ~9 bot posts into a channel that sees ~20
+        // human messages a day. Threshold + throttle keep it to at most a
+        // couple of posts, spaced hours apart.
+        const dramatic = events.filter((e) => Math.abs(Number(e.delta || 0)) >= STOCK_ANNOUNCE_THRESHOLD);
+        if (dramatic.length > 0) {
+          const lines = dramatic
+            .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+            .slice(0, 3)
+            .map((e) => {
+              const pct = (Number(e.delta) * 100).toFixed(1);
+              return Number(e.delta) > 0
+                ? `📈 **${e.ticker}** взлетел на **+${pct}%**`
+                : `📉 **${e.ticker}** рухнул на **${pct}%**`;
+            });
+          await announceThrottled(client, db, "stocks", {
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("💹 Новости биржи San Andreas")
+                .setDescription(`${lines.join("\n")}\n\n\`/play бизнес\` — посмотреть рынок.`)
+                .setColor(0x9b59b6)
+                .setTimestamp(),
+            ],
+          }, { minGapMs: STOCK_ANNOUNCE_MIN_GAP_MS, maxPerDay: STOCK_ANNOUNCE_MAX_PER_DAY });
+        }
       }
     } catch (err) {
       console.error("[Stocks] Tick failed:", err);
@@ -566,11 +624,60 @@ async function startSchedulers(ctx) {
           if (decayed > 0 || neutralized > 0) {
             console.log(`[GangDecay] processed ${decayed} territories, neutralized ${neutralized}`);
           }
+          // Phase 1.2: a district going neutral is the moment other gangs care
+          // about — it was previously visible only in the process log.
+          if (neutralized > 0) {
+            await announceThrottled(client, db, "territory-decay", {
+              embeds: [
+                new EmbedBuilder()
+                  .setTitle("🗺 Районы вышли из-под контроля")
+                  .setDescription(
+                    `**${neutralized}** ${ruPlural(neutralized, "район", "района", "районов")} остались без хозяина.\n`
+                    + "Успей занять их через `/gang claimterritory`, пока это не сделали другие."
+                  )
+                  .setColor(0xe67e22)
+                  .setTimestamp(),
+              ],
+            }, { minGapMs: 12 * 60 * 60 * 1000, maxPerDay: 1 });
+          }
         });
       } catch (err) { console.error("[GangDecay] error:", err); }
     }, decayMs);
   };
   scheduleGangTerritoryDecay();
+
+  // ── Street events: ambient one-click gameplay in main chat ──────────
+  // Phase 1.3 of REVIVAL_PLAN.md. The drop function self-throttles: it is a
+  // no-op outside active hours and while another drop is still open, so a
+  // frequent tick simply means the next eligible window is caught promptly.
+  const scheduleStreetEvents = () => {
+    const tickMs = 20 * 60 * 1000;             // check every 20 min
+    const dropChance = Number(process.env.STREET_EVENT_CHANCE || 0.25);
+    const guildId = process.env.GUILD_ID || null;
+
+    setInterval(async () => {
+      try {
+        await runExclusiveTask("street-events", async () => {
+          await sweepExpiredStreetEvents(client, db);
+          if (Math.random() > dropChance) return;
+          // Cap drops so the hub never turns into a firehose in a quiet chat.
+          const allowed = await claimAnnounceSlot(db, "street-events", {
+            minGapMs: STREET_EVENT_MIN_GAP_MS,
+            maxPerDay: STREET_EVENT_MAX_PER_DAY,
+          });
+          if (!allowed) return;
+          await dropStreetEvent(client, db, { guildId });
+        });
+      } catch (err) {
+        console.error("[StreetEvents] scheduler error:", err);
+      }
+    }, tickMs);
+
+    console.log(`[StreetEvents] scheduler started (tick ${tickMs / 60000}m, chance ${dropChance})`);
+  };
+  ensureStreetEventTables(db)
+    .then(scheduleStreetEvents)
+    .catch((err) => console.error("[StreetEvents] table init failed:", err));
 
   // ── Protection Racket passive income ────────────────────────────────
   const scheduleProtectionRacket = () => {
@@ -603,16 +710,20 @@ async function startSchedulers(ctx) {
   };
   scheduleProtectionRacket();
 
-// ── Register guild commands ─────────────────────────────────────
-  for (const guild of client.guilds.cache.values()) {
-    await registerGuildCommands(client, guild.id, TOKEN);
-  }
-
   // ── Status rotation ─────────────────────────────────────────────
   if (STATUS_ROTATION_ENABLED) {
     await setRandomPresence(client);
     const intervalMs = Math.max(5, STATUS_ROTATION_INTERVAL_MINUTES) * 60 * 1000;
     setInterval(() => void setRandomPresence(client), intervalMs);
+  }
+
+// ── Register guild commands ─────────────────────────────────────
+  if (STARTUP_SLASH_SYNC_ENABLED) {
+    for (const guild of client.guilds.cache.values()) {
+      void registerGuildCommands(client, guild.id, TOKEN);
+    }
+  } else {
+    console.log("[Slash] Startup registration disabled by DISABLE_STARTUP_SLASH_SYNC=1.");
   }
 
   // ── SAMP status trackers ────────────────────────────────────────
@@ -638,6 +749,11 @@ async function startSchedulers(ctx) {
         channelId: config.channel_id,
         serverName: config.server_name,
         emoji: config.emoji,
+        custom_online_text: config.custom_online_text,
+        custom_offline_text: config.custom_offline_text,
+        poll_interval_ms: config.poll_interval_ms,
+        rename_cooldown_ms: config.rename_cooldown_ms,
+        name_format: config.name_format,
       });
 
       await tracker.start();

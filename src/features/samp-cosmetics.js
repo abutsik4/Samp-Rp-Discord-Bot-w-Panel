@@ -52,7 +52,7 @@ const COSMETICS = {
   flair_skull: { category: "flair", type: "flair", name: "Флейр: Череп", price: 60_000, value: "☠️🔫☠️", emoji: "☠️" },
   flair_diamond: { category: "flair", type: "flair", name: "Флейр: Алмаз", price: 80_000, value: "💎👑💎", emoji: "💎" },
 
-  // --- 🚗 Car paint (decorates active car name in /balance & /garage) ---
+  // --- 🚗 Car paint (decorates active car name in /balance & the garage panel) ---
   paint_matte: { category: "car_paint", type: "car_paint", name: "Покраска: Матовый чёрный", price: 25_000, value: "Чёрный мат", emoji: "⬛" },
   paint_cherry: { category: "car_paint", type: "car_paint", name: "Покраска: Вишнёвый металлик", price: 25_000, value: "Вишнёвый", emoji: "🍒" },
   paint_ocean: { category: "car_paint", type: "car_paint", name: "Покраска: Океан", price: 25_000, value: "Океан", emoji: "🌊" },
@@ -88,7 +88,7 @@ const COSMETICS = {
     price: 200_000,
     value: "1",
     emoji: "🚚",
-    description: "Постоянный +10% к выплатам /truck.",
+    description: "Постоянный +10% к выплатам за дальнобой.",
     effect: { truckMultiplier: 1.10 },
   },
   boost_luck: {
@@ -108,7 +108,7 @@ const COSMETICS = {
     price: 500_000,
     value: "1",
     emoji: "⌚",
-    description: "−15% к кулдаунам /work, /truck, /rob.",
+    description: "−15% к кулдаунам /work, дальнобоя и /rob.",
     effect: { cooldownMultiplier: 0.85 },
   },
   // Whale-tier sinks
@@ -139,7 +139,7 @@ const COSMETICS = {
     price: 1_000_000,
     value: "1",
     emoji: "⌚",
-    description: "−25% к кулдаунам /work, /truck, /rob (сильнее VIP-часов).",
+    description: "−25% к кулдаунам /work, дальнобоя и /rob (сильнее VIP-часов).",
     effect: { cooldownMultiplier: 0.75 },
   },
   boost_safe: {
@@ -174,7 +174,7 @@ function getCosmeticBenefitText(cosmetic) {
   if (cosmetic.type === "title") return "Показывается в author-строке твоих профильных embed'ов.";
   if (cosmetic.type === "color") return "Используется как цвет твоих профильных embed'ов.";
   if (cosmetic.type === "flair") return "Добавляет декоративную строку в футер твоих профильных embed'ов.";
-  if (cosmetic.type === "car_paint") return "Украшает название тачки в /balance и /garage.";
+  if (cosmetic.type === "car_paint") return "Украшает название тачки в /balance и в гараже.";
   return "";
 }
 
@@ -482,7 +482,7 @@ function buildShopEmbed(category, ownedIds, equippedMap) {
     .setDescription(lines.length ? lines.join("\n") : "Пока ничего.")
     .setColor(0x9b59b6)
     .setFooter({
-      text: "⬜ не куплено • 🎒 в коллекции • ✅ активно. Купить: /buycosmetic id:<id> • Надеть/снять: /equip /unequip.",
+      text: "⬜ не куплено • 🎒 в коллекции • ✅ активно. Всё управление — /play магазин: «Купить косметику», «Надеть», «Снять».",
     });
 }
 
@@ -513,7 +513,7 @@ async function handleShopCommand(interaction, db) {
           return `${meta.emoji} **${meta.name}** — ${items.length} предметов • ${range}`;
         })
         .join("\n") +
-        "\n\nВыбери категорию ниже, чтобы посмотреть предметы и цены, или зови `/shop category:<...>` напрямую.",
+        "\n\nВыбери категорию ниже, чтобы посмотреть предметы и цены.",
     )
     .setColor(0x9b59b6);
 
@@ -558,7 +558,7 @@ async function handleMyCollectionCommand(interaction, db) {
 
   if (owned.length === 0) {
     await interaction.reply({
-      content: "В твоей коллекции пока пусто. Посмотри магазин через **/shop** и купи что-нибудь через **/buycosmetic**.",
+      content: "В твоей коллекции пока пусто. Открой **/play магазин** → «Витрина» и купи что-нибудь.",
       ephemeral: true,
     });
     return;
@@ -588,7 +588,7 @@ async function handleMyCollectionCommand(interaction, db) {
     .setTitle("🎒 Твоя коллекция")
     .setDescription(
       `Всего предметов: **${owned.length}** / ${Object.keys(COSMETICS).length}\n` +
-        "⭐ — надето • ⚡ — бонус всегда активен • надеть/снять — **/equip** / **/unequip**.",
+        "⭐ — надето • ⚡ — бонус всегда активен • надеть/снять — **/play магазин** → «Надеть» / «Снять».",
     )
     .addFields(fields)
     .setColor(0x9b59b6);
@@ -610,7 +610,7 @@ async function handleEquipCommand(interaction, db, { equip = true } = {}) {
     const res = await equipCosmetic(db, userId, id);
     if (!res.ok) {
       if (res.reason === "NOT_OWNED") {
-        await interaction.reply({ content: `У тебя нет \`${id}\` в коллекции. Купи через **/buycosmetic**.`, ephemeral: true });
+        await interaction.reply({ content: `У тебя нет \`${id}\` в коллекции. Купи через **/play магазин** → «Купить косметику».`, ephemeral: true });
       } else {
         await interaction.reply({ content: `Не получилось надеть \`${id}\`.`, ephemeral: true });
       }

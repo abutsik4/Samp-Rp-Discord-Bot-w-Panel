@@ -268,19 +268,82 @@ class SAMPQuery {
 class SAMPStatusTracker {
   constructor(client, config) {
     this.client = client;
-    this.config = config;
+    this.config = { ...config };
     this.updateInterval = null;
     this.isRunning = false;
     this.lastChannelUpdate = 0; // Track last Discord channel rename time for rate limiting
     // Discord allows only a small number of channel renames per 10 minutes.
-    // Default to 5 minutes (2 renames / 10 min) to keep counts reasonably fresh.
-    this.minRenameIntervalMs = Math.max(60 * 1000, Number(config?.minRenameIntervalMs) || 2 * 60 * 1000);
+    // Per-tracker override: config.rename_cooldown_ms (default 2 minutes).
+    const renameCooldown = Number(config?.rename_cooldown_ms) || Number(config?.minRenameIntervalMs) || 2 * 60 * 1000;
+    this.minRenameIntervalMs = Math.max(60 * 1000, renameCooldown);
     this.nextAllowedRenameAt = 0;
     this.lastSkipLogAt = 0;
     this._updateInFlight = false;
     this._renameRetryTimer = null;  // Scheduled retry when rename skipped due to cooldown
     this.consecutiveFailures = 0;
     this.lastStatus = null; // Cache last status for comparison
+  }
+
+  /**
+   * Per-tracker poll interval (ms). Configurable via config.poll_interval_ms.
+   * Default: 2 minutes. Min: 10s, Max: 1h.
+   */
+  _getPollIntervalMs() {
+    const v = Number(this.config?.poll_interval_ms);
+    if (!Number.isFinite(v) || v <= 0) return 2 * 60 * 1000;
+    return Math.max(10 * 1000, Math.min(60 * 60 * 1000, v));
+  }
+
+  /**
+   * Build the channel name from a custom format template, or fall back to defaults.
+   * Template tokens: {emoji} {name} {players} {max} {online} {status}
+   * If no template, defaults to: "<emoji> <name> [<players>/<max>]" or "<emoji> <name> [<offlineText>]"
+   */
+  _buildChannelName({ emoji, serverName, playerCount, maxPlayers, isOnline }) {
+    const offlineText = this.config?.custom_offline_text || "ОФФЛАЙН";
+    const onlineText = this.config?.custom_online_text || null;
+    const fmt = this.config?.name_format;
+
+    if (fmt && typeof fmt === "string" && fmt.trim().length > 0) {
+      const statusText = isOnline
+        ? (onlineText && onlineText.trim().length > 0 ? onlineText : `${playerCount}/${maxPlayers}`)
+        : offlineText;
+      return fmt
+        .replace(/\{emoji\}/g, emoji)
+        .replace(/\{name\}/g, serverName)
+        .replace(/\{players\}/g, String(playerCount))
+        .replace(/\{max\}/g, String(maxPlayers))
+        .replace(/\{status\}/g, statusText)
+        .replace(/\{online\}/g, isOnline ? (onlineText || "online") : offlineText);
+    }
+
+    if (isOnline) {
+      if (onlineText && onlineText.trim().length > 0) {
+        return `${emoji} ${serverName} [${onlineText}]`;
+      }
+      return `${emoji} ${serverName} [${playerCount}/${maxPlayers}]`;
+    }
+    return `${emoji} ${serverName} [${offlineText}]`;
+  }
+
+  /**
+   * Hot-update tracker config (used by settings PUT endpoint).
+   * Restarts the poll interval if running and the value changed.
+   */
+  setConfig(newConfig) {
+    if (!newConfig || typeof newConfig !== "object") return;
+    this.config = { ...this.config, ...newConfig };
+    if (typeof newConfig.rename_cooldown_ms === "number" || typeof newConfig.minRenameIntervalMs === "number") {
+      const cooldown = Number(newConfig.rename_cooldown_ms) || Number(newConfig.minRenameIntervalMs) || 2 * 60 * 1000;
+      this.minRenameIntervalMs = Math.max(60 * 1000, cooldown);
+    }
+    if (this.isRunning && this.updateInterval) {
+      clearInterval(this.updateInterval);
+      this.updateInterval = setInterval(() => {
+        this.updateChannelName();
+      }, this._getPollIntervalMs());
+      console.log(`[SAMP] Tracker config updated, poll interval reset to ${Math.round(this._getPollIntervalMs() / 1000)}s`);
+    }
   }
 
   /**
@@ -337,13 +400,14 @@ class SAMPStatusTracker {
       // Generate channel name
       const emoji = this.config.emoji || "🎮";
       const serverName = this.config.serverName || `Server`;
-      
-      let newName;
-      if (isOnline) {
-        newName = `${emoji} ${serverName} [${playerCount}/${maxPlayers}]`;
-      } else {
-        newName = `${emoji} ${serverName} [ОФФЛАЙН]`;
-      }
+
+      const newName = this._buildChannelName({
+        emoji,
+        serverName,
+        playerCount,
+        maxPlayers,
+        isOnline,
+      });
 
       console.log(`[SAMP] ${serverAddr}: old="${channel.name}" new="${newName}" match=${channel.name === newName}`);
 
@@ -433,11 +497,11 @@ class SAMPStatusTracker {
       console.error(`❌ [SAMP] Initial update failed for ${serverAddr}: ${error.message}`);
     });
 
-    // Update every 2 minutes - Discord handles rate limiting internally
+    // Update on a per-tracker interval - Discord handles rate limiting internally
     // If channel name hasn't changed, no API call is made anyway
     this.updateInterval = setInterval(() => {
       this.updateChannelName();
-    }, 2 * 60 * 1000);
+    }, this._getPollIntervalMs());
   }
 
   /**

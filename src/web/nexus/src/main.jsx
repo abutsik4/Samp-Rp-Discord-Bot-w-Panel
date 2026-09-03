@@ -2,6 +2,8 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App.jsx'
+import { AuthGuard } from './lib/AuthGuard.jsx'
+import { BotProvider } from './lib/BotContext.jsx'
 import './index.css'
 
 class ErrorBoundary extends React.Component {
@@ -44,7 +46,11 @@ if (!rootEl) {
       <React.StrictMode>
         <BrowserRouter basename="/nexus">
           <ErrorBoundary>
-            <App />
+            <AuthGuard>
+              <BotProvider>
+                <App />
+              </BotProvider>
+            </AuthGuard>
           </ErrorBoundary>
         </BrowserRouter>
       </React.StrictMode>

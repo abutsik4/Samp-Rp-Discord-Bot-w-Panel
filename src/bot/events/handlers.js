@@ -13,10 +13,10 @@ const { getEngagementSettings, tryEngageWithMessage } = require("../../features/
 const { updateWatermark } = require("../../features/incremental-sync");
 const { applyRoleGrants } = require("../../features/perks");
 const { tryAnswerGameFaqInChat } = require("../../features/game-faq");
+const { handleStaffRequestThreadMessage } = require("../../features/staff-role-requests");
 const { createWhitelistSet, getCountableChannelIds, isChannelWhitelistedForCounting } = require("../../features/message-counting-rules");
+const { getMessageCount, awardChatRanks, buildRankUpEmbed } = require("../../features/chat-bridge");
 
-const SAMP_GAME_COMMAND_CATEGORY = "samp_game";
-const SAMP_GAME_COMMAND_BYPASS_USER_ID = process.env.SAMP_GAME_COMMAND_BYPASS_USER_ID || process.env.OWNER_ID || "143160841225633792";
 
 /**
  * Register all Discord event handlers on the client.
@@ -27,7 +27,6 @@ function registerEventHandlers(ctx) {
     client, db, TOKEN,
     // Bot helpers (runtime-constructed, must come from ctx)
     registerGuildCommands, cacheUserUsername,
-    getCommandCategoryChannel,
     getUserMessageCount,
     lookupIndexedAuthor, lookupIndexedAuthorsBulk,
     dbAll,
@@ -60,18 +59,11 @@ function registerEventHandlers(ctx) {
       }
       const userRoles = member?.roles?.cache?.map(r => r.id) || [];
 
-      try {
-        const restriction = await getCommandCategoryChannel?.(guildId, SAMP_GAME_COMMAND_CATEGORY);
-        const isCommandChannelBypassUser = userId === SAMP_GAME_COMMAND_BYPASS_USER_ID;
-        if (restriction?.channel_id && restriction.channel_id === channelId && !isCommandChannelBypassUser) {
-          if (message.deletable) {
-            await message.delete().catch(() => null);
-          }
-          return;
-        }
-      } catch (err) {
-        console.error("command-only channel enforcement error:", err);
-      }
+      // NOTE: the "commands-only channel" enforcement that used to live here
+      // deleted every human message posted in the SAMP game channel — and
+      // returned before XP, streaks, badges and message counting. It exiled the
+      // game to a room where nobody could talk. Removed deliberately; the game
+      // now lives in main chat. See REVIVAL_PLAN.md.
 
       // Security pipeline (spam prevention, automod)
       const securityResult = await runSecurityPipeline(db, message, userRoles);
@@ -225,6 +217,21 @@ function registerEventHandlers(ctx) {
         try {
           await message.channel.send({ embeds: [embed] });
         } catch {}
+      }
+
+      // Chat ranks: pay in-game cash for chat progress and surface the
+      // samp-rp.su 5,000-message forum award. This is the bridge between the
+      // ~380 people who chat and the handful who play.
+      try {
+        const bridgeCount = await getMessageCount(db, guildId, userId);
+        const newRanks = await awardChatRanks(db, guildId, userId, bridgeCount);
+        for (const { rank, cash } of newRanks) {
+          await message.channel
+            .send({ embeds: [buildRankUpEmbed(userId, rank, cash, bridgeCount)] })
+            .catch(() => {});
+        }
+      } catch (err) {
+        console.error("[ChatBridge] rank check failed:", err?.message || err);
       }
 
       const faqAnswered = await tryAnswerGameFaqInChat(message);

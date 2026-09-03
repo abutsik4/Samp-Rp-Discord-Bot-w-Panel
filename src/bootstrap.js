@@ -35,9 +35,13 @@ const { ensurePerksTables } = require("./features/perks");
 const { ensureXpMultipliersTable } = require("./features/xp-multipliers");
 const { ensureSampExtendedTables } = require("./features/samp-extended");
 const { ensurePrestigeTables } = require("./features/samp-prestige");
+const { ensureVipTables } = require("./features/samp-vip");
+const { ensureUpgradeColumns } = require("./features/samp-property-upgrades");
+const { ensureCrateTables } = require("./features/samp-crates");
 const { ensureCraftingTables } = require("./features/samp-phasec");
 const { ensureSeasonalEventsTables } = require("./features/seasonal-events");
 const { ensureGiveawayTables } = require("./features/giveaway");
+const { ensureStaffRoleRequestsTable } = require("./features/staff-role-requests");
 
 const { initSchema } = require("./db/schema");
 
@@ -98,6 +102,11 @@ async function initFeatureTables(db, dbRun) {
   await ensureXpMultipliersTable(db);
   await ensureSampExtendedTables(db);
   await ensurePrestigeTables(db);
+  // New 2026-05-27 money sinks. Order matters: upgrade ALTERs must run after
+  // ensurePrestigeTables so the mansion/aircraft tables exist.
+  await ensureVipTables(db);
+  await ensureUpgradeColumns(db);
+  await ensureCrateTables(db);
 
   // ── samp_command_logs ───────────────────────────────────────────────────
   await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_command_logs (
@@ -145,6 +154,7 @@ async function initFeatureTables(db, dbRun) {
   await ensureCraftingTables(db);
   await ensureSeasonalEventsTables(db);
   await ensureGiveawayTables(db);
+  await ensureStaffRoleRequestsTable(db);
 
   // ── samp_vehicle_insurance (new money sink) ────────────────────────────
   await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_vehicle_insurance (

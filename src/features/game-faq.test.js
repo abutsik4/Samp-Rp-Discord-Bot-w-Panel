@@ -222,6 +222,8 @@ test("game faq answer embed dedupes repeated command suggestions", async () => {
 
   assert.equal(replies.length, 1);
   const commandsField = replies[0].embeds[0].data.fields.find((field) => field.name === "Полезные команды");
-  const commands = String(commandsField?.value || "").trim().split(/\s+/).filter(Boolean);
+  // Commands are bullet-separated because names like "/play казино" contain
+  // spaces — splitting on whitespace would tokenise a single command in two.
+  const commands = String(commandsField?.value || "").split("•").map((c) => c.trim()).filter(Boolean);
   assert.equal(commands.length, new Set(commands).size, "FAQ command suggestions should not repeat commands");
 });

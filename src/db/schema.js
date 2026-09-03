@@ -341,6 +341,11 @@ async function initSchema(dbRun, dbPath, db = null) {
       emoji TEXT DEFAULT '🎮',
       enabled INTEGER DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      custom_online_text TEXT,
+      custom_offline_text TEXT,
+      poll_interval_ms INTEGER,
+      rename_cooldown_ms INTEGER,
+      name_format TEXT,
       PRIMARY KEY (guild_id, server_id)
     )
   `);

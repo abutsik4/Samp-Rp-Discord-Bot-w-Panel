@@ -1367,6 +1367,7 @@ async function ensureSampLifeTables(db) {
       user_id TEXT PRIMARY KEY,
       money INTEGER NOT NULL DEFAULT 0 CHECK(money >= 0),
       car_id TEXT NOT NULL DEFAULT 'bicycle',
+      garage_slots INTEGER NOT NULL DEFAULT 3,
       rep INTEGER NOT NULL DEFAULT 0,
       jail_until INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -1374,11 +1375,13 @@ async function ensureSampLifeTables(db) {
       last_samp_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`
   );
+  try { await dbRun(db, `ALTER TABLE samp_users ADD COLUMN garage_slots INTEGER NOT NULL DEFAULT 3`); } catch (_) {}
   try { await dbRun(db, `ALTER TABLE samp_users ADD COLUMN last_samp_seen_at TEXT`); } catch (_) {}
   await dbRun(
     db,
     `UPDATE samp_users
-     SET last_samp_seen_at = COALESCE(NULLIF(last_samp_seen_at, ''), updated_at, created_at, datetime('now'))`
+     SET garage_slots = COALESCE(garage_slots, 3),
+         last_samp_seen_at = COALESCE(NULLIF(last_samp_seen_at, ''), updated_at, created_at, datetime('now'))`
   );
 
   await dbRun(
@@ -1463,6 +1466,48 @@ async function ensureSampLifeTables(db) {
       key TEXT NOT NULL,
       value TEXT NOT NULL,
       PRIMARY KEY (user_id, key)
+    )`
+  );
+
+  // Bootstrap the prestige-backed tables used by /balance, /work and PvP hooks
+  // so SAMP Life can run even when the prestige schema was never initialized.
+  await dbRun(
+    db,
+    `CREATE TABLE IF NOT EXISTS samp_mansions (
+      user_id TEXT PRIMARY KEY,
+      mansion_id TEXT NOT NULL,
+      bought_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`
+  );
+
+  await dbRun(
+    db,
+    `CREATE TABLE IF NOT EXISTS samp_aircraft (
+      user_id TEXT NOT NULL,
+      aircraft_id TEXT NOT NULL,
+      bought_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (user_id, aircraft_id)
+    )`
+  );
+
+  await dbRun(
+    db,
+    `CREATE TABLE IF NOT EXISTS samp_crew (
+      user_id TEXT NOT NULL,
+      role_id TEXT NOT NULL,
+      hired_at TEXT NOT NULL DEFAULT (datetime('now')),
+      paid_through INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, role_id)
+    )`
+  );
+
+  await dbRun(
+    db,
+    `CREATE TABLE IF NOT EXISTS samp_crew_intercepts (
+      user_id TEXT NOT NULL,
+      ymd TEXT NOT NULL,
+      used INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, ymd)
     )`
   );
 
@@ -1821,7 +1866,6 @@ async function handleWork(interaction, db) {
   if (!(await ensureNotJailed(interaction, user))) return;
   if (!(await checkCooldownWithoutConsuming(interaction, db, userId, "work"))) return;
   if (!(await tryDeferReply(interaction))) return;
-  if (!(await checkAndConsumeCooldown(interaction, db, userId, "work"))) return;
 
   const jobs = ["разносил пиццу", "мыл тачку босса", "грузил ящики в порту", "таскал колёса на шинке"]; 
   let job = pick(jobs);
@@ -2159,7 +2203,7 @@ async function handleDealership(interaction) {
     color: 0x2563eb,
     lines,
     linesPerPage: 10,
-    footer: "Покупка: /buy type:car id:<carId>",
+    footer: "Покупка: /play транспорт → кнопка «Тачки»",
   });
   await interaction.reply({ embeds: embeds.slice(0, 10) });
 }
@@ -2173,7 +2217,7 @@ async function handleWeaponShop(interaction) {
     color: 0xdc2626,
     lines,
     linesPerPage: 10,
-    footer: "Покупка: /buy type:weapon id:<weaponId>",
+    footer: "Покупка: /play магазин → кнопка «Купить оружие»",
   });
   await interaction.reply({ embeds: embeds.slice(0, 10) });
 }
@@ -2202,7 +2246,7 @@ async function handleBuy(interaction, db) {
   if (type === "car") {
     const car = CARS[id];
     if (!car) {
-      await interaction.reply({ content: "Такой тачки нет в салоне. Запусти /buy type:car без id, чтобы увидеть весь список.", ephemeral: true });
+      await interaction.reply({ content: "Такой тачки нет в салоне. Открой `/play транспорт` и выбери машину из списка.", ephemeral: true });
       return;
     }
 
@@ -2236,7 +2280,7 @@ async function handleBuy(interaction, db) {
       await interaction.reply({ content: `🚗 Ты уже владеешь **${car.name}**.`, ephemeral: true }); return;
     }
     if (buyCarErr === "GARAGE_FULL") {
-      await interaction.reply({ content: `🚗 Гараж заполнен! Расширь его через \`/garage expand\` или продай одну из машин.`, ephemeral: true }); return;
+      await interaction.reply({ content: `🚗 Гараж заполнен! Расширь его через \`/play транспорт\` → «Расширить гараж», или продай одну из машин.`, ephemeral: true }); return;
     }
     if (buyCarErr) {
       await interaction.reply({ content: "Не удалось купить машину. Попробуй ещё раз.", ephemeral: true }); return;
@@ -2251,7 +2295,7 @@ async function handleBuy(interaction, db) {
   if (type === "weapon") {
     const weapon = ITEMS[id];
     if (!weapon) {
-      await interaction.reply({ content: "Такого оружия нет. Запусти /buy type:weapon без id, чтобы увидеть весь список.", ephemeral: true });
+      await interaction.reply({ content: "Такого оружия нет. Открой `/play магазин` → «Купить оружие».", ephemeral: true });
       return;
     }
 
@@ -2282,7 +2326,7 @@ async function handleWeapon(interaction, db) {
   const weaponId = String(interaction.options.getString("id", true)).toLowerCase();
   const weapon = ITEMS[weaponId];
   if (!weapon) {
-    await interaction.reply({ content: "Такого оружия нет. Смотри /weaponshop для списка.", ephemeral: true });
+    await interaction.reply({ content: "Такого оружия нет. Смотри `/play магазин` → «Оружейный».", ephemeral: true });
     return;
   }
 
@@ -2291,7 +2335,7 @@ async function handleWeapon(interaction, db) {
 
   const qty = await getInventoryQty(db, userId, weaponId);
   if (qty <= 0) {
-    await interaction.reply({ content: "Сначала купи оружие: /buy type:weapon id:<оружие>", ephemeral: true });
+    await interaction.reply({ content: "Сначала купи оружие: `/play магазин` → «Купить оружие»." , ephemeral: true });
     return;
   }
 
@@ -3160,7 +3204,7 @@ async function handleSellCar(interaction, db) {
     `📝 Оффер создан (#${offerId}).\n` +
       `Продавец: <@${sellerId}> | Покупатель: <@${buyer.id}>\n` +
       `Тачка: **${car.name}** | Цена: **${fmtMoney(price)}**\n\n` +
-      `Покупатель подтверждает: **/buycar offer:${offerId}**`
+      `Покупатель подтверждает: **/play транспорт** → «Принять предложение», номер **${offerId}**`
   );
 }
 
@@ -3221,6 +3265,12 @@ async function handleBuyCar(interaction, db) {
       const inserted = await addLedgerUnique(db, "sellcar_accept", offer.seller_user_id, buyerId, Number(offer.price), opKey, { car_id: offer.car_id, offer_id: offerId });
       if (!inserted) throw new Error("DUPLICATE_OPERATION");
 
+      const sellerWasUsingSoldCar = await dbGet(
+        db,
+        "SELECT 1 FROM samp_users WHERE user_id = ? AND car_id = ?",
+        [String(offer.seller_user_id), String(offer.car_id)]
+      );
+
       // money transfer
       await adjustMoney(db, buyerId, -Number(offer.price));
       await adjustMoney(db, offer.seller_user_id, Number(offer.price));
@@ -3229,8 +3279,7 @@ async function handleBuyCar(interaction, db) {
       await dbRun(db, "DELETE FROM samp_garage WHERE user_id = ? AND car_id = ?", [String(offer.seller_user_id), String(offer.car_id)]);
       await dbRun(db, "INSERT OR IGNORE INTO samp_garage(user_id, car_id) VALUES(?, ?)", [String(buyerId), String(offer.car_id)]);
 
-      const seller = await getUserRow(db, offer.seller_user_id);
-      if (String(seller?.car_id || "") === String(offer.car_id)) {
+      if (sellerWasUsingSoldCar) {
         await ensureFallbackActiveCar(db, offer.seller_user_id);
       }
 
@@ -3250,7 +3299,7 @@ async function handleBuyCar(interaction, db) {
       return;
     }
     if (String(e.message) === "GARAGE_FULL") {
-      await interaction.editReply({ content: "🚗 Гараж заполнен! Расширь его через `/garage expand` или продай одну из машин." });
+      await interaction.editReply({ content: "🚗 Гараж заполнен! Расширь его через `/play транспорт` → «Расширить гараж», или продай одну из машин." });
       return;
     }
     await interaction.editReply({ content: "Не удалось купить тачку (оффер мог закрыться)." });
@@ -3272,7 +3321,16 @@ async function handleBail(interaction, db) {
 
   const remainingMs = until - nowMs();
   // Bail cost: $1,000 per minute remaining (min $500, max $10,000)
-  const bailCost = Math.min(10_000, Math.max(500, Math.ceil(remainingMs / 60_000) * 1000));
+  let bailCost = Math.min(10_000, Math.max(500, Math.ceil(remainingMs / 60_000) * 1000));
+  // 2026-05-27: VIP silver+ tier gets a bail discount.
+  let vipBailDiscount = 0;
+  try {
+    const vip = require("./samp-vip");
+    vipBailDiscount = await vip.getVipBailDiscount(db, userId);
+  } catch (_) {}
+  if (vipBailDiscount > 0) {
+    bailCost = Math.max(500, Math.round(bailCost * (1 - vipBailDiscount)));
+  }
 
   if (user.money < bailCost) {
     await interaction.reply({
@@ -3669,7 +3727,7 @@ async function handleInsure(interaction, db) {
   if (sub === "buy" && existing && existing.expires_at > Date.now()) {
     const daysLeft = Math.ceil((existing.expires_at - Date.now()) / 86_400_000);
     await interaction.reply({
-      content: `⚠️ У тебя уже есть активная страховка на **${carRow.make} ${carRow.model}** (осталось ${daysLeft} д.). Используй \`/insure renew\`, чтобы продлить.`,
+      content: `⚠️ У тебя уже есть активная страховка на **${carRow.make} ${carRow.model}** (осталось ${daysLeft} д.). Используй \`/play транспорт\` → «Страховка», чтобы продлить.`,
       ephemeral: true,
     });
     return;
@@ -3760,6 +3818,7 @@ async function handleSampLifeCommand({ interaction, db }) {
     return result;
   } catch (e) {
     const isDeferred = Boolean(interaction.deferred || interaction.replied);
+    const canEditDeferredReply = Boolean(interaction.deferred && !interaction.replied);
 
     if (isIgnorableInteractionError(e)) {
       console.error("[samp-life] interaction expired", e?.code || e?.rawError?.code || e);
@@ -3767,15 +3826,22 @@ async function handleSampLifeCommand({ interaction, db }) {
     }
 
     if (String(e.message) === "COOLDOWN_ACTIVE") {
-      if (isDeferred) {
-        await interaction.followUp({ content: "⏳ Ежедневный бонус уже получен. Попробуй позже.", ephemeral: true });
+      const cooldownMsg = name === "daily"
+        ? "⏳ Ежедневный бонус уже получен. Попробуй позже."
+        : "⏳ Слишком рано. Попробуй позже.";
+      if (canEditDeferredReply) {
+        await interaction.editReply({ content: cooldownMsg, ephemeral: true });
+      } else if (isDeferred) {
+        await interaction.followUp({ content: cooldownMsg, ephemeral: true });
       } else {
-        await interaction.reply({ content: "⏳ Ежедневный бонус уже получен. Попробуй позже.", ephemeral: true });
+        await interaction.reply({ content: cooldownMsg, ephemeral: true });
       }
       return;
     }
     if (String(e.message) === "DUPLICATE_OPERATION") {
-      if (isDeferred) {
+      if (canEditDeferredReply) {
+        await interaction.editReply({ content: "Эта команда уже была обработана.", ephemeral: true });
+      } else if (isDeferred) {
         await interaction.followUp({ content: "Эта команда уже была обработана.", ephemeral: true });
       } else {
         await interaction.reply({ content: "Эта команда уже была обработана.", ephemeral: true });
@@ -3783,7 +3849,9 @@ async function handleSampLifeCommand({ interaction, db }) {
       return;
     }
     if (String(e.message) === "INSUFFICIENT") {
-      if (isDeferred) {
+      if (canEditDeferredReply) {
+        await interaction.editReply({ content: "Не хватает виртов.", ephemeral: true });
+      } else if (isDeferred) {
         await interaction.followUp({ content: "Не хватает виртов.", ephemeral: true });
       } else {
         await interaction.reply({ content: "Не хватает виртов.", ephemeral: true });
@@ -3791,7 +3859,9 @@ async function handleSampLifeCommand({ interaction, db }) {
       return;
     }
     if (String(e.message) === "ALREADY_OWNED") {
-      if (isDeferred) {
+      if (canEditDeferredReply) {
+        await interaction.editReply({ content: "У тебя уже есть эта тачка в гараже.", ephemeral: true });
+      } else if (isDeferred) {
         await interaction.followUp({ content: "У тебя уже есть эта тачка в гараже.", ephemeral: true });
       } else {
         await interaction.reply({ content: "У тебя уже есть эта тачка в гараже.", ephemeral: true });
@@ -3873,6 +3943,13 @@ async function handleSampLifeAutocomplete(interaction, db) {
 }
 
 module.exports = {
+  // Economy primitives — shared with street-events / chat-bridge so those
+  // features never re-implement money handling.
+  getOrCreateUser,
+  getUserRow,
+  adjustMoney,
+  addLedger,
+  fmtMoney,
   ensureSampLifeTables,
   getSampLifeCommandBuilders,
   handleSampLifeCommand,

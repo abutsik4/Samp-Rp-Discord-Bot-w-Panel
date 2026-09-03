@@ -19,7 +19,7 @@ const BLACK_MARKET_PRESTIGE_ITEMS = [
 
 const BLACK_MARKET_PRESTIGE_GRANTS = {
   c4_charge: { inventoryItemId: "bm_c4_charge", inventoryQty: 1, maxInventoryQty: 1,
-    summary: "C4 Charge добавлена. Используй /secretheist для бонуса.", isInstant: false },
+    summary: "C4 Charge добавлена. Используй /play криминал → «Тайное дело» для бонуса.", isInstant: false },
   nullifier: { inventoryItemId: "bm_nullifier", inventoryQty: 1, maxInventoryQty: 1,
     durationHours: 1, summary: "Nullifier активен 1ч — /rob не срабатывает.", isInstant: false },
   police_scanner: { inventoryItemId: "bm_police_scanner", inventoryQty: 1, maxInventoryQty: 3,

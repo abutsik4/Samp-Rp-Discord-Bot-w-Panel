@@ -1,6 +1,80 @@
 const { Router } = require("express");
 const { SAMPStatusTracker } = require("../../features/samp-status");
 
+// Bounds for per-tracker timings.
+const POLL_MIN_MS = 10 * 1000;            // 10s
+const POLL_MAX_MS = 60 * 60 * 1000;       // 1h
+const POLL_DEFAULT_MS = 2 * 60 * 1000;    // 2 min
+const COOLDOWN_MIN_MS = 60 * 1000;        // 1 min
+const COOLDOWN_MAX_MS = 30 * 60 * 1000;   // 30 min
+const COOLDOWN_DEFAULT_MS = 2 * 60 * 1000;
+const MAX_TEXT_LEN = 64;
+const MAX_FORMAT_LEN = 200;
+
+/**
+ * Validate and normalize optional per-tracker settings.
+ * Returns { ok: true, value: { custom_online_text, custom_offline_text, poll_interval_ms, rename_cooldown_ms, name_format } }
+ *        or { ok: false, error: string }
+ * Empty strings / nulls are normalized to null (which means "use default").
+ */
+function normalizeSettings(input) {
+  const out = {
+    custom_online_text: null,
+    custom_offline_text: null,
+    poll_interval_ms: null,
+    rename_cooldown_ms: null,
+    name_format: null,
+  };
+  if (!input || typeof input !== "object") return { ok: true, value: out };
+
+  if (input.custom_online_text !== undefined) {
+    const v = String(input.custom_online_text || "").trim();
+    if (v.length > MAX_TEXT_LEN) return { ok: false, error: `custom_online_text too long (max ${MAX_TEXT_LEN})` };
+    out.custom_online_text = v.length > 0 ? v : null;
+  }
+  if (input.custom_offline_text !== undefined) {
+    const v = String(input.custom_offline_text || "").trim();
+    if (v.length > MAX_TEXT_LEN) return { ok: false, error: `custom_offline_text too long (max ${MAX_TEXT_LEN})` };
+    out.custom_offline_text = v.length > 0 ? v : null;
+  }
+  if (input.poll_interval_ms !== undefined && input.poll_interval_ms !== null && input.poll_interval_ms !== "") {
+    const n = Number(input.poll_interval_ms);
+    if (!Number.isFinite(n)) return { ok: false, error: "poll_interval_ms must be a number" };
+    out.poll_interval_ms = Math.max(POLL_MIN_MS, Math.min(POLL_MAX_MS, Math.round(n)));
+  }
+  if (input.rename_cooldown_ms !== undefined && input.rename_cooldown_ms !== null && input.rename_cooldown_ms !== "") {
+    const n = Number(input.rename_cooldown_ms);
+    if (!Number.isFinite(n)) return { ok: false, error: "rename_cooldown_ms must be a number" };
+    out.rename_cooldown_ms = Math.max(COOLDOWN_MIN_MS, Math.min(COOLDOWN_MAX_MS, Math.round(n)));
+  }
+  if (input.name_format !== undefined) {
+    const v = String(input.name_format || "").trim();
+    if (v.length > MAX_FORMAT_LEN) return { ok: false, error: `name_format too long (max ${MAX_FORMAT_LEN})` };
+    out.name_format = v.length > 0 ? v : null;
+  }
+
+  return { ok: true, value: out };
+}
+
+/**
+ * Build the tracker config object from a DB row, falling back to defaults.
+ * Used when instantiating SAMPStatusTracker from a row.
+ */
+function trackerConfigFromRow(row) {
+  return {
+    serverIp: row.server_ip,
+    serverPort: row.server_port,
+    channelId: row.channel_id,
+    serverName: row.server_name,
+    emoji: row.emoji,
+    custom_online_text: row.custom_online_text || null,
+    custom_offline_text: row.custom_offline_text || null,
+    poll_interval_ms: row.poll_interval_ms || POLL_DEFAULT_MS,
+    rename_cooldown_ms: row.rename_cooldown_ms || COOLDOWN_DEFAULT_MS,
+    name_format: row.name_format || null,
+  };
+}
+
 function createSampServersRouter(ctx) {
   const router = Router();
   const { PANEL_BASE, requireAuth, requireAdmin, bots, client, db, dbRun, dbGet, dbAll } = ctx;
@@ -33,6 +107,10 @@ function createSampServersRouter(ctx) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
+    const settingsCheck = normalizeSettings(req.body);
+    if (!settingsCheck.ok) return res.status(400).json({ error: settingsCheck.error });
+    const s = settingsCheck.value;
+
     try {
       const existing = await dbGet(
         "SELECT * FROM samp_trackers WHERE guild_id = ? AND server_id = ?",
@@ -44,9 +122,12 @@ function createSampServersRouter(ctx) {
       }
 
       await dbRun(
-        `INSERT INTO samp_trackers (guild_id, server_id, server_name, server_ip, server_port, channel_id, emoji, enabled) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
-        [bot.guild_id, server_id, server_name, server_ip, server_port || 7777, channel_id, emoji || "🎮"]
+        `INSERT INTO samp_trackers (guild_id, server_id, server_name, server_ip, server_port, channel_id, emoji, enabled, custom_online_text, custom_offline_text, poll_interval_ms, rename_cooldown_ms, name_format)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+        [
+          bot.guild_id, server_id, server_name, server_ip, server_port || 7777, channel_id, emoji || "🎮",
+          s.custom_online_text, s.custom_offline_text, s.poll_interval_ms, s.rename_cooldown_ms, s.name_format,
+        ]
       );
 
       const tracker = new SAMPStatusTracker(client, {
@@ -55,6 +136,11 @@ function createSampServersRouter(ctx) {
         channelId: channel_id,
         serverName: server_name,
         emoji: emoji || "🎮",
+        custom_online_text: s.custom_online_text,
+        custom_offline_text: s.custom_offline_text,
+        poll_interval_ms: s.poll_interval_ms || POLL_DEFAULT_MS,
+        rename_cooldown_ms: s.rename_cooldown_ms || COOLDOWN_DEFAULT_MS,
+        name_format: s.name_format,
       });
 
       await tracker.start();
@@ -70,6 +156,58 @@ function createSampServersRouter(ctx) {
     }
   });
 
+  // Update SAMP server settings only (does not change server_id, server_ip, channel_id, etc.)
+  router.put(`${PANEL_BASE}/api/:botKey/samp-servers/:serverId/settings`, requireAuth, requireAdmin, async (req, res) => {
+    const bot = bots.find((b) => b.key === req.params.botKey);
+    if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+    const { serverId } = req.params;
+    const settingsCheck = normalizeSettings(req.body);
+    if (!settingsCheck.ok) return res.status(400).json({ error: settingsCheck.error });
+    const s = settingsCheck.value;
+
+    try {
+      const existing = await dbGet(
+        "SELECT * FROM samp_trackers WHERE guild_id = ? AND server_id = ?",
+        [bot.guild_id, serverId]
+      );
+      if (!existing) return res.status(404).json({ error: "Server not found" });
+
+      // Persist the new settings (NULL means "use default" — we keep the old value if not provided in body)
+      const next = {
+        custom_online_text: s.custom_online_text !== null ? s.custom_online_text : existing.custom_online_text,
+        custom_offline_text: s.custom_offline_text !== null ? s.custom_offline_text : existing.custom_offline_text,
+        poll_interval_ms: s.poll_interval_ms !== null ? s.poll_interval_ms : (existing.poll_interval_ms || POLL_DEFAULT_MS),
+        rename_cooldown_ms: s.rename_cooldown_ms !== null ? s.rename_cooldown_ms : (existing.rename_cooldown_ms || COOLDOWN_DEFAULT_MS),
+        name_format: s.name_format !== null ? s.name_format : existing.name_format,
+      };
+
+      await dbRun(
+        `UPDATE samp_trackers SET custom_online_text = ?, custom_offline_text = ?, poll_interval_ms = ?, rename_cooldown_ms = ?, name_format = ? WHERE guild_id = ? AND server_id = ?`,
+        [next.custom_online_text, next.custom_offline_text, next.poll_interval_ms, next.rename_cooldown_ms, next.name_format, bot.guild_id, serverId]
+      );
+
+      // Hot-update the running tracker (if any) without restart.
+      const trackerKey = `${bot.guild_id}:${serverId}`;
+      if (client.sampTrackers && client.sampTrackers.has(trackerKey)) {
+        client.sampTrackers.get(trackerKey).setConfig({
+          custom_online_text: next.custom_online_text,
+          custom_offline_text: next.custom_offline_text,
+          poll_interval_ms: next.poll_interval_ms,
+          rename_cooldown_ms: next.rename_cooldown_ms,
+          name_format: next.name_format,
+        });
+        // Force a refresh so the new name/format shows up immediately
+        client.sampTrackers.get(trackerKey).forceUpdate().catch(() => {});
+      }
+
+      return res.json({ ok: true, message: "Settings updated", settings: next });
+    } catch (e) {
+      console.error("Update SAMP server settings error:", e);
+      return res.status(500).json({ error: e?.message || "Failed to update settings" });
+    }
+  });
+
   // Update SAMP server
   router.put(`${PANEL_BASE}/api/:botKey/samp-servers/:serverId`, requireAuth, requireAdmin, async (req, res) => {
     const bot = bots.find((b) => b.key === req.params.botKey);
@@ -82,10 +220,33 @@ function createSampServersRouter(ctx) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
+    const settingsCheck = normalizeSettings(req.body);
+    if (!settingsCheck.ok) return res.status(400).json({ error: settingsCheck.error });
+    const s = settingsCheck.value;
+
     try {
+      // Preserve existing settings if not provided
+      const existing = await dbGet(
+        "SELECT * FROM samp_trackers WHERE guild_id = ? AND server_id = ?",
+        [bot.guild_id, serverId]
+      );
+      if (!existing) return res.status(404).json({ error: "Server not found" });
+
+      const next = {
+        custom_online_text: s.custom_online_text !== null ? s.custom_online_text : existing.custom_online_text,
+        custom_offline_text: s.custom_offline_text !== null ? s.custom_offline_text : existing.custom_offline_text,
+        poll_interval_ms: s.poll_interval_ms !== null ? s.poll_interval_ms : (existing.poll_interval_ms || POLL_DEFAULT_MS),
+        rename_cooldown_ms: s.rename_cooldown_ms !== null ? s.rename_cooldown_ms : (existing.rename_cooldown_ms || COOLDOWN_DEFAULT_MS),
+        name_format: s.name_format !== null ? s.name_format : existing.name_format,
+      };
+
       await dbRun(
-        "UPDATE samp_trackers SET server_name = ?, server_ip = ?, server_port = ?, channel_id = ?, emoji = ? WHERE guild_id = ? AND server_id = ?",
-        [server_name, server_ip, server_port || 7777, channel_id, emoji || "🎮", bot.guild_id, serverId]
+        "UPDATE samp_trackers SET server_name = ?, server_ip = ?, server_port = ?, channel_id = ?, emoji = ?, custom_online_text = ?, custom_offline_text = ?, poll_interval_ms = ?, rename_cooldown_ms = ?, name_format = ? WHERE guild_id = ? AND server_id = ?",
+        [
+          server_name, server_ip, server_port || 7777, channel_id, emoji || "🎮",
+          next.custom_online_text, next.custom_offline_text, next.poll_interval_ms, next.rename_cooldown_ms, next.name_format,
+          bot.guild_id, serverId
+        ]
       );
 
       // Restart tracker if it was running
@@ -98,15 +259,18 @@ function createSampServersRouter(ctx) {
 
         if (wasEnabled) {
           const tracker = new SAMPStatusTracker(client, {
-            guildId: bot.guild_id,
-            serverId: serverId,
-            serverName: server_name,
             serverIp: server_ip,
             serverPort: server_port || 7777,
             channelId: channel_id,
+            serverName: server_name,
             emoji: emoji || "🎮",
+            custom_online_text: next.custom_online_text,
+            custom_offline_text: next.custom_offline_text,
+            poll_interval_ms: next.poll_interval_ms,
+            rename_cooldown_ms: next.rename_cooldown_ms,
+            name_format: next.name_format,
           });
-          tracker.start();
+          await tracker.start();
           client.sampTrackers.set(trackerKey, tracker);
         }
       }
@@ -171,13 +335,7 @@ function createSampServersRouter(ctx) {
         client.sampTrackers.get(trackerKey).stop();
       }
 
-      const tracker = new SAMPStatusTracker(client, {
-        serverIp: server.server_ip,
-        serverPort: server.server_port,
-        channelId: server.channel_id,
-        serverName: server.server_name,
-        emoji: server.emoji,
-      });
+      const tracker = new SAMPStatusTracker(client, trackerConfigFromRow(server));
 
       await tracker.start();
 

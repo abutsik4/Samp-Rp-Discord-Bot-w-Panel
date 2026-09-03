@@ -32,7 +32,7 @@ const GANG_PERK_DESCRIPTIONS = {
   protection_racket: "Пассивный доход: +2% от каждого невладельческого бизнеса в контролируемых районах.",
   banking: "Казначей может снимать 10% от казны раз в день без штрафа.",
   casino_share: "+0.5% к chip-дропу из Prestige Casino для всех членов.",
-  empire_color: "Пользовательский цвет тега банды на /gmap.",
+  empire_color: "Пользовательский цвет тега банды на /gang territories.",
 };
 
 module.exports = {

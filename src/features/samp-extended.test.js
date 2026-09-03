@@ -52,6 +52,17 @@ function findBlackMarketDealDay(type, maxDaysAhead = 730) {
   throw new Error(`Unable to find black market day for deal type: ${type}`);
 }
 
+test("ensureSampExtendedTables bootstraps gang evolution", async () => {
+  const db = makeDb();
+  await ensureSampLifeTables(db);
+  await ensureSampExtendedTables(db);
+
+  const row = await dbGet(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='samp_gang_evolution'");
+  assert.equal(row.name, "samp_gang_evolution");
+
+  db.close();
+});
+
 function makeInteraction(args) {
   const base = { ...args };
   let lastReply = null;

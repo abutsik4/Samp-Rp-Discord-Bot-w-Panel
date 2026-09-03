@@ -180,13 +180,13 @@ const BLACK_MARKET_GRANTS = {
     inventoryItemId: "bm_wiretap",
     inventoryQty: 1,
     maxInventoryQty: 1,
-    summary: "Подслушка добавлена в тайник. Используй /wiretap @цель.",
+    summary: "Подслушка добавлена в тайник. Используй /play криминал.",
   },
   sabotage: {
     inventoryItemId: "bm_sabotage",
     inventoryQty: 1,
     maxInventoryQty: 1,
-    summary: "Подрыв добавлен в тайник. Используй /sabotage @цель.",
+    summary: "Подрыв добавлен в тайник. Используй /play криминал.",
   },
   laundering: {
     inventoryItemId: "bm_laundering",
@@ -205,19 +205,19 @@ const BLACK_MARKET_GRANTS = {
     inventoryItemId: "bm_repair_kit",
     inventoryQty: 1,
     maxInventoryQty: 1,
-    summary: "Набор для ремонта добавлен в тайник. Используй /userepairkit.",
+    summary: "Набор для ремонта добавлен в тайник. Используй /play криминал.",
   },
   disguise: {
     inventoryItemId: "bm_disguise",
     inventoryQty: 1,
     maxInventoryQty: 1,
-    summary: "Маскировка добавлена в тайник. Используй /disguise.",
+    summary: "Маскировка добавлена в тайник. Используй /play криминал.",
   },
   hot_tip: {
     inventoryItemId: "bm_hot_tip",
     inventoryQty: 1,
     maxInventoryQty: 1,
-    summary: "Наводка добавлена в тайник. Используй /hottip.",
+    summary: "Наводка добавлена в тайник. Используй /play криминал.",
   },
   hit_contract: {
     inventoryItemId: null,
@@ -492,6 +492,17 @@ async function ensureSampExtendedTables(db) {
     gang_id INTEGER NOT NULL, user_id TEXT NOT NULL UNIQUE,
     role TEXT NOT NULL DEFAULT 'member',
     joined_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (gang_id) REFERENCES samp_gangs(id)
+  )`);
+
+  await dbRun(db, `CREATE TABLE IF NOT EXISTS samp_gang_evolution (
+    gang_id INTEGER PRIMARY KEY,
+    xp INTEGER NOT NULL DEFAULT 0,
+    level INTEGER NOT NULL DEFAULT 1,
+    legacy_stars INTEGER NOT NULL DEFAULT 0,
+    color TEXT,
+    perks_json TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (gang_id) REFERENCES samp_gangs(id)
   )`);
 
@@ -1118,7 +1129,7 @@ async function handleBizStats(interaction, db) {
       }
     )
     .setFooter({
-      text: `Ивент: ${liveOpsLabel} • /bizrun id:${bizId} • /maintainbiz id:${bizId}`,
+      text: `Ивент: ${liveOpsLabel} • /play работа → «Рейс бизнеса» • /play бизнес → «Обслужить»`,
     })
     .setTimestamp();
 
@@ -1464,10 +1475,10 @@ async function handleBusinesses(interaction, db) {
     .addFields(
       { name: "Твои бизнесы", value: `${ownedFields.length}`, inline: true },
       { name: "Свободно на рынке", value: `${marketFields.length}`, inline: true },
-      { name: "Полезно", value: "/bizstats • /mbizstats • /bizrun", inline: true }
+      { name: "Полезно", value: "/play бизнес → «Купить бизнес», «Обслужить» • /play работа → «Собрать доход»", inline: true }
     )
     .setColor(0x2ecc71)
-    .setFooter({ text: "Покупка: /buybiz id:<business> • Работа: /bizrun id:<business> • Сбор: /collectincome • Обслуживание: /maintainbiz [id]" })
+    .setFooter({ text: "Всё управление бизнесом — /play бизнес; рейсы и сбор дохода — /play работа" })
     .setTimestamp();
 
   const embeds = [overview];
@@ -1479,7 +1490,7 @@ async function handleBusinesses(interaction, db) {
         color: 0x16a34a,
         fields: ownedFields,
         fieldsPerPage: 4,
-        footer: "Детали по одному бизнесу: /mbizstats id:<business>",
+        footer: "Детали по одному бизнесу: /play бизнес → «Статистика бизнеса»",
       })
     );
   }
@@ -1491,7 +1502,7 @@ async function handleBusinesses(interaction, db) {
         color: 0x22c55e,
         fields: marketFields,
         fieldsPerPage: 4,
-        footer: "Покупка: /buybiz id:<business>",
+        footer: "Покупка: /play бизнес → «Купить бизнес»",
       })
     );
   }
@@ -1528,25 +1539,47 @@ async function handleBuyBiz(interaction, db) {
   await interaction.reply(
     `🏢 Ты купил **${prop.name}** за **${fmtMoney(prop.price)}**!\n` +
     `База: **${fmtMoney(prop.income)}/час** | Расходы: **${fmtMoney(prop.upkeep || 0)}/час**\n` +
-    `Для максимума держи бизнес в порядке через **/maintainbiz**.\n` +
+    `Для максимума держи бизнес в порядке через **/play бизнес** → «Обслужить».\n` +
     `Баланс: **${fmtMoney(after.money)}**`
   );
 }
 
 async function handleCollectIncome(interaction, db) {
   const userId = interaction.user.id;
-  const props = await dbAll(
-    db,
-    "SELECT property_id, last_collected, condition, supplies, last_maintained, last_state_tick, total_collected, gang_boost_until FROM samp_properties WHERE user_id = ?",
-    [userId]
-  );
-  if (!props || props.length === 0) { await interaction.reply({ content: "У тебя нет бизнесов. Смотри /businesses.", ephemeral: true }); return; }
+  // upgrade_level was added 2026-05-27. Older test fixtures may lack it; fall
+  // back to a plain SELECT and treat level as 0 if the column is missing.
+  let props;
+  try {
+    props = await dbAll(
+      db,
+      "SELECT property_id, last_collected, condition, supplies, last_maintained, last_state_tick, total_collected, gang_boost_until, upgrade_level FROM samp_properties WHERE user_id = ?",
+      [userId]
+    );
+  } catch (_) {
+    props = await dbAll(
+      db,
+      "SELECT property_id, last_collected, condition, supplies, last_maintained, last_state_tick, total_collected, gang_boost_until FROM samp_properties WHERE user_id = ?",
+      [userId]
+    );
+  }
+  if (!props || props.length === 0) { await interaction.reply({ content: "У тебя нет бизнесов. Смотри `/play бизнес`.", ephemeral: true }); return; }
 
   await interaction.deferReply();
   const now = new Date();
   const liveOps = await getSampLiveOpsConfig(db);
   const membership = await getUserGangMembership(db, userId);
   const territoryControlMap = await getTerritoryControlMap(db);
+  // 2026-05-27 money sinks: pull bonuses once per /bizrun call.
+  let upgradeMul = (() => 1);
+  let vipBizBonus = 0;
+  try {
+    const upgrades = require("./samp-property-upgrades");
+    upgradeMul = upgrades.bizIncomeMultiplier;
+  } catch (_) {}
+  try {
+    const vip = require("./samp-vip");
+    vipBizBonus = await vip.getVipBizBonus(db, userId);
+  } catch (_) {}
   const summaryLines = [];
   const plannedCollections = [];
   let totalGross = 0;
@@ -1562,6 +1595,12 @@ async function handleCollectIncome(interaction, db) {
 
     const territory = getTerritoryBoost(prop, territoryControlMap, membership?.gang_id);
     const income = getBusinessIncomeBreakdown(prop, state, liveOps, territory.multiplier);
+    // Apply per-property upgrade multiplier + per-user VIP bonus.
+    const bonusMul = upgradeMul(Number(row.upgrade_level || 0)) * (1 + Number(vipBizBonus || 0));
+    if (bonusMul !== 1) {
+      income.gross = Math.round(income.gross * bonusMul);
+      income.net = Math.round(income.net * bonusMul);
+    }
     totalGross += income.gross;
     totalUpkeep += income.upkeep;
     totalNet += income.net;
@@ -1599,11 +1638,11 @@ async function handleCollectIncome(interaction, db) {
         `UPDATE samp_properties
          SET last_collected = datetime('now'),
              condition = ?,
-             supplies = 100,
+             supplies = ?,
              last_state_tick = datetime('now'),
              total_collected = COALESCE(total_collected, 0) + ?
          WHERE user_id = ? AND property_id = ?`,
-        [item.projectedCondition, item.net, userId, item.propertyId]
+        [item.projectedCondition, item.projectedSupplies, item.net, userId, item.propertyId]
       );
     }
 
@@ -1617,12 +1656,12 @@ async function handleCollectIncome(interaction, db) {
   const moreLine = summaryLines.length > 6 ? `\n…и ещё ${summaryLines.length - 6}` : "";
   const eventLine = liveOps.active_event_name ? `\nИвент: **${liveOps.active_event_name}**` : "";
   await interaction.editReply(
-    `💰 Доход с бизнесов собран. Запасы пополнены.\n${lines}${moreLine}\n\n` +
+    `💰 Доход с бизнесов собран.\n${lines}${moreLine}\n\n` +
     `Валовая выручка: **${fmtMoney(totalGross)}**\n` +
     `Расходы и обслуживание: **-${fmtMoney(totalUpkeep)}**\n` +
     `Начислено: **+${fmtMoney(totalNet)}**\n` +
     `Баланс: **${fmtMoney(after.money)}**${eventLine}\n` +
-    `📦 Запасы всех бизнесов восстановлены до 100%.`
+    `📦 Текущие запасы и состояние сохранены после сбора.`
   );
 }
 
@@ -1637,7 +1676,7 @@ async function handleMaintainBiz(interaction, db) {
     "SELECT property_id, last_collected, condition, supplies, last_maintained, last_state_tick, gang_boost_until FROM samp_properties WHERE user_id = ?",
     [userId]
   );
-  if (!allProps || allProps.length === 0) { await interaction.reply({ content: "У тебя нет бизнесов. Смотри /businesses.", ephemeral: true }); return; }
+  if (!allProps || allProps.length === 0) { await interaction.reply({ content: "У тебя нет бизнесов. Смотри `/play бизнес`.", ephemeral: true }); return; }
 
   const props = targetBizId ? allProps.filter((row) => row.property_id === targetBizId) : allProps;
   if (props.length === 0) { await interaction.reply({ content: "Такого бизнеса у тебя нет.", ephemeral: true }); return; }
@@ -1671,6 +1710,7 @@ async function handleMaintainBiz(interaction, db) {
         db,
         `UPDATE samp_properties
          SET condition = 100,
+             supplies = 100,
              last_maintained = datetime('now'),
              last_state_tick = datetime('now')
          WHERE user_id = ? AND property_id = ?`,
@@ -1683,10 +1723,9 @@ async function handleMaintainBiz(interaction, db) {
   const restored = updates.slice(0, 6).map((item) => item.prop.name).join(", ");
   const more = updates.length > 6 ? ` и ещё ${updates.length - 6}` : "";
   await interaction.reply(
-    `🧰 Ремонт завершён: **${restored}${more}**\n` +
+    `🧰 Обслуживание завершено: **${restored}${more}**\n` +
     `Потрачено: **-${fmtMoney(totalCost)}**\n` +
-    `🏗️ Состояние восстановлено до **100%**.\n` +
-    `📦 Запасы пополняются через **/collectincome**.\n` +
+    `🏗️ Состояние и запасы восстановлены до **100%**.\n` +
     `Баланс: **${fmtMoney(after.money)}**`
   );
 }
@@ -1718,11 +1757,11 @@ async function handleBizRun(interaction, db) {
   const now = new Date();
   const state = getBusinessState(prop, property, now);
   if (state.projectedCondition < 15) {
-    await interaction.reply({ content: `Бизнес **${prop.name}** в крит. состоянии (${Math.floor(state.projectedCondition)}%). Обслужи: /maintainbiz`, ephemeral: true });
+    await interaction.reply({ content: `Бизнес **${prop.name}** в крит. состоянии (${Math.floor(state.projectedCondition)}%). Обслужи: /play бизнес → «Обслужить»`, ephemeral: true });
     return;
   }
   if (state.projectedSupplies < 15) {
-    await interaction.reply({ content: `Бизнес **${prop.name}** крит. мало запасов (${Math.floor(state.projectedSupplies)}%). Пополни: /collectincome`, ephemeral: true });
+    await interaction.reply({ content: `Бизнес **${prop.name}** крит. мало запасов (${Math.floor(state.projectedSupplies)}%). Проведи обслуживание: /play бизнес → «Обслужить»`, ephemeral: true });
     return;
   }
   const territory = getTerritoryBoost(prop, territoryControlMap, membership?.gang_id);
@@ -1838,7 +1877,7 @@ async function handleTuneInspect(interaction, db) {
         inline: false,
       }
     )
-    .setFooter({ text: "Установка: /tune install car:<id> part:<id> • Сервис: /tune maintain car:<id>" })
+    .setFooter({ text: "Тюнинг целиком — /play транспорт → «Осмотр тюнинга»" })
     .setTimestamp();
 
   applyUserCosmeticsToEmbed(embed, cosmetics, interaction.user.username, 0x2563eb);
@@ -1865,7 +1904,7 @@ async function handleTuneInstall(interaction, db, { partOptionName = "part" } = 
     .find((part) => part && part.slot === upgrade.slot);
   if (conflictingPart) {
     await interaction.reply({
-      content: `Слот уже занят деталью **${conflictingPart.name}**. Сними её через /tune remove car:${carId} part:${conflictingPart.id}.`,
+      content: `Слот уже занят деталью **${conflictingPart.name}**. Сними её через /play транспорт → «Осмотр тюнинга».`,
       ephemeral: true,
     });
     return;
@@ -2116,7 +2155,7 @@ async function buildGarageReplyPayload(db, userId, username) {
   const switchRows = buildGarageSwitchRows(orderedCars, user?.car_id);
   const hasSwitchShortcuts = switchRows.length > 0;
   const shortcutHint = hasSwitchShortcuts
-    ? " Быстрый выбор доступен на кнопках ниже, остальные машины переключай через /switchcar."
+    ? " Быстрый выбор доступен на кнопках ниже, остальные машины переключай через /play транспорт → «Сменить активную»."
     : "";
 
   const overview = new EmbedBuilder()
@@ -2137,7 +2176,7 @@ async function buildGarageReplyPayload(db, userId, username) {
     color: 0x2563eb,
     fields: carFields,
     fieldsPerPage: 4,
-    footer: "Тюнинг: /tune inspect car:<id> | Установка: /tune install car:<id> part:<id> | Смена активной: /switchcar car:<id>",
+    footer: "Тюнинг и смена активной машины — /play транспорт",
   }).map((embed) => applyUserCosmeticsToEmbed(embed, cosmetics, username, 0x2563eb));
 
   return {
@@ -2235,7 +2274,7 @@ async function handleGarage(interaction, db) {
 
   collector.on("collect", async (btnInt) => {
     if (btnInt.user.id !== userId) {
-      await btnInt.reply({ content: "Эта панель не для тебя. Используй /garage или /switchcar у себя.", ephemeral: true });
+      await btnInt.reply({ content: "Эта панель не для тебя. Открой `/play транспорт` у себя.", ephemeral: true });
       return;
     }
 
@@ -2474,7 +2513,7 @@ async function handleJobs(interaction, db) {
     const req = job.requirement ? `Требование: ${job.requirement}` : "Без требований";
     embed.addFields({ name: `${i+1}. ${job.name}`, value: `Оплата: **${fmtMoney(job.basePay[0])} — ${fmtMoney(job.basePay[1])}**\n${req}`, inline: false });
   });
-  embed.setFooter({ text: "Выполнить: /dojob number:<номер>" });
+  embed.setFooter({ text: "Выполнить: /play работа → «Взять подработку»" });
   await interaction.reply({ embeds: [embed] });
 }
 
@@ -2510,7 +2549,7 @@ async function handleDoJob(interaction, db) {
       }
     } else if (job.requirement === "weapon") {
       const wRow = await dbGet(db, "SELECT value FROM samp_user_settings WHERE user_id = ? AND key = 'weapon'", [userId]);
-      if (!wRow?.value) { await interaction.editReply("Нужно оружие. Купи в /weaponshop."); return; }
+      if (!wRow?.value) { await interaction.editReply("Нужно оружие. Купи в `/play магазин`."); return; }
     } else if (job.requirement === "weapon_dmg_20") {
       const wRow = await dbGet(db, "SELECT value FROM samp_user_settings WHERE user_id = ? AND key = 'weapon'", [userId]);
       const w = wRow?.value ? ITEMS[wRow.value] : null;
@@ -2702,7 +2741,7 @@ async function handleGangCommand(interaction, db) {
       color: 0xf39c12,
       fields,
       fieldsPerPage: 5,
-      footer: "Захват и укрепление: /gcapture district:<район>",
+      footer: "Захват и укрепление: /gang claimterritory",
     });
     await interaction.reply({ embeds });
 
@@ -3076,11 +3115,11 @@ async function handleShopCosmetics(interaction) {
   }));
   const embeds = buildPagedFieldEmbeds({
     title: "🛍 Магазин косметики и бонусов",
-    description: "Полный каталог. Удобнее смотреть по категориям через **/shop**. Покупка: **/buycosmetic id:<id>**.",
+    description: "Полный каталог. Категории и покупка — **/play магазин**.",
     color: 0x9b59b6,
     fields,
     fieldsPerPage: 6,
-    footer: "Покупка: /buycosmetic id:<id>",
+    footer: "Покупка: /play магазин → «Купить косметику»",
   });
   await interaction.reply({ embeds });
 }
@@ -3117,7 +3156,7 @@ async function handleBuyCosmetic(interaction, db) {
     // For boosts/weapon-skins keep the legacy "equipped" row so existing
     // code paths (e.g. hasGoldenDeagleSkin) keep working.
     // For decorative items also auto-equip on purchase for a good default UX;
-    // user can /unequip or /equip a different one afterwards.
+    // user can /equip or /unequip a different one afterwards.
     await dbRun(
       db,
       `INSERT OR REPLACE INTO samp_cosmetics(user_id, cosmetic_type, cosmetic_value)
@@ -3130,7 +3169,7 @@ async function handleBuyCosmetic(interaction, db) {
     ? "⚡ Бонус активен всегда, пока предмет в коллекции."
     : isPermanent
     ? "Предмет всегда при тебе."
-    : "Предмет автоматически надет. Сменить — **/equip** / **/unequip**.";
+    : "Предмет автоматически надет. Сменить — **/play магазин** → «Надеть» / «Снять».";
   await interaction.reply(
     `🛍 Ты купил **${cos.name}** за **${fmtMoney(cos.price)}**!\n` +
     `${getCosmeticBenefitText(cos)}\n${tail}`
@@ -3308,7 +3347,7 @@ async function handleBlackMarket(interaction, db) {
       color: 0x2c3e50,
       fields,
       fieldsPerPage: 4,
-      footer: `Покупка: /blackmarket buy slot:<1-${BM_DAILY_DEAL_COUNT}> • ⚠️ 8% шанс облавы`,
+      footer: `Покупка: /play криминал → «Купить с рынка» • ⚠️ 8% шанс облавы`,
     });
     await sendInteractionResponse(interaction, { embeds });
 
@@ -3457,7 +3496,7 @@ async function handleUseJailPass(interaction, db) {
   const until = Number(user.jail_until || 0);
   if (until <= nowMs()) { await interaction.reply({ content: "✅ Ты и так на свободе.", ephemeral: true }); return; }
   const qty = await getInventoryQty(db, userId, "bm_jail_pass");
-  if (qty < 1) { await interaction.reply({ content: "У тебя нет фальшивых документов. Купи на /blackmarket.", ephemeral: true }); return; }
+  if (qty < 1) { await interaction.reply({ content: "У тебя нет фальшивых документов. Купи на /play криминал.", ephemeral: true }); return; }
 
   const opKey = makeInteractionOpKey(interaction, "use_jail_pass");
   await withTx(db, async () => {
@@ -3478,7 +3517,7 @@ async function handleWiretap(interaction, db) {
   const user = await getSampUser(db, userId);
   if (!user) { await interaction.reply({ content: "Сначала /reg.", ephemeral: true }); return; }
   const qty = await getInventoryQty(db, userId, "bm_wiretap");
-  if (qty < 1) { await interaction.reply({ content: "У тебя нет подслушки. Купи на /blackmarket.", ephemeral: true }); return; }
+  if (qty < 1) { await interaction.reply({ content: "У тебя нет подслушки. Купи на /play криминал.", ephemeral: true }); return; }
   const targetUser = await getSampUser(db, target.id);
   if (!targetUser) { await interaction.reply({ content: "Цель не зарегистрирована.", ephemeral: true }); return; }
 
@@ -3510,7 +3549,7 @@ async function handleSabotage(interaction, db) {
   const user = await getSampUser(db, userId);
   if (!user) { await interaction.reply({ content: "Сначала /reg.", ephemeral: true }); return; }
   const qty = await getInventoryQty(db, userId, "bm_sabotage");
-  if (qty < 1) { await interaction.reply({ content: "У тебя нет подрыва. Купи на /blackmarket.", ephemeral: true }); return; }
+  if (qty < 1) { await interaction.reply({ content: "У тебя нет подрыва. Купи на /play криминал.", ephemeral: true }); return; }
   const targetUser = await getSampUser(db, target.id);
   if (!targetUser) { await interaction.reply({ content: "Цель не зарегистрирована.", ephemeral: true }); return; }
 
@@ -3536,7 +3575,7 @@ async function handleUseRepairKit(interaction, db) {
   if (!inv) { await interaction.reply({ content: "Оружие не в инвентаре.", ephemeral: true }); return; }
   if (inv.durability >= 100) { await interaction.reply({ content: "Оружие уже в идеальном состоянии.", ephemeral: true }); return; }
   const qty = await getInventoryQty(db, userId, "bm_repair_kit");
-  if (qty < 1) { await interaction.reply({ content: "У тебя нет набора для ремонта. Купи на /blackmarket.", ephemeral: true }); return; }
+  if (qty < 1) { await interaction.reply({ content: "У тебя нет набора для ремонта. Купи на /play криминал.", ephemeral: true }); return; }
 
   const opKey = makeInteractionOpKey(interaction, "use_repair_kit");
   await withTx(db, async () => {
@@ -3553,7 +3592,7 @@ async function handleDisguise(interaction, db) {
   const user = await getSampUser(db, userId);
   if (!user) { await interaction.reply({ content: "Сначала /reg.", ephemeral: true }); return; }
   const qty = await getInventoryQty(db, userId, "bm_disguise");
-  if (qty < 1) { await interaction.reply({ content: "У тебя нет маскировки. Купи на /blackmarket.", ephemeral: true }); return; }
+  if (qty < 1) { await interaction.reply({ content: "У тебя нет маскировки. Купи на /play криминал.", ephemeral: true }); return; }
   const existing = await dbGet(db, "SELECT value FROM samp_user_settings WHERE user_id = ? AND key = 'disguised_until'", [userId]);
   if (existing && Number(existing.value) > nowMs()) {
     const left = Math.ceil((Number(existing.value) - nowMs()) / 60_000);
@@ -3575,7 +3614,7 @@ async function handleHotTip(interaction, db) {
   const user = await getSampUser(db, userId);
   if (!user) { await interaction.reply({ content: "Сначала /reg.", ephemeral: true }); return; }
   const qty = await getInventoryQty(db, userId, "bm_hot_tip");
-  if (qty < 1) { await interaction.reply({ content: "У тебя нет наводки. Купи на /blackmarket.", ephemeral: true }); return; }
+  if (qty < 1) { await interaction.reply({ content: "У тебя нет наводки. Купи на /play криминал.", ephemeral: true }); return; }
 
   const opKey = makeInteractionOpKey(interaction, "hot_tip");
   await withTx(db, async () => {
@@ -3745,9 +3784,7 @@ function getSampExtendedCommandBuilders() {
           .addStringOption((option) => option.setName("car").setDescription("ID тачки").setRequired(true).setAutocomplete(true))
           .addStringOption((option) => option.setName("part").setDescription("ID детали (если пусто — все)").setRequired(false).setAutocomplete(true))
       ),
-    new SlashCommandBuilder().setName("tunecar").setDescription("SAMP Life: legacy-алиас для /tune install")
-      .addStringOption(o => o.setName("car").setDescription("ID тачки").setRequired(true).setAutocomplete(true))
-      .addStringOption(o => o.setName("upgrade").setDescription("ID тюнинга").setRequired(true).setAutocomplete(true)),
+    // /tunecar — legacy alias removed 2026-05-27; players use /tune
     new SlashCommandBuilder().setName("switchcar").setDescription("SAMP Life: сменить активную тачку")
       .addStringOption(o => o.setName("car").setDescription("ID тачки из гаража").setRequired(true).setAutocomplete(true)),
     new SlashCommandBuilder()
@@ -3876,7 +3913,6 @@ async function handleSampExtendedCommand({ interaction, db }) {
     else if (name === "maintainbiz") result = await handleMaintainBiz(interaction, db);
     else if (name === "bizrun") result = await handleBizRun(interaction, db);
     else if (name === "tune") result = await handleTuneCommand(interaction, db);
-    else if (name === "tunecar") result = await handleTuneCar(interaction, db);
     else if (name === "switchcar") result = await handleSwitchCar(interaction, db);
     else if (name === "garage") result = await handleGarage(interaction, db);
     else if (name === "bounty") result = await handleBounty(interaction, db);
@@ -3950,7 +3986,7 @@ async function handleSampExtendedAutocomplete(interaction, db) {
       name: `${district.name} — бонус +${Math.round((district.businessBuff || 0) * 100)}%`,
       value: id,
     }));
-  } else if ((name === "tunecar" && focused.name === "car") || (name === "tune" && focused.name === "car")) {
+  } else if (name === "tune" && focused.name === "car") {
     const userId = interaction.user.id;
     const cars = await dbAll(db, "SELECT car_id FROM samp_garage WHERE user_id = ?", [userId]);
     choices = (cars || []).filter(r => CARS[r.car_id]).map(r => ({ name: CARS[r.car_id].name, value: r.car_id }));
@@ -3969,7 +4005,7 @@ async function handleSampExtendedAutocomplete(interaction, db) {
         name: `${row.car_id === user?.car_id ? "🟢 " : ""}${CARS[row.car_id].name} — ${row.car_id}`,
         value: row.car_id,
       }));
-  } else if ((name === "tunecar" && focused.name === "upgrade") || (name === "tune" && subcommand === "install" && focused.name === "part")) {
+  } else if (name === "tune" && subcommand === "install" && focused.name === "part") {
     const userId = interaction.user.id;
     const selectedCarId = String(interaction.options.getString("car") || "").toLowerCase();
     const [installedRows, progress, raceStats] = selectedCarId
@@ -4045,6 +4081,7 @@ module.exports = {
   BLACK_MARKET_ITEMS,
   BLACK_MARKET_GRANTS,
   getDailyBlackMarketDeals,
+  getDailyJobs,
   getWeaponRepairCost,
   getUserSetting,
   setUserSetting,

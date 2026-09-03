@@ -1,6 +1,5 @@
 import { useApi } from '../hooks/useApi.js'
 import {
-  Users, MessageSquare, Server, Activity, ArrowUpRight,
   DollarSign, Sword, MapPin
 } from 'lucide-react'
 
@@ -28,15 +27,10 @@ function Kpi({ icon: Icon, label, value, sub, tone = 'purple' }) {
 function cn(...a) { return a.filter(Boolean).join(' ') }
 
 export default function Dashboard() {
-  const { data: overview } = useApi('/panel/api/overview')
   const { data: gangs } = useApi('/panel/api/gameplay/gangs')
   const { data: eco } = useApi('/panel/api/gameplay/ledger-summary')
 
   const kpis = [
-    { icon: Users, label: 'Active Users', value: overview?.activeUsers ?? overview?.activeCount, sub: 'Last 7 days', tone: 'purple' },
-    { icon: MessageSquare, label: 'Messages', value: overview?.sevenDayMessages, sub: '7d total', tone: 'cyan' },
-    { icon: Server, label: 'SA-MP Trackers', value: overview?.sampTrackers, sub: 'Configured servers', tone: 'amber' },
-    { icon: Activity, label: 'Uptime', value: overview?.uptime, sub: 'Since start', tone: 'rose' },
     { icon: DollarSign, label: 'Economy Volume', value: eco?.totalVolume ? `$${eco.totalVolume.toLocaleString()}` : '—', sub: 'All time', tone: 'purple' },
     { icon: Sword, label: 'Gang Wars', value: gangs?.wars?.active ?? 0, sub: 'Active now', tone: 'rose' },
     { icon: MapPin, label: 'Territories', value: gangs?.territories?.total ?? 0, sub: 'Claimed', tone: 'cyan' }
@@ -54,12 +48,8 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        {kpis.slice(0, 4).map((k, i) => <Kpi key={i} {...k} />)}
-      </div>
-
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-        {kpis.slice(4).map((k, i) => <Kpi key={i} {...k} />)}
+        {kpis.map((k, i) => <Kpi key={i} {...k} />)}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

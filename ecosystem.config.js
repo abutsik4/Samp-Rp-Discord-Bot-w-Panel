@@ -1,8 +1,8 @@
 module.exports = {
   apps: [
     {
-      name: "jepsencloud-panel",
-      script: "src/panel-only.js",
+      name: "jepsencloud-bot",
+      script: "src/index.js",
       instances: 1,
       exec_mode: "fork",
       
@@ -13,8 +13,7 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         PORT: 5012,
-        PANEL_PORT: 5013,
-        PANEL_DISABLE_DISCORD: "1",
+        DISABLE_STARTUP_SLASH_SYNC: "1",
         // Level-up announcements in a designated channel
         LEVELS_ANNOUNCE: "1",
         // Set these channel/role IDs after running the setup script:

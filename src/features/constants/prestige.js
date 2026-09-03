@@ -304,7 +304,7 @@ const CREW_ROLES = {
     hireCost: 750_000,
     monthlySalary: 1_500_000,
     emoji: "⚖️",
-    description: "−50% к времени тюрьмы при /rob caught и /heist fail.",
+    description: "−50% к времени тюрьмы при провале /rob и ограбления.",
   },
   driver: {
     id: "driver",
